@@ -954,12 +954,38 @@ export interface SlideTheme {
  * partial slides and only fills these defaults in `parsedToSlides`; that is an
  * importer-internal staging concern and must not leak into the DSL output.
  */
+/** Source-traceable display wording; oral teaching content remains independent. */
+export interface SlidePresentationItem {
+  id: string;
+  sourceContentIds: string[];
+  sourceEvidenceIds?: string[];
+  label?: string;
+  text: string;
+  emphasis?: string[];
+  /** A real comparison dimension/object, never a decorative grid position. */
+  row?: string;
+  column?: string;
+}
+
+export interface SlidePresentationProjection {
+  schemaVersion: 1;
+  layoutVersion: 'teaching-infographic-v1';
+  items: SlidePresentationItem[];
+  /** Directed relationships authored from the adopted content and sources. */
+  links?: Array<{ from: string; to: string; label?: string }>;
+  /** Host source/structure contract checked; does not certify semantic quality.
+   * Geometry still requires real measurement. No extra model review is run. */
+  verified: boolean;
+  elementIdsBySource: Record<string, string[]>;
+}
+
 export interface Slide {
   id: string;
   viewportSize: number;
   viewportRatio: number;
   theme: SlideTheme;
   elements: PPTElement[];
+  presentationProjection?: SlidePresentationProjection;
   background?: SlideBackground;
   animations?: PPTAnimation[];
   turningMode?: TurningMode;

@@ -46,6 +46,8 @@ import type { SemanticPageCapacityAssessment } from './semantic-page-capacity';
 import { buildAuthoringSourceCatalog, pageOriginalTeachingSources, type SourceGroundingKnowledgePoint } from './source-grounding';
 import type { CourseEvidenceSnapshot } from '@/lib/textbook/course-evidence-types';
 import type { FigureSequenceContract } from '@/lib/textbook/course-visual-binding';
+import { generateSlideVisualProjection, slideVisualSourceContent, usesSlideVisualProjection } from './slide-visual-projection';
+import { compileOriginalSlideDraft, compileSlideInfographic } from './slide-infographic-layout';
 
 export const OPENMAIC_GENERATION_BASELINE = {
   release: 'v1.0.3',
@@ -220,6 +222,10 @@ export async function generateOpenMaicBaselineOutlines(
 }
 
 export interface BaselineContentOptions {
+  /** CoTeach-only, single-call infographic composition. Legacy callers opt out by omission. */
+  visualProjection?: boolean;
+  /** An isolated redraw may retain an existing usable draft if no improvement fits. */
+  visualBaseline?: GeneratedSlideContent;
   /** First-draft components compile into editable native slide elements. */
   componentAuthoring?: boolean;
   slideAuthoring?: 'native' | 'flow';
@@ -275,6 +281,59 @@ export async function generateOpenMaicBaselineContent(
   const qualityDiagnostics: string[] = [];
   if (outline.type !== 'slide' && outline.type !== 'interactive') {
     throw new Error(`OpenMAIC baseline content adapter does not own ${outline.type} scenes`);
+  }
+  if (options.visualProjection && usesSlideVisualProjection(outline) && options.componentAuthoring
+    && options.textMeasure && !options.editDirective && !options.baselineContent) {
+    const result = await generateSlideVisualProjection(outline, aiCall, options);
+    if (result) {
+      qualityDiagnostics.push(...result.diagnostics.map((detail) => `PPT visual projection: ${detail}`));
+      const images = await Promise.all((options.assignedImages ?? []).map(async (image) => {
+        let width = image.width ?? 0, height = image.height ?? 0;
+        // Hydrated legacy source images can omit dimensions. Read their real
+        // bytes; a guessed placeholder must never certify an image allocation.
+        if (!(Number.isFinite(width) && width > 0 && Number.isFinite(height) && height > 0)) {
+          const encoded = image.src.match(/^data:image\/[^;,]+;base64,([\s\S]+)$/u);
+          if (encoded) {
+            const sharp = (await import('sharp')).default;
+            const metadata = await sharp(Buffer.from(encoded[1]!, 'base64')).metadata();
+            const rotated = [5, 6, 7, 8].includes(metadata.orientation ?? 1);
+            width = (rotated ? metadata.height : metadata.width) ?? 0;
+            height = (rotated ? metadata.width : metadata.height) ?? 0;
+          }
+        }
+        return { id: image.id, src: options.imageMapping?.[image.id] ?? image.src, width, height,
+          ...(image.sourceTitle ? { caption: `来源：${image.sourceTitle}${image.pageNumber > 0 ? `，第${image.pageNumber}页` : ''}` } : {}) };
+      }));
+      for (const request of outline.mediaGenerations ?? []) {
+        if (request.type !== 'image') continue;
+        const parts = (request.aspectRatio ?? '16:9').split(':').map(Number);
+        const ratio = parts.length === 2 && parts.every((part) => Number.isFinite(part) && part > 0)
+          ? parts[0]! / parts[1]! : 16 / 9;
+        const placeholder = `gen_img_${request.elementId}`;
+        images.push({ id: request.elementId, src: options.generatedMediaMapping?.[placeholder] ?? placeholder,
+          width: ratio * 1000, height: 1000 });
+      }
+      const originalDraft = options.visualBaseline?.elements.length ? options.visualBaseline : undefined;
+      if (result.diagnostics.length && originalDraft) return { ...originalDraft,
+        qualityDiagnostics: [...new Set([...(originalDraft.qualityDiagnostics ?? []), ...qualityDiagnostics,
+          'PPT redraw retained the existing usable draft; the proposed source mapping was not adopted.'])] };
+      const visual = await compileSlideInfographic(outline, result.projection, {
+        measure: options.textMeasure, images,
+      });
+      if (visual) return { ...visual,
+        qualityDiagnostics: [...new Set([...(visual.qualityDiagnostics ?? []), ...qualityDiagnostics])] };
+      qualityDiagnostics.push('PPT infographic candidates did not fit the complete measured content.');
+      if (originalDraft) return { ...originalDraft,
+        qualityDiagnostics: [...new Set([...(originalDraft.qualityDiagnostics ?? []), ...qualityDiagnostics,
+          'PPT redraw retained the existing usable draft; the proposed visual layout was not adopted.'])] };
+      // A complete first draft remains usable without a judge, repair model or
+      // a second authoring request. Any remaining overflow stays diagnostic.
+      const complete = await compileOriginalSlideDraft(outline, slideVisualSourceContent(outline), {
+        measure: options.textMeasure, images,
+      });
+      return { ...complete,
+        qualityDiagnostics: [...new Set([...(complete.qualityDiagnostics ?? []), ...qualityDiagnostics])] };
+    }
   }
   const authoringContent = options.componentAuthoring && !options.editDirective && !options.baselineContent
     ? adoptedPageAuthoringContent(outline) : undefined;

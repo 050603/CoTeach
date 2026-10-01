@@ -289,18 +289,16 @@ describe('native slide authoring with actual renderer typography', () => {
 
 
 describe('planned local diagram capacity with the actual font', () => {
-  it('fits the failed seven-step sequence in the actual slide font without clipping', async () => {
+  it('reports a seven-step capacity miss instead of drawing a snake or clipping the actual font', async () => {
     const diagram = { type: 'diagram' as const, id: 'constructivist-sequence', topology: 'sequence' as const,
       left: 50, top: 112, width: 900, height: 394,
       nodes: ['目标分析', '情境创设', '资源设计', '自主学习', '协作环境', '效果评价', '强化练习']
         .map((label, index) => ({ id: `s${index + 1}`, label })) };
-    const elements = await compileMeasuredDiagramComponent(diagram, measureAuthoredSlideText);
-    const nodes = elements.filter((element) => element.type === 'shape');
-    expect(nodes).toHaveLength(7);
-    expect(elements.filter((element) => element.type === 'line')).toHaveLength(6);
-    expect(new Set(nodes.map((node) => node.top)).size).toBe(2);
-    expect(nodes.every((node) => node.left >= 50 && node.left + node.width <= 950
-      && node.top >= 112 && node.top + node.height <= 506)).toBe(true);
+    await expect(compileMeasuredDiagramComponent(diagram, measureAuthoredSlideText))
+      .rejects.toMatchObject({ code: 'diagram-allocation' });
+    expect(diagram.nodes.map((node) => node.label)).toEqual([
+      '目标分析', '情境创设', '资源设计', '自主学习', '协作环境', '效果评价', '强化练习',
+    ]);
   });
 
   it('fits the full seven-step symmetric ring without changing labels, font or ring closure', async () => {
@@ -365,20 +363,18 @@ describe('planned local diagram capacity with the actual font', () => {
     }
   });
 
-  it('rejects the original shallow rectangle and measures a complete seven-step diagram with its mapping annotation', async () => {
+  it('retains the full seven-step mapping contract when no straight measured allocation exists', async () => {
     const plan = { topology: 'sequence' as const,
       nodes: ['教学目标分析', '情境创设', '信息资源设计', '自主学习设计', '协作学习环境设计', '学习效果评价设计', '强化练习设计']
         .map((label, index) => ({ id: `s${index}`, label })),
       annotation: '第一步教学目标分析对应目标要素；第二、三步情境创设和信息资源设计对应内容要素；第四、五步自主学习设计和协作学习环境设计对应实施要素；第六步学习效果评价设计对应评价要素；第七步强化练习设计是评价之后的补充环节。',
     };
-    const choices = await measureDiagramAllocations(plan, measureAuthoredSlideText);
-    expect(choices).toContainEqual({ width: 900, height: 360 });
-    await expect(compileMeasuredDiagramComponent({ ...plan, type: 'diagram', id: 'shallow', left: 50, top: 272, width: 900, height: 240 }, measureAuthoredSlideText,
-      { feasibleAllocations: choices })).rejects.toMatchObject({ code: 'diagram-allocation', message: expect.stringContaining('900×360px') });
-    const elements = await compileMeasuredDiagramComponent({ ...plan, ...choices[0]!, type: 'diagram', id: 'complete', left: 50, top: 140 }, measureAuthoredSlideText);
-    expect(elements.filter((element) => element.type === 'shape')).toHaveLength(7);
-    expect(elements.filter((element) => element.type === 'line')).toHaveLength(6);
-    expect(elements.find((element) => element.id.endsWith('-annotation'))).toMatchObject({ type: 'text', width: 900 });
+    const saved = structuredClone(plan);
+    await expect(measureDiagramAllocations(plan, measureAuthoredSlideText))
+      .rejects.toMatchObject({ code: 'diagram-allocation' });
+    await expect(compileMeasuredDiagramComponent({ ...plan, type: 'diagram', id: 'shallow', left: 50, top: 272, width: 900, height: 240 }, measureAuthoredSlideText))
+      .rejects.toMatchObject({ code: 'diagram-allocation' });
+    expect(plan).toEqual(saved);
   });
 
   it('fits two independent full-wording flows in one measured region without adding a link between them', async () => {

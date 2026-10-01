@@ -122,7 +122,7 @@ describe('compileDiagramComponent', () => {
   });
 
   it('retains implicit adjacency for old partial edge labels and single-chain feedback', () => {
-    const partial = { ...parallelSequences, annotation: undefined, edges: [{ from: 'a1', to: 'a2', label: '回顾' }] };
+    const partial = { ...parallelSequences, nodes: parallelSequences.nodes.slice(0, 3), annotation: undefined, edges: [{ from: 'a1', to: 'a2', label: '回顾' }] };
     expect(resolveDiagramSequenceGroups(partial)).toBeUndefined();
     const elements = compileDiagramComponent({ ...partial, height: 360 });
     expect(elements.filter((element) => element.type === 'line')).toHaveLength(partial.nodes.length - 1);
@@ -130,14 +130,14 @@ describe('compileDiagramComponent', () => {
   });
 
   it('uses the exact remaining safe height and reports actionable full-plan allocations', async () => {
-    const plan = { topology: 'sequence' as const, nodes: fullStepNames.map((label, i) => ({ id: `s${i}`, label })), annotation: '完整映射说明' };
+    const plan = { topology: 'sequence' as const, nodes: fullStepNames.slice(4).map((label, i) => ({ id: `s${i}`, label })), annotation: '完整映射说明' };
     const measure: TextMeasure = (input) => input.text === plan.annotation
-      ? { naturalWidth: 200, height: 152, lines: [input.text] } : fontMeasure(input);
+      ? { naturalWidth: 200, height: 246, lines: [input.text] } : fontMeasure(input);
     const choices = await measureDiagramAllocations(plan, measure);
     expect(choices).toContainEqual({ width: 900, height: 372.5 });
     const elements = await compileMeasuredDiagramComponent({ ...plan, ...choices[0]!, type: 'diagram', id: 'safe-height', left: 50, top: 140 }, measure);
-    expect(elements.filter((element) => element.type === 'shape')).toHaveLength(7);
-    expect(elements.filter((element) => element.type === 'line')).toHaveLength(6);
+    expect(elements.filter((element) => element.type === 'shape')).toHaveLength(plan.nodes.length);
+    expect(elements.filter((element) => element.type === 'line')).toHaveLength(plan.nodes.length - 1);
     const authored = { ...plan, type: 'diagram' as const, id: 'too-small', left: 50, top: 272, width: 900, height: 240 };
     await expect(compileMeasuredDiagramComponent(authored, measure, { feasibleAllocations: choices })).rejects.toMatchObject({
       name: 'DiagramAllocationError', code: 'diagram-allocation', authoredAllocation: { left: 50, top: 272, width: 900, height: 240 }, feasibleAllocations: choices,
@@ -485,42 +485,42 @@ describe('compileDiagramComponent', () => {
     }
   });
 
-  it.each([5, 7, 9, 10, 11])('centres every wrapped row for %i ordered steps', (count) => {
-    const diagram: DiagramComponent = { type: 'diagram', id: 'centred-flow', topology: 'sequence',
+  it.each([5, 7, 9, 10, 11])('reports insufficient space instead of folding %i ordinary steps into reverse rows', async (count) => {
+    const diagram: DiagramComponent = { type: 'diagram', id: 'straight-flow', topology: 'sequence',
       left: 50, top: 140, width: 600, height: 360,
       nodes: Array.from({ length: count }, (_, index) => ({ id: String(index), label: `步骤${index + 1}` })) };
-    const elements = compileDiagramComponent(diagram);
+    const before = structuredClone(diagram);
+    expect(() => compileDiagramComponent(diagram)).toThrow(/sequence nodes and edge labels do not fit/);
+    await expect(compileMeasuredDiagramComponent(diagram, fontMeasure)).rejects.toMatchObject({
+      name: 'DiagramAllocationError', code: 'diagram-allocation',
+      authoredAllocation: { left: 50, top: 140, width: 600, height: 360 },
+    });
+    expect(diagram).toEqual(before);
+  });
+
+  it.each([
+    { width: 900, height: 360, vertical: false },
+    { width: 320, height: 360, vertical: true },
+  ])('keeps the complete sequence straight in a $width × $height allocation', async ({ width, height, vertical }) => {
+    const diagram: DiagramComponent = { type: 'diagram', id: 'straight-flow', topology: 'sequence',
+      left: 50, top: 140, width, height,
+      nodes: ['观察现象', '解释证据', '迁移应用'].map((label, index) => ({ id: String(index), label })),
+      edges: [{ from: '0', to: '1', label: '解释' }, { from: '1', to: '2', label: '应用' }] };
+    const elements = await compileMeasuredDiagramComponent(diagram, fontMeasure);
     const nodes = elements.filter((element): element is PPTShapeElement => element.type === 'shape');
     const lines = elements.filter((element): element is PPTLineElement => element.type === 'line');
-    const rows = [...new Set(nodes.map((node) => node.top))].map((top) => nodes.filter((node) => node.top === top));
-    expect(rows.length).toBeGreaterThan(1);
-    expect(Math.max(...rows.map((row) => row.length)) - Math.min(...rows.map((row) => row.length))).toBeLessThanOrEqual(1);
-    for (const row of rows) {
-      expect((Math.min(...row.map((node) => node.left)) + Math.max(...row.map((node) => node.left + node.width))) / 2)
-        .toBeCloseTo(diagram.left + diagram.width / 2);
-      const ordered = [...row].sort((a, b) => a.left - b.left);
-      for (let index = 2; index < ordered.length; index += 1) expect(ordered[index]!.left - ordered[index - 1]!.left)
-        .toBeCloseTo(ordered[1]!.left - ordered[0]!.left);
-    }
-    expect(lines).toHaveLength(count - 1);
+    const labels = elements.filter((element): element is PPTTextElement => element.type === 'text');
+    expect(nodes.map((node) => node.text?.content.replace(/<[^>]+>/gu, ''))).toEqual(diagram.nodes.map((node) => node.label));
+    expect(nodes.every((node) => node.text?.content.includes('font-size:20px'))).toBe(true);
+    expect(lines).toHaveLength(2);
+    expect(labels.map((label) => label.content.replace(/<[^>]+>/gu, ''))).toEqual(['解释', '应用']);
+    expect(new Set(nodes.map((node) => vertical ? node.left : node.top)).size).toBe(1);
     for (const [index, line] of lines.entries()) {
+      expect(line.cubic).toBeUndefined();
+      expect(vertical ? nodes[index + 1]!.top : nodes[index + 1]!.left)
+        .toBeGreaterThan(vertical ? nodes[index]!.top : nodes[index]!.left);
       expect(onBoundary(absoluteStart(line), nodes[index]!)).toBe(true);
       expect(onBoundary(absoluteEnd(line), nodes[index + 1]!)).toBe(true);
-      if (nodes[index]!.top !== nodes[index + 1]!.top) expect(line.cubic).toHaveLength(2);
-      const start = absoluteStart(line);
-      const end = absoluteEnd(line);
-      for (let step = 1; step < 64; step += 1) {
-        const t = step / 64;
-        const point = line.cubic
-          ? [0, 1].map((axis) => (1 - t) ** 3 * start[axis]!
-            + 3 * (1 - t) ** 2 * t * (line.cubic![0]![axis]! + (axis ? line.top : line.left))
-            + 3 * (1 - t) * t ** 2 * (line.cubic![1]![axis]! + (axis ? line.top : line.left)) + t ** 3 * end[axis]!)
-          : [0, 1].map((axis) => start[axis]! + t * (end[axis]! - start[axis]!));
-        for (const node of nodes.filter((_, nodeIndex) => nodeIndex !== index && nodeIndex !== index + 1)) {
-          expect(point[0]! < node.left || point[0]! > node.left + node.width
-            || point[1]! < node.top || point[1]! > node.top + node.height).toBe(true);
-        }
-      }
     }
   });
 
@@ -605,7 +605,7 @@ describe('compileDiagramComponent', () => {
     expect(measured.filter((element) => element.type === 'line')).toHaveLength(7);
   });
 
-  it('rejects a seven-step sequence only when no row arrangement fits the container', () => {
+  it('rejects a seven-step sequence when neither straight arrangement fits the container', () => {
     const diagram: DiagramComponent = {
       type: 'diagram', id: 'too-small', topology: 'sequence',
       left: 50, top: 140, width: 300, height: 120,

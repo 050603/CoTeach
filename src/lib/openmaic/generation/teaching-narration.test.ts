@@ -1280,6 +1280,20 @@ describe('independent first-pass teaching narration', () => {
     expect(call.mock.calls[0][0]).toContain('abstract definition alone is not an adequate knowledge entry');
   });
 
+  it('preserves the single visual operation without reinserting native long-prose instructions', async () => {
+    const page = outline();
+    const before = structuredClone(page);
+    const system = "## PPT_VISUAL_PROJECTION_V1\nOnly this operation's JSON protocol";
+    const prompt = JSON.stringify({ original: '学生能独立解决问题时，逐个撤除支架，而非最后一次性撤销' });
+    const images = [{ id: 'source', src: 'https://example.com/textbook.png' }];
+    const call = vi.fn().mockResolvedValue('independent-response');
+    const captured = vi.fn();
+    await withTeachingSlideGuidance(call, page, captured)(system, prompt, images);
+    expect(call).toHaveBeenCalledExactlyOnceWith(system, prompt, images);
+    expect(captured).toHaveBeenCalledExactlyOnceWith('independent-response');
+    expect(page).toEqual(before);
+  });
+
   it('uses only the adopted display statements when a full definition is owned by narration', async () => {
     const fullDefinition = '教学支架是在学习者尚不能独立完成任务时提供的支持，随学习进展逐步调整并撤除。';
     const display = ['暂时支持：随能力提升调整并撤除'];

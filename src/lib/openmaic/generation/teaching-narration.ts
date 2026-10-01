@@ -21,6 +21,7 @@ import type { FigureSequenceContract } from '@/lib/textbook/course-visual-bindin
 import { selectReviewSource } from '@/lib/course-quality-review/source-selection';
 import { nativeTextRelationCaption } from './native-text-placement';
 import { adoptedPageAuthoringContent, pagePresentationContent } from './adopted-page-content';
+import { slideVisualOperation } from './slide-visual-projection';
 import { sourceSequenceTeachingResponsibilities } from '@/lib/course-generation/source-content-acceptance';
 
 export const TEACHING_NARRATION_VERSION = 'section-continuous-narration-v31-reasoned-section-entry';
@@ -314,6 +315,14 @@ export function withTeachingSlideGuidance(
   const plan = outline.teachingBrief?.teachingPlan;
   const isStandaloneCourseOpening = outline.order === 0 && outline.narrationMode !== 'embedded-segment';
   return async (system, prompt, images) => {
+    // This single-call PPT operation carries its own source and
+    // output contracts. The legacy native-element instructions below would
+    // otherwise force the original long paragraphs back into the projection.
+    if (slideVisualOperation(system) !== 'native') {
+      const response = await aiCall(system, prompt, images);
+      onRawResponse?.(response);
+      return response;
+    }
     const relationCaption = system.includes('## Measured native text placement choices')
       ? nativeTextRelationCaption(outline, adoptedPageAuthoringContent(outline)) : undefined;
     const relationRealization = relationCaption

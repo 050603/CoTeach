@@ -413,13 +413,14 @@ export interface SceneOutline {
 
 // ==================== Stage 3 Output: Generated Content ====================
 
-import type { PPTElement, SlideBackground, SlideTheme } from '@openmaic/dsl';
+import type { PPTElement, SlideBackground, SlideTheme, SlidePresentationProjection } from '@openmaic/dsl';
 import type { QuizQuestion } from './stage';
 
 /**
  * AI-generated slide content
  */
 export interface GeneratedSlideContent {
+  presentationProjection?: SlidePresentationProjection;
   /** Teacher-private quality findings; usable slide elements remain renderable. */
   qualityDiagnostics?: string[];
   /** Compiler-owned pagination metadata; stripped before scene assembly. */

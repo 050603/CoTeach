@@ -524,10 +524,11 @@ function positionSequence(component: DiagramComponent, options: DiagramCompilerO
       }),
     };
   }
-  // A long sequence can still fit as a readable path when neither a single
-  // horizontal nor a single vertical line fits. Balance row lengths, centre
-  // each row and reserve a clear gap for the turn between successive rows.
-  if (component.nodes.length < 4) fail('sequence nodes and edge labels do not fit inside the container');
+  // Ordinary sequences keep one reading direction. A folded return path can
+  // look like a cycle even though the source has no feedback relationship.
+  // Report the real allocation failure so the page can choose more room;
+  // preserve the dedicated folded routing only for an actual feedback edge.
+  if (!feedback || component.nodes.length < 4) fail('sequence nodes and edge labels do not fit inside the container');
   const feedbackEdge = edges.find((edge) => edge.feedback);
   const bounds: Rect = { left: component.left, top: component.top, width: component.width, height: component.height };
   for (let requestedRows = 2; requestedRows < component.nodes.length; requestedRows += 1) {

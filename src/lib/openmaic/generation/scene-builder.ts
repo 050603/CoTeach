@@ -190,6 +190,7 @@ function buildCompleteSceneInner(
       viewportRatio: 0.5625,
       theme: content.theme ?? defaultTheme,
       elements: content.elements,
+      ...(content.presentationProjection ? { presentationProjection: content.presentationProjection } : {}),
       background: content.background,
     };
 

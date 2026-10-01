@@ -2,6 +2,7 @@ import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { teachingBlueprintToOutlines } from '@/lib/course-design/teaching-blueprint';
 import type { TeachingBlueprint } from '@/lib/session/types';
 import { TEACHING_BLUEPRINT_COMPILED_BRIEF_VERSION } from '../generation/teaching-contract-version';
+import { REFERENCE_LECTURE_TYPOGRAPHY } from '../generation/slide-presentation-typography';
 import type { GeneratedSlideContent, SceneOutline } from '../types/generation';
 import type { Scene } from '../types/stage';
 import type { SlideSpatialBudget } from '../generation/slide-spatial-types';
@@ -104,7 +105,11 @@ vi.mock('../generation/teaching-narration', async (original) => ({
 import { closeSpatialMeasurementBrowser } from '../generation/slide-spatial-measurement';
 afterAll(async () => { await closeSpatialMeasurementBrowser(); });
 
-import { generateClassroom, type GenerateClassroomOptions } from './classroom-generation';
+import { generateClassroom as generateClassroomProduction, type GenerateClassroomOptions, type GenerateClassroomInput } from './classroom-generation';
+// These historical fixtures exercise the native authoring/recovery contract.
+// New visual-projection cases below explicitly use the production default.
+const generateClassroom = (input: GenerateClassroomInput, options: GenerateClassroomOptions = {}) =>
+  generateClassroomProduction(input, { slideVisualProjection: false, ...options });
 import type { CourseGenerationAiCallContext } from './course-generation-ai-call';
 import type { AICallFn } from '../generation/pipeline-types';
 import { restoreAuthoringResponse, type AuthoringResponseCheckpoint } from '@/lib/course-generation/authoring-checkpoints';
@@ -213,6 +218,53 @@ function sourceCheckpointStore() {
   } };
 }
 
+function visualProjectionFixture() {
+  const fixture = sourceFixture();
+  const page = { ...fixture.page, id: 'visual-source-page', lectureSectionId: 'visual-source-section',
+    teachingBrief: { ...fixture.page.teachingBrief!, teachingPlan: {
+      ...fixture.page.teachingBrief!.teachingPlan!, presentationContent: [...sourceLabels],
+      presentationTypography: REFERENCE_LECTURE_TYPOGRAPHY,
+    } } };
+  const items = [
+    { id: 'scenarios', sourceContentIds: ['adopted-content-1'], sourceEvidenceIds: ['original-evidence'], label: '认识应用', text: '先熟悉生成式AI的应用场景' },
+    { id: 'complexity', sourceContentIds: ['adopted-content-2'], sourceEvidenceIds: ['original-evidence'], label: '调整任务', text: '按学生认知能力调整项目任务复杂度' },
+    { id: 'ethics', sourceContentIds: ['adopted-content-3'], sourceEvidenceIds: ['original-evidence'], label: '融入伦理', text: '在实践中引入道德伦理思考' },
+  ];
+  const spoken = `我们先从具体应用入手。${sourceLabels.join('；')}。任务复杂度的选择依据是学生的认知能力。`;
+  const modelResponse = (system: string) => {
+    if (system.includes('PPT_VISUAL_PROJECTION_V1')) return JSON.stringify({ items, links: [] });
+    if (system.includes('PPT_VISUAL_REVIEW_V1') || system.includes('# Slide Content Generator')) {
+      throw new Error('Visual pages must use one content request without review or reauthoring');
+    }
+    return JSON.stringify([{ type: 'text', content: spoken }]);
+  };
+  return { page, items, spoken, modelResponse, sourceOptions: fixture.sourceOptions };
+}
+
+/** Real fingerprint guards allow several independent raw drafts in one stage. */
+function visualRawCheckpointStore() {
+  const raw = new Map<string, AuthoringResponseCheckpoint>();
+  const writes: Parameters<NonNullable<GenerateClassroomOptions['onStageAuthoringResponse']>>[0][] = [];
+  const validated = vi.fn();
+  const callbacks: Pick<GenerateClassroomOptions,
+    'onStageAuthoringResponse' | 'loadStageAuthoringResponse' | 'onStageAuthoringValidated'> = {
+    onStageAuthoringResponse: (record) => {
+      writes.push(structuredClone(record));
+      raw.set(`${record.outline.id}:${record.stage}:${record.inputFingerprint}`, {
+        schemaVersion: 1, pageKey: record.outline.id, stage: record.stage,
+        outlineFingerprint: fingerprintSceneOutline(record.outline), modelFingerprint: record.modelFingerprint,
+        inputFingerprint: record.inputFingerprint, source: record.source, text: record.text, complete: record.complete,
+        systemCharacters: record.system.length, promptCharacters: record.prompt.length,
+      });
+    },
+    loadStageAuthoringResponse: (outline, stage, modelFingerprint, inputFingerprint) => restoreAuthoringResponse({
+      outline, stage, modelFingerprint, inputFingerprint,
+      checkpoint: raw.get(`${outline.id}:${stage}:${inputFingerprint}`),
+    }),
+    onStageAuthoringValidated: validated,
+  };
+  return { raw, writes, validated, callbacks };
+}
 
 
 
@@ -275,6 +327,112 @@ describe('classroom first-pass orchestration and checkpoint integration', () => 
     });
     mocks.coverage.mockReturnValue(1);
     mocks.persist.mockImplementation(async (value: { id: string }) => ({ id: value.id, createdAt: '2026-09-14T00:00:00Z' }));
+  });
+
+  it('generates visual content once beside unchanged narration and replays the saved raw response', async () => {
+    const { page, modelResponse, items, sourceOptions } = visualProjectionFixture();
+    const stages = capacityStageStore();
+    const raw = visualRawCheckpointStore();
+    mocks.ai.mockImplementation(async (system: string) => modelResponse(system));
+    const first = await generateClassroom(input, { preparedOutlines: [page], slideVisualProjection: true,
+      ...sourceOptions, ...stages.callbacks, ...raw.callbacks });
+    expect(mocks.ai).toHaveBeenCalledTimes(2);
+    expect(mocks.ai.mock.calls.filter(([system]) => system.includes('# Slide Content Generator'))).toHaveLength(0);
+    expect(first.scenes[0]?.content.type).toBe('slide');
+    if (first.scenes[0]!.content.type !== 'slide') throw new Error('Expected slide');
+    expect(first.scenes[0]!.content.canvas.presentationProjection).toMatchObject({ verified: true, items });
+    const drafts = raw.writes.filter((record) => record.stage === 'content');
+    expect(drafts.map((record) => record.source)).toEqual(['slide-visual-projection']);
+    expect(JSON.parse(drafts[0]!.text).items).toEqual(items);
+    expect(drafts[0]!.inputFingerprint).not.toBe(raw.writes.find((record) => record.stage === 'narration')!.inputFingerprint);
+    for (const draft of drafts) {
+      expect(draft.prompt).toContain('采用的原始教材');
+      expect(draft.prompt).toContain(sourceLabels[2]);
+      expect(raw.validated).toHaveBeenCalledWith(expect.objectContaining({
+        stage: 'content', inputFingerprint: draft.inputFingerprint, accepted: true,
+      }));
+      expect(stages.stages.get(`${page.id}:content`)!.inputFingerprint).not.toBe(draft.inputFingerprint);
+    }
+    const narrationStage = structuredClone(stages.stages.get(`${page.id}:narration`));
+    stages.stages.delete(`${page.id}:content`);
+    mocks.ai.mockClear();
+    raw.validated.mockClear();
+    const resumed = await generateClassroom(input, { preparedOutlines: first.assetContext.outlines,
+      slideVisualProjection: true, ...sourceOptions, ...stages.callbacks, ...raw.callbacks });
+    expect(mocks.ai).not.toHaveBeenCalled();
+    expect(raw.writes.filter((record) => record.stage === 'content')).toHaveLength(1);
+    if (resumed.scenes[0]!.content.type !== 'slide') throw new Error('Expected slide');
+    expect(resumed.scenes[0]!.content.canvas.elements).toEqual(first.scenes[0]!.content.canvas.elements);
+    expect(resumed.scenes[0]!.content.canvas.presentationProjection).toEqual(first.scenes[0]!.content.canvas.presentationProjection);
+    expect(resumed.scenes[0]?.actions).toEqual(first.scenes[0]?.actions);
+    expect(stages.stages.get(`${page.id}:narration`)).toEqual(narrationStage);
+    for (const draft of drafts) expect(raw.validated).toHaveBeenCalledWith(expect.objectContaining({
+      stage: 'content', inputFingerprint: draft.inputFingerprint, accepted: true,
+    }));
+  });
+
+  it.each(['missing-source', 'omitted-quantity'])('keeps full adopted content and diagnostics for %s without a second content request', async (failure) => {
+    const { page, items, spoken: fixtureSpeech, sourceOptions } = visualProjectionFixture();
+    const displayed = page.teachingBrief.teachingPlan.presentationContent;
+    let spoken = fixtureSpeech;
+    if (failure === 'missing-source') items.splice(1, 1);
+    if (failure === 'omitted-quantity') {
+      const condition = '实践至少进行3次。';
+      displayed[1] = `${displayed[1]}；${condition}`;
+      sourceOptions.sourceEvidence.items[0]!.content += condition;
+      sourceOptions.sourceEvidence.items[0]!.source.quote += condition;
+      spoken += condition;
+    }
+    const original = structuredClone({ page, sourceOptions });
+    const raw = visualRawCheckpointStore();
+    mocks.ai.mockImplementation(async (system: string) => {
+      if (system.includes('PPT_VISUAL_PROJECTION_V1')) return JSON.stringify({ items, links: [] });
+      if (system.includes('PPT_VISUAL_REVIEW_V1') || system.includes('# Slide Content Generator')) {
+        throw new Error('Deterministic contract findings must not queue another content request');
+      }
+      return JSON.stringify([{ type: 'text', content: spoken }]);
+    });
+    const result = await generateClassroom(input, { preparedOutlines: [page], slideVisualProjection: true,
+      ...sourceOptions, ...raw.callbacks });
+    expect(mocks.ai).toHaveBeenCalledTimes(2);
+    expect(mocks.ai.mock.calls.filter(([system]) => system.includes('# Slide Content Generator'))).toHaveLength(0);
+    const native = result.scenes[0]?.content;
+    if (!native || native.type !== 'slide') throw new Error('Expected native slide');
+    const visible = JSON.stringify(native.canvas.elements);
+    for (const point of displayed) expect(visible).toContain(point);
+    expect(result.scenes[0]?.actions?.find((action) => action.type === 'speech')).toMatchObject({ text: spoken });
+    expect(mocks.narrationInput.mock.calls[0]![0].pages[0].outline.teachingBrief.teachingPlan.presentationContent).toEqual(displayed);
+    expect(mocks.narrationInput.mock.calls[0]![0].sourceEvidence).toEqual(sourceOptions.sourceEvidence);
+    expect(result.qualityReport.warnings).toContainEqual(expect.stringContaining(failure === 'missing-source'
+      ? 'Missing adopted point adopted-content-2' : 'Changed or omitted quantity in adopted-content-2'));
+    const drafts = raw.writes.filter((record) => record.stage === 'content');
+    expect(drafts.map((record) => record.source)).toEqual(['slide-visual-projection']);
+    expect({ page, sourceOptions }).toEqual(original);
+  });
+
+  it('restores accepted visual stages and completed audio without any model call', async () => {
+    const { page, modelResponse, sourceOptions } = visualProjectionFixture();
+    const stages = capacityStageStore();
+    const complete = completedPageStore();
+    mocks.ai.mockImplementation(async (system: string) => modelResponse(system));
+    const first = await generateClassroom(input, { preparedOutlines: [page], slideVisualProjection: true,
+      ...sourceOptions, ...stages.callbacks, ...complete.callbacks });
+    const acceptedStages = structuredClone([...stages.stages]);
+    for (const action of complete.pages.get(page.id)!.scene.actions ?? []) {
+      if (action.type === 'speech') action.audioUrl = `/preserved-visual-audio/${action.id}.wav`;
+    }
+    const savedActions = structuredClone(complete.pages.get(page.id)!.scene.actions);
+    expect(savedActions?.some((action) => action.type === 'speech' && action.audioUrl)).toBe(true);
+    mocks.ai.mockClear();
+    mocks.narrationInput.mockClear();
+    const resumed = await generateClassroom(input, { preparedOutlines: first.assetContext.outlines,
+      slideVisualProjection: true, ...sourceOptions, ...stages.callbacks, ...complete.callbacks });
+    expect(mocks.ai).not.toHaveBeenCalled();
+    expect(mocks.narrationInput).not.toHaveBeenCalled();
+    expect(resumed.scenes[0]?.content).toEqual(first.scenes[0]?.content);
+    expect(resumed.scenes[0]?.actions).toEqual(savedActions);
+    expect([...stages.stages]).toEqual(acceptedStages);
+    expect(resumed.assetContext.outlines[0]?.targetDurationSec).toBe(page.targetDurationSec);
   });
 
   it('sends original adopted sources to both first calls while accepting concise slides and complete natural narration', async () => {

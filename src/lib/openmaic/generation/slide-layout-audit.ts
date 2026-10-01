@@ -1,6 +1,6 @@
 import { access } from 'node:fs/promises';
 import { chromium, type Browser, type Page } from 'playwright-core';
-import type { PPTElement } from '@openmaic/dsl';
+import type { PPTElement, SlidePresentationItem } from '@openmaic/dsl';
 import type { GeneratedSlideContent, SceneOutline } from '@openmaic/lib/types/generation';
 import type { RenderedElement, VisibleRect } from '@/lib/course-quality-review/render-measurements';
 import { auditGeneratedSlide } from './slide-quality';
@@ -355,6 +355,63 @@ function elementVisibleTextHtml(element: PPTElement): string {
 function completeVisibleStatement(statement: string, elements: readonly PPTElement[]): boolean {
   const expected = exactVisibleText(statement);
   return expected.length > 0 && elements.some((element) => exactVisibleText(elementVisibleText(element)).includes(expected));
+}
+
+/** A host-verified projection changes wording obligations only. Its source identities,
+ * readable text and comparison associations must still exist on the canvas. */
+function verifiedVisibleProjectionSources(outline: SceneOutline, content: GeneratedSlideContent): Set<string> {
+  const projection = content.presentationProjection;
+  if (projection?.verified !== true || projection.schemaVersion !== 1
+    || projection.layoutVersion !== 'teaching-infographic-v1'
+    || !Array.isArray(projection.items) || !projection.items.length) return new Set();
+  const sources = requiredProjectionSources(outline);
+  const knownSources = new Set(sources.map((source) => source.id));
+  if (new Set(projection.items.map((item) => item.id)).size !== projection.items.length
+    || projection.items.some((item) => !item.id || typeof item.text !== 'string' || !item.text.trim()
+      || !Array.isArray(item.sourceContentIds) || !item.sourceContentIds.length
+      || item.sourceContentIds.some((id) => !knownSources.has(id))
+      || [item.label, item.row, item.column].some((field) => field !== undefined
+        && (typeof field !== 'string' || !field.trim())))) return new Set();
+  const minimumFont = slideBodyFontSizes(outline)[1];
+  const display = displayedContentElements(content.elements, minimumFont).filter((element) => {
+    const readable = (html: string, inheritedFont?: string) => {
+      if (/(?:display\s*:\s*none|visibility\s*:\s*hidden|(?:opacity|font-size)\s*:\s*0(?:px|[;"\s])|color\s*:\s*transparent)/iu.test(html)) return false;
+      const sizes = [...html.matchAll(/font-size\s*:\s*([\d.]+)px/giu)].map((match) => Number(match[1]));
+      if (inheritedFont !== undefined) sizes.push(Number.parseFloat(inheritedFont));
+      return sizes.length > 0 && sizes.every((size) => Number.isFinite(size) && size >= minimumFont);
+    };
+    if (element.type === 'text' || element.type === 'shape') return readable(elementVisibleTextHtml(element));
+    if (element.type === 'table') return element.data.flat().every((cell) =>
+      readable(cell.text, cell.style?.fontsize));
+    return false;
+  });
+  const includes = (actual: string, expected: string) => exactVisibleText(actual).includes(exactVisibleText(expected));
+  const visibleItem = (item: SlidePresentationItem, elements: PPTElement[]) => {
+    if (item.row || item.column) {
+      if (!item.row || !item.column) return false;
+      // Actual table headings, their intersecting cell and its label must agree.
+      // Matching the same words elsewhere in the table is insufficient.
+      return elements.some((element) => element.type === 'table' && element.data.slice(1).some((row) =>
+        row[0] && includes(row[0].text, item.row!) && row.slice(1).some((cell, index) =>
+          element.data[0]?.[index + 1] && includes(element.data[0][index + 1]!.text, item.column!)
+          && includes(cell.text, item.text) && (!item.label || includes(cell.text, item.label)))));
+    }
+    return [item.text, item.label].filter((field): field is string => Boolean(field))
+      .every((field) => completeVisibleStatement(field, elements));
+  };
+  return new Set(sources.filter((source) => {
+    const items = projection.items.filter((item) => item.sourceContentIds.includes(source.id));
+    const ids = projection.elementIdsBySource?.[source.id];
+    if (!items.length || !Array.isArray(ids) || !ids.length) return false;
+    const mapped = display.filter((element) => ids.includes(element.id));
+    return items.every((item) => visibleItem(item, mapped));
+  }).map((source) => source.id));
+}
+
+function requiredProjectionSources(outline: SceneOutline) {
+  const annotation = outline.visualIntent?.diagram?.annotation?.trim();
+  return [...adoptedPageAuthoringContent(outline), ...(annotation
+    ? [{ id: 'diagram-annotation', text: annotation, required: true }] : [])];
 }
 
 /** The complete literal relationship caption is native semantic evidence only
@@ -814,8 +871,16 @@ export function auditSlideDensity(
   const hasAdoptedProjection = Boolean(outline.teachingBrief?.teachingPlan?.presentationItems?.some((item) => item.text.trim())
     || outline.teachingBrief?.teachingPlan?.presentationContent?.some((point) => point.trim()));
   const displayElements = displayedContentElements(content.elements, referenceLecture ? slideBodyFontSizes(outline)[1] : undefined);
-  const pointCoverage = (point: string) => hasAdoptedProjection
-    ? Number(completeVisibleStatement(point, displayElements)) : keyPointCoverage(point, content.elements);
+  const visibleProjectionSources = verifiedVisibleProjectionSources(outline, content);
+  const adoptedSources = requiredProjectionSources(outline);
+  const completeVisibleProjection = adoptedSources.length > 0
+    && adoptedSources.every((source) => visibleProjectionSources.has(source.id));
+  const pointCoverage = (point: string) => {
+    const source = adoptedSources.find((source) => source.text.trim() === point.trim());
+    if (source && content.presentationProjection) return Number(visibleProjectionSources.has(source.id));
+    return hasAdoptedProjection ? Number(completeVisibleStatement(point, displayElements))
+      : keyPointCoverage(point, content.elements);
+  };
   const knowledgeCoverage = hasAdoptedProjection
     ? requiredVisibleStatements.filter((point) => pointCoverage(point) === 1).length / Math.max(1, requiredVisibleStatements.length)
     : slideKnowledgeCoverage(requiredVisibleStatements, content.elements);
@@ -825,7 +890,9 @@ export function auditSlideDensity(
     .sort((a, b) => a.coverage - b.coverage);
   const area = contentAreaMetrics(content.elements);
   const deepBlueTitle = titleUsesDeepBlue(outline, content.elements);
-  const subtitle = hasIndependentSubtitle(outline, content.elements);
+  const subtitle = hasIndependentSubtitle(outline, content.elements)
+    || completeVisibleProjection && content.presentationProjection!.items.some((item) =>
+      Boolean(item.label || item.row || item.column));
   const requiredStructure = requiredSemanticKind(outline);
   const structures = semanticStructures(content.elements);
   const completeRelationCaption = hasCompleteVisibleRelationCaption(outline, content.elements);
@@ -844,7 +911,7 @@ export function auditSlideDensity(
   if (requiredVisibleStatements.length > 0 && underrepresentedKeyPoints.length > 0) {
     issues.push(`关键教学点可见覆盖率仅 ${(knowledgeCoverage * 100).toFixed(1)}%，存在 ${underrepresentedKeyPoints.length} 条未完整可见的已确认要点`);
   }
-  if (!referenceLecture && !hasSemanticEvidence && visibleCharacters < 150) {
+  if (!referenceLecture && !hasSemanticEvidence && !completeVisibleProjection && visibleCharacters < 150) {
     issues.push(`普通讲授页可见教学文字仅 ${visibleCharacters} 个有效字符，低于 150 个字符的信息密度基线`);
   }
   if (!deepBlueTitle) {
