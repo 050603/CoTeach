@@ -194,15 +194,19 @@ describe('measured first-pass flow layout', () => {
     expect(generated && 'elements' in generated && generated.sourceGroupIds).toHaveLength(1);
   });
 
-  it('reports measured section overload to orchestration without returning continuation pages', async () => {
+  it('records measured section overload and retains all automatic continuation pages', async () => {
     const failure: Array<{ category?: string; requestedPageCount?: number }> = [];
     const generated = await generateSceneContent({ id: 'overloaded-page', type: 'slide', title: options.title,
       description: '', keyPoints: [], order: 0 }, async () => JSON.stringify({ layout: { groups:
       Array.from({ length: 7 }, (_, index) => ({ kind: 'native', id: `step-${index + 1}`,
         element: { type: 'latex', latex: `x_${index + 1}` } })) } }),
     { componentAuthoring: true, slideAuthoring: 'flow', textMeasure: measure, onFailure: (item) => failure.push(item) });
-    expect(generated).toBeNull();
-    expect(failure).toEqual([expect.objectContaining({ category: 'section-overload', requestedPageCount: 3 })]);
+    expect(failure).toEqual([]);
+    expect(generated).toMatchObject({ qualityDiagnostics: expect.arrayContaining([expect.stringContaining('3 pages')]) });
+    expect(generated && 'elements' in generated ? generated.continuationPages : []).toHaveLength(2);
+    const allElements = generated && 'elements' in generated
+      ? [generated, ...(generated.continuationPages ?? [])].flatMap((page) => page.elements) : [];
+    expect(allElements.filter((element) => element.type === 'latex')).toHaveLength(7);
   });
 
   it('balances explicit and naturally wrapped orphan characters without discarding semantic paragraph breaks', async () => {

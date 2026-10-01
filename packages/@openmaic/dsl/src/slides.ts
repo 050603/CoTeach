@@ -499,6 +499,10 @@ export type ChartType = 'bar' | 'column' | 'line' | 'pie' | 'ring' | 'area' | 'r
 export interface ChartOptions {
   lineSmooth?: boolean;
   stack?: boolean;
+  /** Font size in slide coordinates; omitted on historical charts to retain renderer defaults.
+   * @minimum 1
+   */
+  fontSize?: number;
 }
 
 export interface ChartData {

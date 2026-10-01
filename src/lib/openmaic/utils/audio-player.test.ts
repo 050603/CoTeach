@@ -1,8 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { Blob as NodeBlob } from 'node:buffer';
 import type { ActionEngine } from '@openmaic/lib/action/engine';
 import { PlaybackEngine } from '@openmaic/lib/playback/engine';
 import type { Scene } from '@openmaic/lib/types/stage';
 import { AudioPlayer } from './audio-player';
+import { db } from './database';
 
 class FakeAudio extends EventTarget {
   src = '';
@@ -30,8 +32,62 @@ describe('AudioPlayer playback', () => {
   });
 
   afterEach(() => {
+    vi.restoreAllMocks();
     vi.unstubAllGlobals();
     vi.useRealTimers();
+  });
+
+  it('downloads and retries a URL when the initial quiet preroll fails', async () => {
+    const failure = new Error('Audio could not be decoded');
+    class RetryAudio extends FakeAudio {
+      override play = vi.fn(async () => {
+        if (this.src === '/narration.wav') throw failure;
+        this.paused = false;
+      });
+    }
+    const fetchAudio = vi.fn().mockResolvedValue({
+      ok: true,
+      blob: async () => new NodeBlob(['audio'], { type: 'audio/wav' }),
+    });
+    vi.stubGlobal('Audio', RetryAudio);
+    vi.stubGlobal('Blob', NodeBlob);
+    vi.stubGlobal('fetch', fetchAudio);
+    vi.stubGlobal('URL', { createObjectURL: vi.fn(() => 'blob:repaired'), revokeObjectURL: vi.fn() });
+
+    const player = new AudioPlayer();
+    const playback = player.play('', '/narration.wav');
+    await vi.advanceTimersByTimeAsync(650);
+
+    await expect(playback).resolves.toBe(true);
+    expect(fetchAudio).toHaveBeenCalledWith('/narration.wav');
+    const audio = (player as unknown as { audio: FakeAudio }).audio;
+    expect(audio.src).toBe('blob:repaired');
+    expect(audio.volume).toBe(1);
+    expect(audio.play).toHaveBeenCalledTimes(2);
+  });
+
+  it.each(['URL fallback', 'IndexedDB'])('releases audio when the %s preroll fails', async (source) => {
+    const failure = new Error('Audio could not be decoded');
+    class FailedAudio extends FakeAudio {
+      override play = vi.fn(async () => { throw failure; });
+    }
+    const blob = new NodeBlob(['audio'], { type: 'audio/wav' });
+    const revokeObjectURL = vi.fn();
+    vi.stubGlobal('Audio', FailedAudio);
+    vi.stubGlobal('Blob', NodeBlob);
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, blob: async () => blob }));
+    vi.stubGlobal('URL', { createObjectURL: vi.fn(() => 'blob:failed'), revokeObjectURL });
+    vi.spyOn(db.audioFiles, 'get').mockResolvedValue({
+      id: 'speech', blob, format: 'wav',
+    } as unknown as Awaited<ReturnType<typeof db.audioFiles.get>>);
+
+    const player = new AudioPlayer();
+    await expect(player.play('speech', source === 'URL fallback' ? '/narration.wav' : undefined))
+      .rejects.toBe(failure);
+
+    expect(revokeObjectURL).toHaveBeenCalledWith('blob:failed');
+    expect(player.hasActiveAudio()).toBe(false);
+    expect((player as unknown as { warmupAudio: FakeAudio | null }).warmupAudio).toBeNull();
   });
 
   it('prerolls quietly, rewinds, and then starts the first page clip audibly', async () => {

@@ -4,6 +4,24 @@ import * as echarts from 'echarts/core';
 import type { ChartData, ChartType } from '@openmaic/dsl';
 import './Chart';
 import { getChartOption } from './chartOption';
+import { getChartOption as getPackageChartOption } from '../../../../../../../packages/@openmaic/renderer/src/elements/chart/chartOption';
+
+describe.each([['application', getChartOption], ['package', getPackageChartOption]] as const)('%s actual lecture-chart typography', (_, makeOption) => {
+  it.each([18, 16])('renders all chart text at the adopted %spx font', (fontSize) => {
+    for (const type of ['bar', 'column', 'line', 'pie', 'ring', 'area', 'radar', 'scatter'] as ChartType[]) {
+      const data: ChartData = { labels: ['甲组', '乙组', '丙组'], legends: ['数量', '时长'], series: [[10, 20, 30], [5, 15, 25]] };
+      const chart = echarts.init(null, null, { renderer: 'svg', ssr: true, width: 600, height: 360 });
+      try {
+        chart.setOption({ ...makeOption({ type, data, themeColors: ['#123456'], fontSize }), animation: false });
+        const svg = chart.renderToSVGString();
+        const textTags = svg.match(/<text\b[^>]*>/g) ?? [];
+        expect(textTags.length, type).toBeGreaterThan(0);
+        for (const tag of textTags) expect(tag, `${type}: ${tag}`).toContain(`${fontSize}px`);
+        expect(svg).not.toMatch(/NaN|Infinity/);
+      } finally { chart.dispose(); }
+    }
+  });
+});
 
 describe('native chart component registration', () => {
   it.each<ChartType>(['bar', 'column', 'line', 'pie', 'ring', 'area', 'radar', 'scatter'])(

@@ -43,6 +43,7 @@ import { normalizeTeachingToolPlan } from "@/lib/openmaic/generation/teaching-to
 import { courseDetailedEditHref } from "@/lib/courses/preparation-navigation";
 import { cn } from "@/lib/utils";
 import { getNewSystemCourseReadiness } from "@/lib/classroom/new-system-course";
+import { isAdvisoryCourseReadinessCheck, isTechnicalCourseResourceIssue } from "@/lib/course-quality-review/teacher-review";
 import {
   CourseQualityReview,
   type CourseQualityReviewSummary,
@@ -71,6 +72,7 @@ type PublishCheck = {
   label: string;
   done: boolean;
   detail: string;
+  advisory: boolean;
 };
 
 type ResourceRepairIssue = {
@@ -123,6 +125,7 @@ function buildPublishChecks(course: Course): PublishCheck[] {
     label: check.label,
     done: check.ok,
     detail: check.ok ? "已完成。" : check.message,
+    advisory: isAdvisoryCourseReadinessCheck(check.id),
   }));
 }
 
@@ -325,15 +328,17 @@ export default function PreviewCoursePage() {
   const reviewRequired = course.content.qualityReviewRequired === true || Number(course.content.resourcePackage?.schemaVersion ?? 0) >= 2 || Number(course.content.stagePlan?.schemaVersion ?? 0) >= 2;
   const prerequisiteChecks = getNewSystemCourseReadiness(course).filter((check) => check.id !== "teacher-review");
   const prerequisitePublishChecks = publishChecks.filter((check) => check.id !== "teacher-review");
-  const readyCount = prerequisiteChecks.filter((item) => item.ok).length;
+  const requiredChecks = prerequisiteChecks.filter((check) => !isAdvisoryCourseReadinessCheck(check.id));
+  const readyCount = requiredChecks.filter((item) => item.ok).length;
+  const requiredResourceIssues = resourceIssues.filter(isTechnicalCourseResourceIssue);
   const readyToPublish = resourceAuditLoaded
     && !resourceAuditError
     && !isTestLesson
-    && readyCount === prerequisiteChecks.length
-    && resourceIssues.length === 0
+    && readyCount === requiredChecks.length
+    && requiredResourceIssues.length === 0
     && (!reviewRequired || reviewDecision.canConfirm);
-  const pendingPublishCount = prerequisiteChecks.length - readyCount
-    + resourceIssues.length
+  const pendingPublishCount = requiredChecks.length - readyCount
+    + requiredResourceIssues.length
     + (resourceAuditError ? 1 : 0)
     + (reviewRequired && !reviewDecision.canConfirm ? 1 : 0);
   const isPublished = publishedHere || course.status === "ready"
@@ -356,10 +361,10 @@ export default function PreviewCoursePage() {
     ? "正在核对课程资源"
     : resourceAuditError
       ? "资源状态读取失败，请重试"
-      : prerequisiteChecks.length !== readyCount
-        ? `还有 ${prerequisiteChecks.length - readyCount} 项发布条件未完成`
-        : resourceIssues.length
-          ? `还有 ${resourceIssues.length} 项课程资源需要处理`
+      : requiredChecks.length !== readyCount
+        ? `还有 ${requiredChecks.length - readyCount} 项发布条件未完成`
+        : requiredResourceIssues.length
+          ? `还有 ${requiredResourceIssues.length} 项课程资源需要处理`
           : reviewRequired && !reviewDecision.canConfirm
             ? reviewSummary?.status === "blocked" ? "终审存在必须处理的问题" : "等待教师确认当前版本"
             : undefined;
@@ -993,7 +998,9 @@ function PublicationStatusRail({
         : reviewStatus === "attention" ? `还有 ${reviewSummary?.attentionCount ?? 0} 项建议待核对`
           : reviewStatus === "ready" ? "可以确认当前版本"
             : reviewStatus === "error" ? "终审状态读取失败" : "正在读取终审状态";
-  const incompleteChecks = checks.filter((item) => !item.done);
+  const incompleteChecks = checks.filter((item) => !item.done && !item.advisory);
+  const advisoryChecks = checks.filter((item) => !item.done && item.advisory);
+  const requiredResourceIssues = missingResourceIssues.filter(isTechnicalCourseResourceIssue);
   const resourceNeedsAttention = Boolean(auditError || repairStatus.status === "failed" || missingResourceIssues.length);
   const speechNeedsAttention = !hasClassroom || speechStatus.status === "failed" || speechSyncIssues.length > 0;
   const reviewNeedsAttention = reviewRequired && ["blocked", "attention", "error"].includes(reviewStatus);
@@ -1002,8 +1009,8 @@ function PublicationStatusRail({
     <div className="space-y-3">
       {resourceNeedsAttention ? <section className={cn("rounded-[12px] border px-4 py-4", auditError || repairStatus.status === "failed" ? "border-rose-200 bg-rose-50/60" : "border-amber-200 bg-amber-50/55")} role="alert">
         <div className="flex items-start justify-between gap-3">
-          <div className="flex items-center gap-2"><AlertTriangle className={auditError || repairStatus.status === "failed" ? "text-rose-700" : "text-amber-700"} size={17} /><h2 className="text-sm font-black text-stone-950">课程资源需要处理</h2></div>
-          <StatusBadge tone={auditError || repairStatus.status === "failed" ? "danger" : "warning"}>{auditError ? "读取失败" : repairStatus.status === "failed" ? "补齐失败" : repairStatus.status === "running" ? "补齐中" : `${missingResourceIssues.length} 项缺失`}</StatusBadge>
+          <div className="flex items-center gap-2"><AlertTriangle className={auditError || repairStatus.status === "failed" ? "text-rose-700" : "text-amber-700"} size={17} /><h2 className="text-sm font-black text-stone-950">{requiredResourceIssues.length || auditError ? "课程资源需要处理" : "课程资源核对提示"}</h2></div>
+          <StatusBadge tone={auditError || repairStatus.status === "failed" ? "danger" : "warning"}>{auditError ? "读取失败" : repairStatus.status === "failed" ? "补齐失败" : repairStatus.status === "running" ? "补齐中" : requiredResourceIssues.length ? `${requiredResourceIssues.length} 项未就绪` : "不阻断发布"}</StatusBadge>
         </div>
         {auditError ? <p className="mt-2 text-xs leading-5 text-rose-800">{auditError}</p> : <>
           {repairStatus.status === "failed" ? <p className="mt-2 text-xs leading-5 text-rose-800">{repairStatus.error || "上次资源补齐失败，请重试。"}</p> : null}
@@ -1026,13 +1033,16 @@ function PublicationStatusRail({
         {hasClassroom ? <Button className="mt-3 min-h-11 w-full" loading={speechStatus.status === "running"} onClick={onRepairSpeech} variant="outline"><RotateCcw size={14} />修复朗读与动作同步</Button> : null}
       </section> : <StatusSummaryRow label="朗读与动作同步" status={speechStatus.status === "running" ? `${speechStatus.completed ?? 0}/${speechStatus.total || "…"}` : "已同步"} tone={speechStatus.status === "running" ? "neutral" : "success"} />}
 
-      {incompleteChecks.length ? <section className="rounded-[12px] border border-amber-200 bg-amber-50/55 px-4 py-4">
-        <div className="flex items-center justify-between gap-3"><h2 className="text-sm font-black text-stone-950">还需完成 {incompleteChecks.length} 项</h2><StatusBadge tone="warning">影响发布</StatusBadge></div>
-        <ul className="mt-3 divide-y divide-amber-200/70">{incompleteChecks.map((item) => {
+      {[
+        { id: "required", items: incompleteChecks, title: `还需完成 ${incompleteChecks.length} 项`, badge: "影响发布" },
+        { id: "advisory", items: advisoryChecks, title: "课程核对提示", badge: "不阻断发布" },
+      ].filter((group) => group.items.length > 0).map((group) => <section className="rounded-[12px] border border-amber-200 bg-amber-50/55 px-4 py-4" key={group.id}>
+        <div className="flex items-center justify-between gap-3"><h2 className="text-sm font-black text-stone-950">{group.title}</h2><StatusBadge tone="warning">{group.badge}</StatusBadge></div>
+        <ul className="mt-3 divide-y divide-amber-200/70">{group.items.map((item) => {
           const section = item.id === "design-workspace-freshness" ? course.content.designWorkspaceRevision?.pendingUpdates[0]?.target ?? "classroom" : PUBLISH_SECTION_BY_CHECK[item.id];
           return <li className="py-2.5 first:pt-0 last:pb-0" key={item.id}><p className="text-xs font-bold text-stone-950">{item.label}</p><p className="mt-0.5 text-[11px] leading-5 text-stone-600">{item.detail}</p>{item.id === "timing" && hasClassroom && !timingAudit ? <Button className="mt-2 min-h-9 w-full" disabled={checkingTiming} loading={checkingTiming} onClick={onRecheckTiming} variant="outline" type="button"><RotateCcw size={13} />重新核查全部音频</Button> : null}{section ? <Link className="mt-1 inline-flex min-h-8 items-center gap-1 text-[11px] font-bold text-[var(--pbl-teacher)] hover:underline" href={`${courseDetailedEditHref(course.id)}?section=${section}`}>定位并修改 <ArrowRight size={11} /></Link> : null}</li>;
         })}</ul>
-      </section> : null}
+      </section>)}
 
       {reviewNeedsAttention ? <section className={cn("rounded-[12px] border px-4 py-4", reviewStatus === "blocked" || reviewStatus === "error" ? "border-rose-200 bg-rose-50/60" : "border-amber-200 bg-amber-50/55")}>
         <div className="flex items-center justify-between gap-3"><h2 className="text-sm font-black text-stone-950">教师终审</h2><StatusBadge tone={reviewStatus === "blocked" || reviewStatus === "error" ? "danger" : "warning"}>{reviewStatus === "blocked" ? "有阻断" : reviewStatus === "error" ? "读取失败" : "待核对"}</StatusBadge></div>
@@ -1091,11 +1101,12 @@ function StatusBadge({ children, tone }: { children: React.ReactNode; tone: "neu
 }
 
 function PublishReadiness({ checks }: { checks: PublishCheck[] }) {
-  const readyCount = checks.filter((item) => item.done).length;
+  const requiredChecks = checks.filter((item) => !item.advisory);
+  const readyCount = requiredChecks.filter((item) => item.done).length;
   return (
     <details className="overflow-hidden rounded-[12px] border border-stone-200 bg-white">
-      <summary className="flex min-h-12 cursor-pointer list-none items-center justify-between gap-3 px-4 py-2.5 text-sm font-bold text-stone-700 focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-[var(--pbl-teacher)]"><span>查看全部发布条件</span><span className="text-xs font-semibold text-stone-500">{readyCount}/{checks.length}</span></summary>
-      <ul className="divide-y divide-stone-100 border-t border-stone-200">{checks.map((item) => <li className="flex gap-2.5 px-4 py-3" key={item.id}><span className={cn("mt-0.5 grid size-5 shrink-0 place-items-center rounded-full", item.done ? "bg-emerald-100 text-emerald-700" : "bg-amber-100 text-amber-700")}>{item.done ? <Check size={12} /> : <AlertTriangle size={11} />}</span><div><p className="text-xs font-bold text-stone-900">{item.label}</p><p className="mt-0.5 text-[11px] leading-5 text-stone-500">{item.detail}</p></div></li>)}</ul>
+      <summary className="flex min-h-12 cursor-pointer list-none items-center justify-between gap-3 px-4 py-2.5 text-sm font-bold text-stone-700 focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-[var(--pbl-teacher)]"><span>查看发布条件与核对提示</span><span className="text-xs font-semibold text-stone-500">{readyCount}/{requiredChecks.length}</span></summary>
+      <ul className="divide-y divide-stone-100 border-t border-stone-200">{checks.map((item) => <li className="flex gap-2.5 px-4 py-3" key={item.id}><span className={cn("mt-0.5 grid size-5 shrink-0 place-items-center rounded-full", item.done ? "bg-emerald-100 text-emerald-700" : "bg-amber-100 text-amber-700")}>{item.done ? <Check size={12} /> : <AlertTriangle size={11} />}</span><div><p className="text-xs font-bold text-stone-900">{item.label}{item.advisory ? <span className="ml-2 font-normal text-stone-500">教师参考</span> : null}</p><p className="mt-0.5 text-[11px] leading-5 text-stone-500">{item.detail}</p></div></li>)}</ul>
     </details>
   );
 }

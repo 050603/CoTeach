@@ -1,4 +1,5 @@
 import type { CourseQualityIssue } from './types';
+import type { CourseResourceIssue } from '@/lib/course-generation/resource-audit-server';
 
 export const COURSE_RENDER_REVIEW_POLICY_VERSION = 'render-visible-content-v2';
 
@@ -43,4 +44,16 @@ export function unresolvedHardIssues(issues: readonly CourseQualityIssue[]): Cou
 export function reviewableIssues(issues: readonly CourseQualityIssue[]): CourseQualityIssue[] {
   return issues.filter((issue) => issue.status !== 'resolved'
     && !(issue.severity === 'error' && issue.blocking === true));
+}
+
+/** These checks describe unsolved quality differences in an existing draft,
+ * not absent runtime content. Both client and server keep them advisory. */
+export function isAdvisoryCourseReadinessCheck(id: string): boolean {
+  return ['timing', 'ai-outline', 'design-workspace-freshness'].includes(id);
+}
+
+/** Publication and its preview use the same resource integrity requirements. */
+export function isTechnicalCourseResourceIssue(issue: Pick<CourseResourceIssue, 'id' | 'type'>): boolean {
+  if (issue.id.startsWith('media:source-image:') || issue.id.startsWith('content:source-sequence:')) return false;
+  return !['source-consistency', 'teaching-tool', 'speech-sync', 'adaptive-resource'].includes(issue.type);
 }

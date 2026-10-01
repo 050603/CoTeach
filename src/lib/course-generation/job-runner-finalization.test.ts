@@ -2,8 +2,8 @@ import { describe, expect, it, vi } from 'vitest';
 import type { SceneOutline } from '@/lib/openmaic/types/generation';
 import type { Scene } from '@openmaic/lib/types/stage';
 import type { FigureSequenceContract } from '@/lib/textbook/course-visual-binding';
-import { fingerprintGenerationValue } from './page-checkpoints';
-import { fingerprintCourseFinalizationRequest, restoreCourseFinalizationCheckpoint, restoreOrGenerateFinalizedClassroom, type PersistedCourseGenerationRequest } from './job-runner';
+import { fingerprintGenerationValue, fingerprintSceneOutline, type SceneStageCheckpointSnapshot } from './page-checkpoints';
+import { fingerprintCourseFinalizationRequest, restoreCourseFinalizationCheckpoint, restoreCompletedTestLessonContext, restoreOrGenerateFinalizedClassroom, type PersistedCourseGenerationRequest } from './job-runner';
 
 const original = [
   { id: 'a', type: 'slide', title: 'A', description: 'Explain A', keyPoints: [], order: 0, targetDurationSec: 120 },
@@ -19,6 +19,56 @@ const generated = { stage: { id: 'classroom' }, scenes: expanded.map((outline) =
 const checkpoint = (inputFingerprint: string) => ({ schemaVersion: 1, inputFingerprint, generated, split: { studentClassroomId: 'classroom', studentScenes: generated.scenes, teacherScenes: [] }, assetsCompletedAt: 'legacy-incorrect-completed-marker' });
 
 describe('finalization recovery after compiled page expansion', () => {
+  it('authorizes original trial context only for the linked completed lesson and all its adopted pages', () => {
+    const outlines = expanded.map((page) => ({ ...page, lectureSectionId: 'trial-section',
+      generationPurpose: 'knowledge-teaching' as const }));
+    const target = { sectionId: 'trial-section', sectionTitle: '试生成小节', sceneOutlineIds: ['a', 'b'], durationSeconds: 150 };
+    const context = { request: { ...request, generationScope: 'full-course' as const }, classroomId: 'classroom',
+      run: { scope: 'test-lesson' as const, status: 'completed' as const, generatedOutlineIds: outlines.map((page) => page.id),
+        fullOutlineCount: 5, testLesson: target },
+      finalization: { ...checkpoint('trial-input'), generated: { ...generated,
+        assetContext: { outlines, narrationProgression: original } } } };
+    expect(restoreCompletedTestLessonContext(context)).toEqual({ target, outlines, progression: original });
+    expect(restoreCompletedTestLessonContext({ ...context, classroomId: 'other-course-output' })).toBeUndefined();
+    expect(restoreCompletedTestLessonContext({ ...context, run: { ...context.run, status: 'pending' } })).toBeUndefined();
+    expect(restoreCompletedTestLessonContext({ ...context, run: { ...context.run,
+      generatedOutlineIds: ['a', 'b'] } })).toBeUndefined();
+    expect(restoreCompletedTestLessonContext({ ...context, finalization: { ...context.finalization,
+      generated: { ...generated, assetContext: { outlines: [...outlines, { ...original[0], id: 'foreign', lectureSectionId: 'other-section' }] } } } })).toBeUndefined();
+    const sources = { sourceKnowledgePoints: [], sourceSequenceContracts: [] };
+    const oldFingerprint = fingerprintGenerationValue('accepted-trial-context');
+    const stages: SceneStageCheckpointSnapshot[] = [];
+    const scenes = outlines.map((outline) => {
+      const content = { elements: [{ id: `${outline.id}:body`, type: 'text', content: outline.title }] };
+      const segment = { id: `${outline.id}:speech`, pageId: outline.id, text: '讲解', semanticIds: [] };
+      if (outline.type === 'slide') for (const stage of ['content', 'narration'] as const) stages.push({
+        schemaVersion: 1, pageKey: outline.id, stage, outlineFingerprint: fingerprintSceneOutline(outline),
+        modelFingerprint: 'unchanged-model', inputFingerprint: oldFingerprint,
+        payload: stage === 'content' ? { content } : { teachingNarration: { pageId: outline.id, segments: [segment] } },
+      });
+      return { id: outline.id, outlineId: outline.id, type: outline.type,
+        content: { type: 'slide', canvas: content }, actions: [{ id: segment.id, type: 'speech', text: segment.text }] };
+    });
+    const authenticated = { ...context, sources,
+      authoringHistory: [{ request: { ...context.request, generationScope: 'test-lesson', testLesson: target,
+        authoringRequestId: 'original-trial' }, stages }],
+      finalization: { ...context.finalization, generated: { ...context.finalization.generated, scenes,
+        assetContext: { outlines, narrationProgression: original,
+          narrationSourceFingerprint: fingerprintGenerationValue(sources) } } } };
+    expect(restoreCompletedTestLessonContext(authenticated)?.narrationBaseline).toEqual({ scenes, outlines,
+      narrationInputFingerprints: { 'trial-section': [oldFingerprint] } });
+    expect(restoreCompletedTestLessonContext(authenticated)?.narrationStages).toEqual(stages.filter((stage) => stage.stage === 'narration'));
+    expect(restoreCompletedTestLessonContext({ ...authenticated, sources: { ...sources,
+      sourceKnowledgePoints: [{ id: 'changed-adoption', evidenceItemIds: [] }] } })?.narrationBaseline).toBeUndefined();
+    expect(restoreCompletedTestLessonContext({ ...authenticated, authoringHistory: [{ ...authenticated.authoringHistory[0],
+      request: { ...authenticated.authoringHistory[0].request, generationModelString: 'other-model' } }] })?.narrationBaseline).toBeUndefined();
+    expect(restoreCompletedTestLessonContext({ ...authenticated, authoringHistory: [{ ...authenticated.authoringHistory[0],
+      stages: stages.slice(1) }] })?.narrationBaseline).toBeUndefined();
+    expect(restoreCompletedTestLessonContext({ ...authenticated, finalization: { ...authenticated.finalization,
+      generated: { ...authenticated.finalization.generated, scenes: scenes.map((scene) => ({ ...scene,
+        actions: [{ ...scene.actions[0], text: '另一份讲稿' }] })) } } })?.narrationBaseline).toBeUndefined();
+  });
+
   const sourceLabels = ['学生应用生成式人工智能需要熟悉场景与使用能力',
     '技术原理与项目任务难度须依据学生认知能力调整', '实践应用同时引导道德伦理问题思考'];
   const sourceOutline = { ...original[0], lectureSectionId: 'source-section', knowledgePointIds: ['source-kp'],
@@ -34,18 +84,23 @@ describe('finalization recovery after compiled page expansion', () => {
       ] } }, actions: speech.map((text, index) => ({ id: `speech-${index}`, type: 'speech', text, audioUrl: `/accepted-${index}.wav` })) },
     { id: 'b', outlineId: 'b', content: { type: 'quiz' }, actions: [] }] });
 
-  it('retains a source-unsafe artifact and its media without automatically buying another draft', async () => {
+  it('restores a draft with source-content differences and all its media without another authoring call', async () => {
     const unsafe = sourceGenerated(sourceLabels.slice(0, 2));
     const saved = { ...checkpoint(fingerprintCourseFinalizationRequest(sourceRequest)), generated: unsafe };
     const repaired = sourceGenerated(sourceLabels);
     const author = vi.fn(async () => repaired as never);
-    await expect(restoreOrGenerateFinalizedClassroom({ checkpoint: saved,
-      request: sourceRequest, preparedOutlines: sourceRequest.sceneOutlines, sourceSequenceContracts: [sourceContract], generate: author }))
-      .rejects.toThrow('停止自动改稿');
+    const { generated: output, restoredFinalization, sourceContentIssues, qualityDiagnostics } = await restoreOrGenerateFinalizedClassroom({ checkpoint: saved,
+      request: sourceRequest, preparedOutlines: sourceRequest.sceneOutlines, sourceSequenceContracts: [sourceContract], generate: author });
     expect(author).not.toHaveBeenCalled();
+    expect(restoredFinalization).toBe(saved);
+    expect(output).toBe(unsafe);
+    expect(output.scenes[0]!.actions).toEqual(unsafe.scenes[0]!.actions);
+    expect(output.scenes[0]!.content).toEqual(unsafe.scenes[0]!.content);
     expect(saved.generated.scenes[0]?.actions).toHaveLength(2);
     expect(saved.generated).toBe(unsafe);
     expect(saved.assetsCompletedAt).toBe('legacy-incorrect-completed-marker');
+    expect(sourceContentIssues[0]?.missingCanonicalLabels).toEqual([sourceLabels[2]]);
+    expect(qualityDiagnostics.join('\n')).toContain(sourceLabels[2]);
   });
 
   it('restores strict source-valid summarized slides and full spoken teaching with no model call', async () => {
@@ -59,16 +114,48 @@ describe('finalization recovery after compiled page expansion', () => {
     expect(output.scenes[0]?.actions?.[0]).toMatchObject({ audioUrl: '/accepted-0.wav' });
   });
 
-  it('reports a failed source contract without replacing or reauthoring the saved finalization', async () => {
+  it('keeps the saved finalization byte-for-byte when supplied source obligations differ from the original draft', async () => {
     const unsafe = sourceGenerated(sourceLabels.slice(0, 2));
     const saved = { ...checkpoint(fingerprintCourseFinalizationRequest(sourceRequest)), generated: unsafe };
     const before = JSON.stringify(saved);
     const author = vi.fn(async () => unsafe as never);
-    await expect(restoreOrGenerateFinalizedClassroom({ checkpoint: saved, request: sourceRequest,
-      preparedOutlines: sourceRequest.sceneOutlines, sourceSequenceContracts: [sourceContract], generate: author }))
-      .rejects.toThrow('教材完整内容尚未进入课堂');
+    const result = await restoreOrGenerateFinalizedClassroom({ checkpoint: saved, request: sourceRequest,
+      preparedOutlines: sourceRequest.sceneOutlines, sourceSequenceContracts: [sourceContract], generate: author });
     expect(author).not.toHaveBeenCalled();
+    expect(result.generated).toBe(unsafe);
     expect(JSON.stringify(saved)).toBe(before);
+  });
+
+  it('authors at most once without a checkpoint and then reuses the full original despite a source-content difference', async () => {
+    const firstDraft = sourceGenerated(sourceLabels.slice(0, 2));
+    const before = JSON.stringify(firstDraft);
+    const author = vi.fn(async () => firstDraft as never);
+    const first = await restoreOrGenerateFinalizedClassroom({ checkpoint: null, request: sourceRequest,
+      preparedOutlines: sourceRequest.sceneOutlines, sourceSequenceContracts: [sourceContract], generate: author });
+    expect(first.restoredFinalization).toBeNull();
+    expect(first.generated).toBe(firstDraft);
+    expect(author).toHaveBeenCalledExactlyOnceWith();
+    const saved = { ...checkpoint(first.inputFingerprint), generated: first.generated };
+    const resumed = await restoreOrGenerateFinalizedClassroom({ checkpoint: saved, request: sourceRequest,
+      preparedOutlines: sourceRequest.sceneOutlines, sourceSequenceContracts: [sourceContract], generate: author });
+    expect(resumed.generated).toBe(firstDraft);
+    expect(resumed.generated.scenes[0]!.actions).toEqual(firstDraft.scenes[0]!.actions);
+    expect(JSON.stringify(firstDraft)).toBe(before);
+    expect(author).toHaveBeenCalledOnce();
+  });
+
+  it('propagates a technical first-authoring failure without retrying or inserting source content', async () => {
+    const author = vi.fn(async () => { throw new Error('provider response incomplete'); });
+    await expect(restoreOrGenerateFinalizedClassroom({ checkpoint: null, request: sourceRequest,
+      preparedOutlines: sourceRequest.sceneOutlines, sourceSequenceContracts: [sourceContract], generate: author }))
+      .rejects.toThrow('provider response incomplete');
+    expect(author).toHaveBeenCalledExactlyOnceWith();
+  });
+  it('does not turn an empty technical generation into completed output', async () => {
+    const author = vi.fn(async () => ({ ...generated, scenes: [] }) as never);
+    await expect(restoreOrGenerateFinalizedClassroom({ checkpoint: null, request,
+      preparedOutlines: original, generate: author })).rejects.toThrow('No scenes were generated');
+    expect(author).toHaveBeenCalledOnce();
   });
   it('rejects a completed checkpoint when a required textbook original is added to the course contract', () => {
     const before = checkpoint(fingerprintCourseFinalizationRequest(request));
@@ -122,7 +209,7 @@ describe('finalization recovery after compiled page expansion', () => {
         audioUrl: '/api/openmaic/classroom-media/test/audio/a.wav',
         speechAlignment: { status: 'aligned' } }],
     } as unknown as Scene;
-    const author = vi.fn(async () => ({ ...generated, scenes: [draftScene] }) as never);
+    const author = vi.fn(async () => ({ ...generated, scenes: [draftScene, ...generated.scenes.slice(1)] }) as never);
     const { generated: output } = await restoreOrGenerateFinalizedClassroom({
       checkpoint: null, request, preparedOutlines: expanded, generate: author,
       previousScenes: new Map([['a', accepted]]),

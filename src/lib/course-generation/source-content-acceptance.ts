@@ -1,9 +1,10 @@
 import type { PPTElement } from '@openmaic/dsl';
 import type { SceneOutline, GeneratedSlideContent } from '@/lib/openmaic/types/generation';
 import type { Scene } from '@/lib/openmaic/types/stage';
-import { inspectFigureSequence, hasSourceSequenceLabel, type FigureSequenceContract } from '@/lib/textbook/course-visual-binding';
+import { inspectFigureSequence, hasSourceSequenceLabel, firstSourceSequenceTeachingOutline, type FigureSequenceContract } from '@/lib/textbook/course-visual-binding';
 import { fingerprintGenerationValue } from './page-checkpoints';
 import { getOutlineSourcePageIds } from './generation-scope';
+import { scopeSourceSequenceContracts, usesSourceSequence } from '@/lib/textbook/source-sequence-use';
 
 export type SourceSequenceContentGroup = { statements: string[]; diagramLabels?: string[] };
 
@@ -50,13 +51,47 @@ export function sourceTeachingSectionId(outline: SceneOutline): string {
   return outline.lectureSectionId || outline.parentActivityId || outline.activityId || outline.stageKey || '__course__';
 }
 
-export function canonicalSourceClausesForOutline(outline: SceneOutline): string[] {
-  return [outline.description, ...outline.keyPoints, ...(outline.teachingBrief?.teachingPlan?.visibleContent ?? [])]
+export function canonicalSourceClausesForOutline(outline: SceneOutline, visibleOnly = false): string[] {
+  const plan = outline.teachingBrief?.teachingPlan;
+  const display = plan?.presentationContent ?? outline.keyPoints;
+  return (visibleOnly ? [...display,
+    ...(outline.visualIntent?.diagram?.nodes.map((node) => node.label) ?? [])] : [
+    outline.description, ...display, ...(plan?.visibleContent ?? []),
+    plan?.newContent, ...(plan?.reasoningSteps ?? []), ...(plan?.narrationFocus ?? []),
+    outline.teachingBrief?.explanation, ...(outline.teachingBrief?.conditions ?? []),
+  ])
     .filter((value): value is string => typeof value === 'string' && Boolean(value));
 }
 
-export function outlineOwnsCanonicalSourceClause(outline: SceneOutline, label: string): boolean {
-  return hasSourceSequenceLabel(canonicalSourceClausesForOutline(outline).join('\n'), label);
+export function outlineOwnsCanonicalSourceClause(outline: SceneOutline, label: string, visibleOnly = false): boolean {
+  return hasSourceSequenceLabel(canonicalSourceClausesForOutline(outline, visibleOnly).join('\n'), label);
+}
+
+/** Share the adopted list's execution responsibility with first-draft
+ * authoring. An unassigned clause stays on the existing best owner; absence
+ * from the plan must never erase a required textbook item. */
+export function sourceSequenceTeachingResponsibilities(outlines: readonly SceneOutline[],
+  contract: FigureSequenceContract): { targets: SceneOutline[]; owners: Array<{ label: string; owner: SceneOutline }> } {
+  contract = scopeSourceSequenceContracts([contract], outlines)[0]!;
+  if (!contract.required || !contract.orderedSteps?.length) return { targets: [], owners: [] };
+  const allTargets = outlines.filter((outline) => outline.type === 'slide'
+    && usesSourceSequence(outline, contract)
+    && outline.generationPurpose === 'knowledge-teaching'
+    && outline.knowledgePointIds?.some((id) => contract.knowledgePointIds.includes(id)));
+  const first = contract.scope === 'single-page'
+    ? firstSourceSequenceTeachingOutline(allTargets, contract.orderedSteps, contract.resourceId) : allTargets[0];
+  if (!first) return { targets: [], owners: [] };
+  const parent = first.spatialParentId ?? first.id;
+  const targets = contract.scope === 'single-page' ? allTargets.filter((outline) =>
+    outline.id === parent || outline.spatialParentId === parent || getOutlineSourcePageIds(outline).includes(parent)) : allTargets;
+  const bestOwner = targets.reduce((best, current) => {
+    const count = (page: SceneOutline) => contract.orderedSteps!.filter((step) => outlineOwnsCanonicalSourceClause(page, step.label)).length;
+    return count(current) > count(best) ? current : best;
+  });
+  const owners = contract.orderedSteps.filter((step) => !contract.requiredStepLabels
+    || contract.requiredStepLabels.includes(step.label)).map((step) => ({ label: step.label,
+    owner: targets.find((outline) => outlineOwnsCanonicalSourceClause(outline, step.label)) ?? bestOwner }));
+  return { targets, owners };
 }
 
 function slideContentGroups(content: GeneratedSlideContent, includeDiagramLabels = false): SourceSequenceContentGroup[] {
@@ -67,37 +102,43 @@ function slideContentGroups(content: GeneratedSlideContent, includeDiagramLabels
  * locate a missing clause on the page that already owns its visible duty. */
 export function findSourceContentIssues(pages: readonly SourceContentPage[],
   contracts: readonly FigureSequenceContract[], options: { visibleOnly?: boolean } = {}): SourceContentIssue[] {
-  return contracts.flatMap((contract) => {
+  const scoped = scopeSourceSequenceContracts(contracts, pages.map((page) => page.outline));
+  return scoped.flatMap((contract) => {
     if (!contract.required || !contract.orderedSteps?.length) return [];
     const candidates = pages.filter(({ outline }) => outline.type === 'slide'
+      && usesSourceSequence(outline, contract)
       && outline.generationPurpose === 'knowledge-teaching'
       && outline.knowledgePointIds?.some((id) => contract.knowledgePointIds.includes(id)));
-    const first = candidates[0]?.outline;
+    const first = contract.scope === 'single-page'
+      ? firstSourceSequenceTeachingOutline(candidates.map(({ outline }) => outline), contract.orderedSteps, contract.resourceId) : candidates[0]?.outline;
     const firstParent = first?.spatialParentId ?? first?.id;
     const targets = contract.scope === 'single-page' && firstParent
       ? candidates.filter(({ outline }) => outline.id === firstParent || outline.spatialParentId === firstParent
         || getOutlineSourcePageIds(outline).includes(firstParent)) : candidates;
     if (!targets.length) return [];
     const groups = targets.flatMap(({ content, speech }) => [...slideContentGroups(content, contract.sequenceSemantics !== 'enumerated-items'),
-      ...(speech?.length ? [{ statements: [...speech] }] : [])]);
-    const related = contracts.filter((other) => other.required
+      ...(!options.visibleOnly && speech?.length ? [{ statements: [...speech] }] : [])]);
+    const related = scoped.filter((other) => other.required
       && targets.some(({ outline }) => outline.knowledgePointIds?.some((id) => other.knowledgePointIds.includes(id))));
     const problems = inspectFigureSequence({ orderedSteps: contract.orderedSteps, statements: [], contentGroups: groups,
-      relatedSequences: related, sequenceSemantics: contract.sequenceSemantics, requireCompleteText: !options.visibleOnly });
+      relatedSequences: related, sequenceSemantics: contract.sequenceSemantics, requireCompleteText: !options.visibleOnly,
+      ...(!options.visibleOnly ? { requiredStepLabels: contract.requiredStepLabels } : {}),
+      allowPartialDiagram: Boolean(contract.requiredStepLabels) });
     const text = compact(groups.flatMap((group) => group.statements).join('\n'));
-    const missing = contract.orderedSteps.filter((step) => !hasSourceSequenceLabel(text, step.label)
-      && (!options.visibleOnly || targets.some(({ outline }) => outlineOwnsCanonicalSourceClause(outline, step.label))))
+    const missing = contract.orderedSteps.filter((step) => (!contract.requiredStepLabels
+      || contract.requiredStepLabels.includes(step.label)) && !hasSourceSequenceLabel(text, step.label)
+      && (!options.visibleOnly || targets.some(({ outline }) => outlineOwnsCanonicalSourceClause(outline, step.label, true))))
       .map((step) => step.label);
     if (options.visibleOnly && missing.length) problems.push(`遗漏教材条目：${missing.join('、')}`);
     if (!problems.length) return [];
     const responsibilities = missing.length ? missing : contract.orderedSteps.map((step) => step.label);
     const bestOwner = targets.reduce((best, current) => {
-      const coverage = (page: SourceContentPage) => responsibilities.filter((label) => outlineOwnsCanonicalSourceClause(page.outline, label)).length;
+      const coverage = (page: SourceContentPage) => responsibilities.filter((label) => outlineOwnsCanonicalSourceClause(page.outline, label, options.visibleOnly)).length;
       return coverage(current) > coverage(best) ? current : best;
     });
     const byOwner = new Map<string, { page: SourceContentPage; labels: string[] }>();
     for (const label of missing) {
-      const page = targets.find(({ outline }) => outlineOwnsCanonicalSourceClause(outline, label)) ?? bestOwner;
+      const page = targets.find(({ outline }) => outlineOwnsCanonicalSourceClause(outline, label, options.visibleOnly)) ?? bestOwner;
       const assignment = byOwner.get(page.outline.id) ?? { page, labels: [] };
       assignment.labels.push(label);
       byOwner.set(page.outline.id, assignment);
@@ -110,9 +151,28 @@ export function findSourceContentIssues(pages: readonly SourceContentPage[],
   });
 }
 
+/** Inspect the actual finished draft without rewriting it or turning a
+ * textbook-coverage diagnostic into another authoring or recovery request. */
+export function findClassroomSourceContentIssues(outlines: readonly SceneOutline[], scenes: readonly Scene[],
+  contracts: readonly FigureSequenceContract[]): SourceContentIssue[] {
+  const byOutline = new Map(outlines.map((outline) => [outline.id, outline]));
+  const pages = scenes.flatMap((scene): SourceContentPage[] => {
+    const outline = byOutline.get(scene.outlineId ?? scene.id);
+    if (!outline || scene.content?.type !== 'slide') return [];
+    return [{ outline, content: { elements: scene.content.canvas.elements, background: scene.content.canvas.background },
+      speech: (scene.actions ?? []).flatMap((action) => action.type === 'speech' ? [action.text] : []) }];
+  });
+  return findSourceContentIssues(pages, contracts);
+}
+
+export function sourceContentDiagnosticWarnings(issues: readonly SourceContentIssue[]): string[] {
+  return [...new Set(issues.map((issue) =>
+    `教材内容待核对 [${issue.sectionId}/${issue.repairOutlineId}; ${issue.resourceId}]：${issue.detail}`))];
+}
+
 export function findFinalizedSourceContentIssues(outlines: readonly SceneOutline[], scenes: readonly Scene[],
   contracts: readonly FigureSequenceContract[]): SourceContentIssue[] {
-  if (!contracts.some((contract) => contract.required && contract.orderedSteps?.length)) return [];
+  if (!scopeSourceSequenceContracts(contracts, outlines).some((contract) => contract.required && contract.orderedSteps?.length)) return [];
   const byId = new Map(outlines.map((outline) => [outline.id, outline]));
   return findSourceContentIssues(scenes.flatMap((scene) => {
     const outline = byId.get(scene.outlineId ?? scene.id);
@@ -127,35 +187,24 @@ export function findFinalizedSourceContentIssues(outlines: readonly SceneOutline
  * adopted plan instead of demanding another section's clauses on this one. */
 export function findSectionSourceContentIssues(outlines: readonly SceneOutline[], pages: readonly SourceContentPage[],
   contracts: readonly FigureSequenceContract[]): SourceContentIssue[] {
-  return contracts.flatMap((contract) => {
+  const scoped = scopeSourceSequenceContracts(contracts, outlines);
+  return scoped.flatMap((contract) => {
     if (!contract.required || !contract.orderedSteps?.length) return [];
-    const allTargets = outlines.filter((outline) => outline.type === 'slide'
-      && outline.generationPurpose === 'knowledge-teaching'
-      && outline.knowledgePointIds?.some((id) => contract.knowledgePointIds.includes(id)));
-    const first = allTargets[0];
-    if (!first) return [];
-    const parent = first.spatialParentId ?? first.id;
-    const targets = contract.scope === 'single-page' ? allTargets.filter((outline) =>
-      outline.id === parent || outline.spatialParentId === parent || getOutlineSourcePageIds(outline).includes(parent)) : allTargets;
+    const { targets, owners } = sourceSequenceTeachingResponsibilities(outlines, contract);
     const ids = new Set(targets.map((outline) => outline.id));
     const actual = pages.filter(({ outline }) => ids.has(outline.id));
     if (!actual.length) return [];
-    const bestOwner = targets.reduce((best, current) => {
-      const count = (page: SceneOutline) => contract.orderedSteps!.filter((step) => outlineOwnsCanonicalSourceClause(page, step.label)).length;
-      return count(current) > count(best) ? current : best;
-    });
-    const owners = contract.orderedSteps.map((step) => ({ label: step.label,
-      owner: targets.find((outline) => outlineOwnsCanonicalSourceClause(outline, step.label)) ?? bestOwner }));
     const sections = new Set(actual.map(({ outline }) => sourceTeachingSectionId(outline)));
     const groups = actual.flatMap(({ content, speech }) => [...slideContentGroups(content, contract.sequenceSemantics !== 'enumerated-items'),
       ...(speech?.length ? [{ statements: [...speech] }] : [])]);
     const text = compact(groups.flatMap((group) => group.statements).join('\n'));
     const missing = owners.filter(({ owner, label }) => sections.has(sourceTeachingSectionId(owner))
       && !hasSourceSequenceLabel(text, label));
-    const related = contracts.filter((other) => other.required && actual.some(({ outline }) =>
+    const related = scoped.filter((other) => other.required && actual.some(({ outline }) =>
       outline.knowledgePointIds?.some((id) => other.knowledgePointIds.includes(id))));
     const problems = inspectFigureSequence({ orderedSteps: contract.orderedSteps, statements: [], contentGroups: groups,
-      sequenceSemantics: contract.sequenceSemantics, relatedSequences: related });
+      sequenceSemantics: contract.sequenceSemantics, relatedSequences: related,
+      allowPartialDiagram: Boolean(contract.requiredStepLabels) });
     if (missing.length) problems.push(`遗漏教材条目：${missing.map(({ label }) => label).join('、')}`);
     if (!problems.length) return [];
     const assignments = new Map<string, { owner: SceneOutline; labels: string[] }>();

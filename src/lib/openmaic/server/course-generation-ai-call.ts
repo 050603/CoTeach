@@ -1,4 +1,5 @@
 import type { LanguageModel, UserModelMessage } from 'ai';
+import { Output } from 'ai';
 import { randomUUID } from 'node:crypto';
 import { callLLM, callStreamingLLMText } from '@openmaic/lib/ai/llm';
 import type { ThinkingConfig } from '@openmaic/lib/types/provider';
@@ -24,6 +25,10 @@ import {
 } from '@openmaic/lib/generation/course-output-budget';
 
 const log = createLogger('CourseGenerationAI');
+// Ask the provider for JSON while keeping each raw text delta available to
+// activity tracking and draft storage. Output.json() buffers partial JSON;
+// the existing course parsers validate the complete authored text instead.
+const jsonTextOutput = { ...Output.text(), responseFormat: Output.json().responseFormat };
 
 export type CourseGenerationAuthoringResponse = {
   source: string; system: string; prompt: string; text: string;
@@ -51,6 +56,7 @@ export type CourseGenerationAiCallContext = {
     requestPolicy?: {
       maxOutputTokens?: number; thinking?: ThinkingConfig;
       executionBudgetVersion?: string; idleTimeoutMs?: number; maxDurationMs?: number;
+      responseFormat?: 'json';
     };
   }) => void;
   onActivity?: (input: {
@@ -144,6 +150,10 @@ export function createCourseGenerationAiCall(options: {
   /** Stream large text responses so the provider can send headers before the
    * complete document has been generated. The returned contract stays text. */
   streamResponse?: boolean;
+  /** Request native JSON output for object contracts before authoring starts.
+   * HTML and other free text callers leave this unset. No output correction or
+   * second request is commissioned when a provider rejects this format. */
+  responseFormat?: 'json';
   /** Absolute safety ceiling for an active stream. The ordinary timeout is an
    * inactivity deadline and is refreshed by reasoning and visible text. */
   streamMaxDurationMs?: number;
@@ -222,6 +232,7 @@ export function createCourseGenerationAiCall(options: {
       const startedAt = Date.now();
       const requestPolicy = {
         maxOutputTokens, thinking: options.thinking,
+        ...(options.responseFormat ? { responseFormat: options.responseFormat } : {}),
         ...(options.executionBudget ? {
           executionBudgetVersion: COURSE_EXECUTION_BUDGET_VERSION,
           idleTimeoutMs: options.timeoutMs, maxDurationMs,
@@ -246,7 +257,8 @@ export function createCourseGenerationAiCall(options: {
       const content: UserModelMessage['content'] = options.vision && images?.length
         ? [{ type: 'text', text: prompt }, ...images.flatMap((image) => [
             { type: 'text' as const, text: `Image reference: ${image.id}` },
-            { type: 'image' as const, image: image.src },
+            { type: 'file' as const, data: image.src,
+              mediaType: /^data:(image\/[^;,]+)/i.exec(image.src)?.[1] ?? 'image/*' },
           ])]
         : prompt;
       let outcome: 'response' | 'failed' | 'aborted' = 'failed';
@@ -257,6 +269,7 @@ export function createCourseGenerationAiCall(options: {
             model: options.model, system, messages: [{ role: 'user', content }],
             abortSignal: signal, maxOutputTokens, maxRetries: 0,
             temperature: options.temperature,
+            ...(options.responseFormat === 'json' ? { output: jsonTextOutput } : {}),
           }, options.source, options.thinking, {
             onActivity: (activity) => {
               outputStarted ||= activity.reasoningCharacters > 0 || activity.textCharacters > 0;
@@ -272,6 +285,7 @@ export function createCourseGenerationAiCall(options: {
           model: options.model, system, messages: [{ role: 'user', content }],
           abortSignal: signal, maxOutputTokens, maxRetries: 0,
           temperature: options.temperature,
+          ...(options.responseFormat === 'json' ? { output: jsonTextOutput } : {}),
         }, options.source, undefined, options.thinking, { bypassCourseGenerationLimit: true });
         outcome = 'response';
         return result.text;

@@ -18,6 +18,7 @@ import { Card, Pill, PrimaryButton, SaveStatus } from "@/components/ui";
 import { useSession, useCourse, useHydrated } from "@/lib/session/store";
 import { useCoursePresence } from "@/hooks/use-course-presence";
 import { getNewSystemCourseReadiness } from "@/lib/classroom/new-system-course";
+import { isAdvisoryCourseReadinessCheck } from "@/lib/course-quality-review/teacher-review";
 import { MakeArtifactModeSetting } from "@/components/teacher/make-artifact-mode-setting";
 
 export default function TeachSetupWorkspace({ activityId, offeringId, templateVersionId, templateId }: { activityId: string; offeringId: string; templateVersionId: string; templateId: string }) {
@@ -47,7 +48,8 @@ export default function TeachSetupWorkspace({ activityId, offeringId, templateVe
   const inviteCode = course?.inviteCode;
   const isTeaching = course?.status === "teaching";
   const readinessChecks = course ? getNewSystemCourseReadiness(course) : [];
-  const readinessBlockers = readinessChecks.filter((check) => !check.ok);
+  const readinessBlockers = readinessChecks.filter((check) => !check.ok && !isAdvisoryCourseReadinessCheck(check.id));
+  const readinessDiagnostics = readinessChecks.filter((check) => !check.ok && isAdvisoryCourseReadinessCheck(check.id));
 
   if (!hydrated) {
     return (
@@ -147,6 +149,15 @@ export default function TeachSetupWorkspace({ activityId, offeringId, templateVe
               >
                 返回备课生成
               </Link>
+            </Card>
+          ) : null}
+          {readinessDiagnostics.length > 0 ? (
+            <Card className="border-amber-200 bg-amber-50/70">
+              <h2 className="text-lg font-bold text-amber-950">课程核对提示</h2>
+              <p className="mt-1 text-sm text-amber-900">以下提示保留供授课时参考，不阻断开课。</p>
+              <ul className="mt-3 space-y-2 text-sm leading-6 text-amber-900">
+                {readinessDiagnostics.map((check) => <li key={check.id}>• {check.label}：{check.message}</li>)}
+              </ul>
             </Card>
           ) : null}
           <Card>

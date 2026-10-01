@@ -23,6 +23,35 @@ const measure: TextMeasure = ({ text, width, fontSize, padding, lineHeight }) =>
 };
 
 describe('first-draft component authoring in the production package', () => {
+  it.each([18, 16])('compiles actual native charts with the preselected %spx presentation font', async (chartFontSize) => {
+    const data = { labels: ['甲', '乙'], legends: ['数量'], series: [[12, 20]] };
+    const ai = vi.fn().mockResolvedValue(JSON.stringify({ elements: [
+      { id: 'comparison', type: 'chart', chartType: 'bar', left: 60, top: 140, width: 880, height: 300,
+        options: { stack: true }, data },
+    ] }));
+    const failure = vi.fn();
+    const slide = await generateSceneContent({ ...outline, visualIntent: undefined,
+      presentationTypography: { bodyFontSize: 18, minimumBodyFontSize: 16, titleFontSize: 32, minimumTitleFontSize: 28, chartFontSize },
+    }, ai, { onFailure: failure });
+    expect(failure).not.toHaveBeenCalled();
+    expect(slide && 'elements' in slide ? slide.elements[0] : null).toMatchObject({
+      type: 'chart', options: { stack: true, fontSize: chartFontSize }, data, left: 60, top: 140, width: 880, height: 300,
+    });
+    expect(ai).toHaveBeenCalledOnce();
+  });
+
+  it('retains an unsupported chart font with a diagnostic instead of stopping or resizing it', async () => {
+    const response = { elements: [{ id: 'comparison', type: 'chart', chartType: 'bar', left: 60, top: 140,
+      width: 880, height: 300, options: { fontSize: 14 }, data: { labels: ['甲'], legends: ['数量'], series: [[12]] } }] };
+    const failure = vi.fn();
+    const result = await generateSceneContent({ ...outline, visualIntent: undefined,
+      presentationTypography: { bodyFontSize: 18, minimumBodyFontSize: 16, titleFontSize: 32, minimumTitleFontSize: 28 },
+    }, async () => JSON.stringify(response), { onFailure: failure });
+    expect(response.elements[0].options.fontSize).toBe(14);
+    expect(result).toMatchObject({ qualityDiagnostics: [expect.stringContaining('14px')], elements: [expect.objectContaining({ options: { fontSize: 14 } })] });
+    expect(failure).not.toHaveBeenCalled();
+  });
+
   it('compiles concise adopted presentation points from paragraphRefs in the first and only content call', async () => {
     const points = [
       { id: 'scope', text: '先明确概念边界。' },
@@ -97,7 +126,7 @@ describe('first-draft component authoring in the production package', () => {
     expect(failure).toHaveBeenCalledWith(expect.objectContaining({ detail: expect.stringContaining('equal, nonempty cells and consistent headers') }));
   });
 
-  it('rejects unknown model references before compiling returned content and omits no adopted points', async () => {
+  it('rejects unknown references but leaves missing display coverage to final teacher review', async () => {
     const points = [{ id: 'condition', text: '满足适用条件后，再选择方法。' }, { id: 'feedback', text: '根据反馈调整设计。' }];
     const failure = vi.fn();
     const measured = vi.fn(measure);
@@ -109,11 +138,15 @@ describe('first-draft component authoring in the production package', () => {
     // First-pass hints measure the trusted catalog before the model call.
     // The unknown returned reference never supplies text to the measurer.
     expect(measured.mock.calls.every(([input]) => points.some((point) => point.text === input.text))).toBe(true);
-    expect(failure).toHaveBeenCalledWith(expect.objectContaining({ detail: expect.stringContaining('unknown content reference') }));
+    expect(failure).toHaveBeenCalledWith(expect.objectContaining({ detail: expect.stringContaining('textBox needs plain text') }));
     ai.mockResolvedValue(JSON.stringify({ components: [{ kind: 'textBox', left: 60, top: 140, width: 880, contentRef: 'condition' }] }));
-    expect(await generateSceneContent({ ...outline, visualIntent: undefined }, ai, options)).toBeNull();
+    failure.mockClear();
+    const authored = await generateSceneContent({ ...outline, visualIntent: undefined }, ai, options);
+    expect(authored && 'elements' in authored ? authored.elements : []).toHaveLength(1);
+    expect(JSON.stringify(authored)).toContain(points[0].text);
+    expect(JSON.stringify(authored)).not.toContain(points[1].text);
     expect(ai).toHaveBeenCalledTimes(2);
-    expect(failure).toHaveBeenLastCalledWith(expect.objectContaining({ detail: expect.stringContaining('feedback') }));
+    expect(failure).not.toHaveBeenCalled();
   });
 
   it('supplies real native-font allocations before the first call and compiles the chosen full point', async () => {
@@ -189,7 +222,7 @@ describe('first-draft component authoring in the production package', () => {
     expect(slide && 'elements' in slide ? slide.elements.some((element) => element.type === 'table') : false).toBe(true);
   });
 
-  it('rejects an adopted point that cannot fit at its authored native font instead of shortening it', async () => {
+  it('retains a complete adopted point and records native overflow without shortening it', async () => {
     const point = { id: 'definition', text: '完整概念保留全部适用条件与结论。' };
     const ai = vi.fn().mockResolvedValue(JSON.stringify({ elements: [
       { type: 'text', left: 60, top: 140, width: 120, height: 30, contentRef: point.id, content: '<p style="font-size:24px">原占位</p>' },
@@ -197,11 +230,13 @@ describe('first-draft component authoring in the production package', () => {
     const failure = vi.fn();
     const measured: TextMeasure = ({ text, fontSize, padding, lineHeight }) => ({ naturalWidth: [...text].length * fontSize,
       height: padding * 2 + fontSize * lineHeight * 3, lines: ['完整概念保留', '全部适用条件', '与结论。'] });
-    expect(await generateSceneContent({ ...outline, visualIntent: undefined }, ai, {
+    const result = await generateSceneContent({ ...outline, visualIntent: undefined }, ai, {
       componentAuthoring: true, textMeasure: measured, authoringContent: [point], onFailure: failure,
-    })).toBeNull();
+    });
     expect(ai).toHaveBeenCalledTimes(1);
-    expect(failure).toHaveBeenCalledWith(expect.objectContaining({ category: 'layout-conflict', detail: expect.stringContaining('exceeds its authored') }));
+    expect(failure).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ qualityDiagnostics: expect.arrayContaining([expect.stringContaining('exceeds its authored')]) });
+    expect(JSON.stringify(result)).toContain(point.text);
   });
 
   it.each([{ type: 'diagram' }, { kind: 'diagram' }, { type: 'diagram', kind: 'diagram' }])(
@@ -236,11 +271,13 @@ describe('first-draft component authoring in the production package', () => {
     expect(elements.some((element) => element.type === 'text' && element.content.includes(diagram.annotation!))).toBe(true);
   });
 
-  it('keeps flow behind an explicit authoring option', async () => {
+  it('compiles a usable unexpected flow response with a protocol diagnostic', async () => {
     const ai = vi.fn().mockResolvedValue(JSON.stringify({ layout: { groups: [{ kind: 'textBox', text: 'native slide expected' }] } }));
     const failure = vi.fn();
-    expect(await generateSceneContent(outline, ai, { componentAuthoring: true, textMeasure: measure, onFailure: failure })).toBeNull();
-    expect(failure).toHaveBeenCalledWith({ code: 'invalid-model-output', detail: expect.stringContaining('flow layout is opt-in') });
+    const result = await generateSceneContent(outline, ai, { componentAuthoring: true, textMeasure: measure, onFailure: failure });
+    expect(result).toMatchObject({ qualityDiagnostics: expect.arrayContaining([expect.stringContaining('flow layout was supplied')]) });
+    expect(JSON.stringify(result)).toContain('native slide expected');
+    expect(failure).not.toHaveBeenCalled();
   });
 
   it('authors a complete diagram whose measured annotation cannot fit its native region in flow on the first content call', async () => {
@@ -300,15 +337,22 @@ describe('first-draft component authoring in the production package', () => {
   });
 
   it.each([{ tags: [] }, { tags: ['type', 'type'] }, { tags: ['kind', 'kind'] }, { tags: ['type', 'kind'] }])(
-    'rejects missing or duplicate planned diagrams across discriminator forms %j', async ({ tags }) => {
+    'keeps empty output technical while retaining overlapping complete diagrams for review %j', async ({ tags }) => {
     const count = tags.length;
     const ai = vi.fn().mockResolvedValue(JSON.stringify({ elements: [], components: tags.map((tag) => ({
       [tag]: 'diagram', left: 50, top: 140, width: 900, height: 330,
     })) }));
     const failure = vi.fn();
-    expect(await generateSceneContent(outline, ai, { componentAuthoring: true, textMeasure: measure, onFailure: failure })).toBeNull();
-    expect(failure).toHaveBeenCalledWith(expect.objectContaining({ detail: expect.stringContaining(`received ${count}`) }));
-    expect(failure.mock.calls[0]?.[0]?.detail).toContain('exactly one components entry');
+    const result = await generateSceneContent(outline, ai, { componentAuthoring: true, textMeasure: measure, onFailure: failure });
+    if (!count) {
+      expect(result).toBeNull();
+      expect(failure).toHaveBeenCalledWith(expect.objectContaining({ code: 'invalid-model-output' }));
+    } else {
+      expect(failure).not.toHaveBeenCalled();
+      expect(result).toMatchObject({ qualityDiagnostics: expect.arrayContaining([expect.stringContaining('overlap')]) });
+      expect(result && 'elements' in result ? result.elements.filter((element) => element.type === 'shape') : []).toHaveLength(count * 7);
+    }
+    expect(ai).toHaveBeenCalledOnce();
   });
 
   it('rejects a conflicting native component discriminator before the planned diagram count gate', async () => {
@@ -321,7 +365,7 @@ describe('first-draft component authoring in the production package', () => {
     expect(failure.mock.calls[0]?.[0]?.detail).not.toContain('received 0');
   });
 
-  it.each(['type', 'kind'])('reports complete measured choices for an undersized %s diagram without expanding it', async (tag) => {
+  it.each(['type', 'kind'])('retains all labels and edges when an undersized %s diagram needs a basic layout', async (tag) => {
     const diagram = { topology: 'sequence' as const,
       nodes: ['教学目标分析', '情境创设', '信息资源设计', '自主学习设计', '协作学习环境设计', '学习效果评价设计', '强化练习设计']
         .map((label, index) => ({ id: String(index), label })),
@@ -335,11 +379,13 @@ describe('first-draft component authoring in the production package', () => {
     const failure = vi.fn();
     const slide = await generateSceneContent({ ...outline, visualIntent: { ...outline.visualIntent!, diagram } }, ai,
       { componentAuthoring: true, textMeasure: measured, onFailure: failure });
-    expect(slide).toBeNull();
+    expect(slide).not.toBeNull();
     expect(ai).toHaveBeenCalledTimes(1);
-    expect(failure).toHaveBeenCalledWith(expect.objectContaining({ category: 'layout-conflict', detail: expect.stringContaining('900×240px at 50,272') }));
-    expect(failure.mock.calls[0]?.[0]?.detail).toContain('900×360px');
-    expect(failure.mock.calls[0]?.[0]?.detail).toContain('all nodes, edges and annotation');
+    expect(failure).not.toHaveBeenCalled();
+    expect(slide).toMatchObject({ qualityDiagnostics: expect.arrayContaining([expect.stringContaining('complete graph')]) });
+    for (const node of diagram.nodes) expect(JSON.stringify(slide)).toContain(node.label);
+    expect(JSON.stringify(slide)).toContain(diagram.annotation);
+    expect(slide && 'elements' in slide ? slide.elements.filter((element) => element.type === 'line') : []).toHaveLength(6);
   });
 
   it('preserves native surfaces, rich text and actual tables without forcing components', async () => {
@@ -359,7 +405,7 @@ describe('first-draft component authoring in the production package', () => {
     expect(slide).not.toHaveProperty('continuationPages');
   });
 
-  it('rejects the first draft when native peer panels and teaching text overlap', async () => {
+  it('retains the first draft and reports overlapping native peer panels and teaching text', async () => {
     const ai = vi.fn().mockResolvedValue(JSON.stringify({ elements: [
       { id: 'panel_b_bg', type: 'shape', left: 510, top: 178, width: 430, height: 118, fill: '#F1F5F9' },
       { id: 'sidebar_bg', type: 'shape', left: 668, top: 178, width: 272, height: 328, fill: '#F8FAFC' },
@@ -371,10 +417,11 @@ describe('first-draft component authoring in the production package', () => {
     const failure = vi.fn();
     const slide = await generateSceneContent({ ...outline, visualIntent: undefined }, ai,
       { componentAuthoring: true, textMeasure: measure, onFailure: failure });
-    expect(slide).toBeNull();
-    expect(failure).toHaveBeenCalledWith(expect.objectContaining({ code: 'invalid-model-output', category: 'layout-conflict',
-      detail: expect.stringContaining('panel_b_text overlaps unit_c_text') }));
-    expect(failure.mock.calls[0]?.[0]?.detail).toContain('panel_b_bg and sidebar_bg overlap');
+    expect(failure).not.toHaveBeenCalled();
+    expect(slide).toMatchObject({ qualityDiagnostics: expect.arrayContaining([
+      expect.stringContaining('panel_b_text overlaps unit_c_text'), expect.stringContaining('panel_b_bg and sidebar_bg overlap'),
+    ]) });
+    expect(slide && 'elements' in slide ? slide.elements : []).toHaveLength(4);
   });
 
   it('accepts text inside separate content panels', async () => {
@@ -391,6 +438,98 @@ describe('first-draft component authoring in the production package', () => {
       { componentAuthoring: true, textMeasure: measure, onFailure: failure });
     expect(slide && 'elements' in slide ? slide.elements : []).toHaveLength(4);
     expect(failure).not.toHaveBeenCalled();
+  });
+
+  it('uses real spare panel width before rejecting an estimated text-row collision, preserving every authored surface', async () => {
+    const points = [{ id: 'theory', text: '完整理论定义及适用条件。' },
+      { id: 'model', text: '完整模式定义及真实关系。' }, { id: 'method', text: '完整方法定义及调整条件。' }];
+    const surfaces = points.flatMap((_, index) => [
+      { id: `row-${index}`, type: 'shape', left: 56, top: 183 + 110 * index,
+        width: 892, height: 100, fill: '#F1F5F9', path: 'M0 0 L1 0 L1 1 L0 1 Z', viewBox: [1, 1] },
+      { id: `bar-${index}`, type: 'shape', left: 56, top: 183 + 110 * index,
+        width: 5, height: 100, fill: '#1E3A8A', path: 'M0 0 L1 0 L1 1 L0 1 Z', viewBox: [1, 1] },
+    ]);
+    const subtitle = { id: 'subtitle', type: 'text', left: 60, top: 124, width: 880, height: 49,
+      content: '<p style="font-size:18px">同一组维度逐项对照。</p>' };
+    const measured: TextMeasure = (input) => ({ naturalWidth: 600,
+      height: input.text === points[0]!.text && input.width <= 880 ? 128
+        : points.some((point) => point.text === input.text) ? 92 : 45, lines: [input.text] });
+    const ai = vi.fn().mockResolvedValue(JSON.stringify({ elements: [...surfaces, subtitle],
+      components: points.map((point, index) => ({ kind: 'textBox', role: 'body', left: 62, top: 187 + 110 * index,
+        width: 880, height: 92, fontSize: 24, contentRef: point.id })) }));
+    const failure = vi.fn();
+    const slide = await generateSceneContent({ ...outline, visualIntent: undefined }, ai,
+      { componentAuthoring: true, textMeasure: measured, authoringContent: points, onFailure: failure });
+    expect(ai).toHaveBeenCalledOnce();
+    expect(failure).not.toHaveBeenCalled();
+    expect(slide).not.toHaveProperty('continuationPages');
+    const elements = slide && 'elements' in slide ? slide.elements : [];
+    for (const surface of surfaces) expect(elements.find((element) => element.id === surface.id)).toMatchObject(surface);
+    expect(elements.find((element) => element.id === 'subtitle')).toMatchObject(subtitle);
+    for (const [index, point] of points.entries()) {
+      expect(elements.find((element) => element.id === `${outline.id}-component-${index}`)).toMatchObject({
+        left: 62, top: 187 + 110 * index, width: 886, height: 92,
+        content: expect.stringContaining(point.text),
+      });
+    }
+  });
+
+  it('keeps complete measured native rows and decorations on existing balanced continuation pages without another authoring call', async () => {
+    const points = ['第一项完整定义、数量与条件。', '第二项完整定义及真实关系。', '第三项完整定义和例外。']
+      .map((text, index) => ({ id: `point-${index}`, text }));
+    const subtitle = { id: 'subtitle', type: 'text', left: 60, top: 90, width: 880, height: 49,
+      content: '<p style="font-size:18px">三个完整陈述逐项比较。</p>' };
+    const surfaces = points.map((_, index) => ({ id: `row-${index}`, type: 'shape',
+      left: 56, top: 146 + 90 * index, width: 512, height: 68, fill: '#F1F5F9' }));
+    const measured: TextMeasure = (input) => ({ naturalWidth: 800,
+      height: points.some((point) => point.text === input.text) ? 150 : 45, lines: [input.text] });
+    const ai = vi.fn().mockResolvedValue(JSON.stringify({ elements: [subtitle, ...surfaces],
+      components: points.map((point, index) => ({ kind: 'textBox', role: 'body', left: 62, top: 150 + 90 * index,
+        width: 500, height: 60, fontSize: 24, contentRef: point.id })) }));
+    const failure = vi.fn();
+    const slide = await generateSceneContent({ ...outline, visualIntent: undefined }, ai,
+      { componentAuthoring: true, textMeasure: measured, authoringContent: points, onFailure: failure });
+    expect(ai).toHaveBeenCalledOnce();
+    expect(failure).not.toHaveBeenCalled();
+    if (!slide || !('elements' in slide)) throw new Error('Expected all native rows');
+    const pages = [slide, ...(slide.continuationPages ?? [])];
+    expect(pages).toHaveLength(2);
+    for (const page of pages) {
+      expect(page.elements.some((element) => element.type === 'text' && element.content === subtitle.content)).toBe(true);
+      expect(page.layoutDecision).toBe('paginated');
+      expect(page.occupiedHeight).toBeLessThanOrEqual(page.layoutMeasurement!.bodyCapacity);
+      const bodies = page.elements.filter((element) => element.type === 'text' && element.id.includes('-component-'));
+      for (const body of bodies) {
+        if (body.type !== 'text') throw new Error('Expected editable native text');
+        expect(body.height).toBe(150);
+        expect(body.content).toContain('font-size:24px');
+        expect(body.top + body.height).toBeLessThanOrEqual(512.5);
+      }
+    }
+    const all = pages.flatMap((page) => page.elements);
+    for (const point of points) expect(all.filter((element) => element.type === 'text'
+      && element.content.includes(point.text))).toHaveLength(1);
+    for (const surface of surfaces) {
+      const preserved = all.filter((element) => element.id === surface.id);
+      expect(preserved).toHaveLength(1);
+      expect(preserved[0]).toMatchObject({ width: 512, height: 158, fill: surface.fill });
+    }
+  });
+
+  it('retains pre-existing overlapping text without guessing independent rows', async () => {
+    const ai = vi.fn().mockResolvedValue(JSON.stringify({ components: [
+      { kind: 'textBox', left: 60, top: 150, width: 880, height: 100, fontSize: 24, text: '完整陈述一。' },
+      { kind: 'textBox', left: 60, top: 200, width: 880, height: 100, fontSize: 24, text: '完整陈述二。' },
+    ] }));
+    const failure = vi.fn();
+    const measured: TextMeasure = (input) => ({ naturalWidth: 300, height: 100, lines: [input.text] });
+    const result = await generateSceneContent({ ...outline, visualIntent: undefined }, ai,
+      { componentAuthoring: true, textMeasure: measured, onFailure: failure });
+    expect(failure).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ qualityDiagnostics: expect.arrayContaining([expect.stringContaining('overlap')]) });
+    expect(JSON.stringify(result)).toContain('完整陈述一。');
+    expect(JSON.stringify(result)).toContain('完整陈述二。');
+    expect(ai).toHaveBeenCalledOnce();
   });
 
   it('deterministically disambiguates repeated model IDs without replacing valid IDs', async () => {
@@ -427,13 +566,15 @@ describe('first-draft component authoring in the production package', () => {
     expect(slide && 'elements' in slide ? slide.elements.some((item) => item.type === 'shape' && 'text' in item && String(item.text?.content).includes('wrong')) : false).toBe(false);
   });
 
-  it('rejects a missing planned relationship even when native text is valid', async () => {
+  it('preserves a usable native first draft with a missing planned relationship for teacher review', async () => {
     const ai = vi.fn().mockResolvedValue(JSON.stringify({ elements: [
       { type: 'text', left: 60, top: 50, width: 880, height: 70, content: '<p>标题</p>' },
     ] }));
     const failure = vi.fn();
-    expect(await generateSceneContent(outline, ai, { componentAuthoring: true, allowLegacyComponents: true, textMeasure: measure, onFailure: failure })).toBeNull();
-    expect(failure).toHaveBeenCalledWith(expect.objectContaining({ code: 'invalid-model-output', detail: expect.any(String) }));
+    const result = await generateSceneContent(outline, ai, { componentAuthoring: true, allowLegacyComponents: true, textMeasure: measure, onFailure: failure });
+    expect(result && 'elements' in result ? result.elements : []).toHaveLength(1);
+    expect(failure).not.toHaveBeenCalled();
+    expect(ai).toHaveBeenCalledOnce();
   });
 
   it('accepts a component-only response that omits an unused native elements array', async () => {
@@ -462,7 +603,7 @@ describe('first-draft component authoring in the production package', () => {
     expect(ai).toHaveBeenCalledTimes(1);
   });
 
-  it('still rejects measured growth that collides with another foreground component', async () => {
+  it('automatically allocates measured text growth while preserving both foreground components', async () => {
     const body = '任务要承载完整的教学解释';
     const measureOverflow: TextMeasure = (input) => input.text.includes(body)
       ? { naturalWidth: 400, height: 128, lines: [body] }
@@ -472,21 +613,24 @@ describe('first-draft component authoring in the production package', () => {
       { kind: 'textBox', left: 60, top: 260, width: 500, text: '下一项', fontSize: 18 },
     ] }));
     const failure = vi.fn();
-    expect(await generateSceneContent({ ...outline, visualIntent: undefined }, ai,
-      { componentAuthoring: true, textMeasure: measureOverflow, onFailure: failure })).toBeNull();
-    expect(failure).toHaveBeenCalledWith(expect.objectContaining({
-      code: 'invalid-model-output', detail: expect.stringContaining('overlap'),
-    }));
+    const result = await generateSceneContent({ ...outline, visualIntent: undefined }, ai,
+      { componentAuthoring: true, textMeasure: measureOverflow, onFailure: failure });
+    expect(result).not.toBeNull();
+    expect(failure).not.toHaveBeenCalled();
+    expect(JSON.stringify(result)).toContain(body);
+    expect(JSON.stringify(result)).toContain('下一项');
   });
 
-  it('rejects overlapping allocations using measured text height, not the model hint', async () => {
+  it('retains overlapping allocations and records the measured conflict', async () => {
     const ai = vi.fn().mockResolvedValue(JSON.stringify({ elements: [], components: [
       { kind: 'textBox', role: 'title', left: 60, top: 50, width: 880, height: 20, text: outline.title },
       { type: 'diagram', id: 'ring', left: 70, top: 110, width: 860, height: 330,
         topology: 'cycle', nodes: outline.visualIntent?.diagram?.nodes },
     ] }));
     const failure = vi.fn();
-    expect(await generateSceneContent(outline, ai, { componentAuthoring: true, allowLegacyComponents: true, textMeasure: measure, onFailure: failure })).toBeNull();
-    expect(failure).toHaveBeenCalledWith(expect.objectContaining({ code: 'invalid-model-output', detail: expect.any(String) }));
+    const result = await generateSceneContent(outline, ai, { componentAuthoring: true, allowLegacyComponents: true, textMeasure: measure, onFailure: failure });
+    expect(result).not.toBeNull();
+    expect(failure).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ qualityDiagnostics: expect.arrayContaining([expect.stringContaining('overlap')]) });
   });
 });

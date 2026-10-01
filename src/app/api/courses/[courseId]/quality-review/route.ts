@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { authorizeTemplateRequest } from '@/lib/platform/template-access';
 import { enqueueCourseQualityReview } from '@/lib/course-quality-review/job-runner';
-import { confirmCourseTeacherReview, CourseReviewError, freshQualityReport, freshRenderReview, loadCourseReviewContext, requiresCourseTeacherReview, saveCourseRenderPage, startCourseRenderReview } from '@/lib/course-quality-review/review-service';
+import { confirmCourseTeacherReview, CourseReviewError, freshQualityReport, freshRenderReview, isTechnicalStructureIssue, loadCourseReviewContext, requiresCourseTeacherReview, saveCourseRenderPage, startCourseRenderReview } from '@/lib/course-quality-review/review-service';
 import { collectCourseStructureIssues } from '@/lib/course-quality-review/semantic-review';
 import { unresolvedHardIssues } from '@/lib/course-quality-review/teacher-review';
 import type { CourseQualityIssue } from '@/lib/course-quality-review/types';
@@ -36,7 +36,10 @@ export async function GET(request: Request, context: { params: Promise<{ courseI
   try {
     const { course, classroom, signature } = await loadCourseReviewContext(courseId);
     const required = requiresCourseTeacherReview(course);
-    const blockingIssues = unresolvedHardIssues(collectCourseStructureIssues(course, classroom.scenes, { includePresentation: false }));
+    const structure = collectCourseStructureIssues(course, classroom.scenes, { includePresentation: false });
+    const blockingIssues = unresolvedHardIssues(structure.filter(isTechnicalStructureIssue));
+    const qualityDiagnostics = structure.filter((issue) => !isTechnicalStructureIssue(issue))
+      .map((issue) => ({ ...issue, blocking: false }));
     const quality = freshQualityReport(course, signature);
     const generationRun = course.content.classroomGenerationRun;
     const checkedOutlineIds = generationRun?.testLesson?.sceneOutlineIds ?? generationRun?.generatedOutlineIds ?? [];
@@ -60,7 +63,7 @@ export async function GET(request: Request, context: { params: Promise<{ courseI
     const advisoryRender = render ? { ...render, pages: render.pages.map((page) => ({ ...page,
       issues: page.issues.map((issue) => ({ ...issue, blocking: false, severity: 'suggestion' as const })) })) } : null;
     return Response.json({ required, signature, reviewScope, quality: advisoryQuality,
-      blockingIssues,
+      blockingIssues, qualityDiagnostics,
       renderReview: advisoryRender,
       teacherReview: course.content.teacherReview?.signature === signature ? course.content.teacherReview : null,
       teacherReviewItems: course.content.teacherReviewItems ?? [],

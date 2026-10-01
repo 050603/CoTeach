@@ -33,6 +33,13 @@ const text = (id: string) => ({
   analysis: '离场时间决定是否进入样本，使样本不能公平代表全校学生。', points: 10,
 });
 
+function expectAuthoredQuiz(result: Awaited<ReturnType<typeof generateSceneContent>>, authored: Array<{ question: string; analysis?: string }>) {
+  const questions = result && 'questions' in result ? result.questions : [];
+  expect(questions).toHaveLength(authored.length);
+  expect(questions.map(({ question, analysis }) => ({ question, analysis })))
+    .toEqual(authored.map(({ question, analysis }) => ({ question, analysis })));
+}
+
 describe('flexible section quiz generation', () => {
   it.each([2, 3, 4])('accepts %i same-format questions in one generation call', async (count) => {
     const ai = vi.fn().mockResolvedValue(JSON.stringify(Array.from({ length: count }, (_, index) => single(`q${index + 1}`))));
@@ -60,11 +67,11 @@ describe('flexible section quiz generation', () => {
     expect(ai).toHaveBeenCalledTimes(1);
   });
 
-  it.each(['short_answer', 'scenario_task'] as const)('rejects %s text responses in ordinary mode after one call', async (format) => {
+  it.each(['short_answer', 'scenario_task'] as const)('retains %s first-draft text responses for final teacher review', async (format) => {
     const ai = vi.fn().mockResolvedValue(JSON.stringify([
       single('q1'), { ...text('q2'), format },
     ]));
-    await expect(generateSceneContent(outline, ai)).rejects.toThrow(/open-response questions|unrequested question format/);
+    expectAuthoredQuiz(await generateSceneContent(outline, ai), JSON.parse(await ai.mock.results[0]!.value));
     expect(ai).toHaveBeenCalledTimes(1);
   });
 
@@ -120,15 +127,15 @@ describe('flexible section quiz generation', () => {
     expect(ai.mock.calls[0]?.[1]).toContain('Question Count: 3');
   });
 
-  it.each([1, 5])('rejects %i questions outside the range', async (count) => {
+  it.each([1, 5])('retains all %i authored questions when the count differs from first-draft guidance', async (count) => {
     const ai = vi.fn().mockResolvedValue(JSON.stringify(Array.from({ length: count }, (_, index) => single(`q${index + 1}`))));
-    await expect(generateSceneContent(outline, ai)).rejects.toThrow('expected 2–4');
+    expectAuthoredQuiz(await generateSceneContent(outline, ai), JSON.parse(await ai.mock.results[0]!.value));
     expect(ai).toHaveBeenCalledTimes(1);
   });
 
-  it('rejects an ungrounded question without a second call', async () => {
+  it('retains a first draft lacking internal evidence metadata without another call', async () => {
     const ai = vi.fn().mockResolvedValue(JSON.stringify([{ ...single('q1'), assessmentEvidence: [] }, single('q2')]));
-    await expect(generateSceneContent(outline, ai)).rejects.toThrow('assessmentEvidence');
+    expectAuthoredQuiz(await generateSceneContent(outline, ai), JSON.parse(await ai.mock.results[0]!.value));
     expect(ai).toHaveBeenCalledTimes(1);
   });
 
@@ -147,18 +154,18 @@ describe('flexible section quiz generation', () => {
     expect(ai).toHaveBeenCalledTimes(1);
   });
 
-  it('rejects any second question in deep-response mode', async () => {
+  it('retains both authored questions without silently deleting one in deep-response mode', async () => {
     const deep: SceneOutline = { ...outline, quizConfig: {
       ...outline.quizConfig!, questionCount: 1, questionCountRange: undefined,
       questionTypes: ['short_answer'], questionTypePlan: ['short_answer'],
       minShortAnswerQuestions: 1, maxShortAnswerQuestions: 1,
     } };
     const ai = vi.fn().mockResolvedValue(JSON.stringify([text('q1'), text('q2')]));
-    await expect(generateSceneContent(deep, ai)).rejects.toThrow('returned 2/1 questions');
+    expectAuthoredQuiz(await generateSceneContent(deep, ai), JSON.parse(await ai.mock.results[0]!.value));
     expect(ai).toHaveBeenCalledTimes(1);
   });
 
-  it('rejects a fill blank substituted for the deep-response essay', async () => {
+  it('retains the authored fill blank without converting it into an essay', async () => {
     const deep: SceneOutline = { ...outline, quizConfig: {
       ...outline.quizConfig!, questionCount: 1, questionCountRange: undefined,
       questionTypes: ['short_answer'], questionTypePlan: ['short_answer'],
@@ -167,7 +174,7 @@ describe('flexible section quiz generation', () => {
     const fill = { ...text('q1'), format: 'fill_blank', question: '只问先离场者属于____抽样。',
       referenceAnswer: '方便抽样', commentPrompt: '填写方便抽样或便利抽样得满分，接受等价词。' };
     const ai = vi.fn().mockResolvedValue(JSON.stringify([fill]));
-    await expect(generateSceneContent(deep, ai)).rejects.toThrow('expected exact plan short_answer');
+    expectAuthoredQuiz(await generateSceneContent(deep, ai), JSON.parse(await ai.mock.results[0]!.value));
     expect(ai).toHaveBeenCalledTimes(1);
   });
 });

@@ -141,6 +141,23 @@ beforeEach(async () => {
 });
 
 describe("saved complete blueprint local resume", () => {
+  it.each(['projection', 'raw'] as const)('retains a new independent-display contract recorded in the %s checkpoint', async (location) => {
+    mocks.replace.mockReset().mockImplementation(async ({ data }) => ({ ...state.job, ...data }));
+    Object.assign(location === 'projection' ? state.saved.teachingBlueprint : state.raw.state,
+      { firstAuthoringContract: 'blueprint-v5' });
+    const original = structuredClone(state.saved), originalRaw = structuredClone(state.raw);
+    await expect(resumeSavedCourseDesignFirstDraft('course-1', 'teacher-1'))
+      .resolves.toMatchObject({ status: 'queued' });
+    expect(mocks.generate.mock.calls[0][2]).toMatchObject({ firstAuthoringContract: 'blueprint-v5' });
+    expect(mocks.provider).not.toHaveBeenCalled();
+    expect(mocks.replace).toHaveBeenCalledOnce();
+    expect(mocks.preflight).toHaveBeenCalledOnce();
+    expect(mocks.save.mock.calls.at(-1)?.[2]).toMatchObject({ status: 'validated',
+      qualityDiagnostics: expect.arrayContaining([expect.stringContaining('缺少 presentationItems')]) });
+    expect(state.saved).toEqual(original);
+    expect(state.raw).toEqual(originalRaw);
+  });
+
   it("checks the real saved draft and queues with the original identity and all receipts intact", async () => {
     const original = structuredClone(state.saved), originalRaw = structuredClone(state.raw);
     mocks.replace.mockReset().mockImplementation(async ({ data }) => ({ ...state.job, ...data }));
@@ -168,7 +185,7 @@ describe("saved complete blueprint local resume", () => {
         originalValidationIssues: ["旧匹配误判"], providerCalls: 0, authorCalls: 0, actorId: "teacher-1" })]);
     expect(mocks.revalidate).toHaveBeenCalledTimes(1);
     expect(mocks.budget).toHaveBeenCalledTimes(1);
-    expect(mocks.source).toHaveBeenCalledTimes(1);
+    expect(mocks.source).not.toHaveBeenCalled();
     expect(mocks.preflight.mock.calls[0][1]).toMatchObject({
       explanationNodes: expect.arrayContaining(state.candidate.sections[0].units[0].explanationNodes.map((node) =>
         expect.objectContaining({ content: node.content }))),
@@ -250,22 +267,38 @@ describe("saved complete blueprint local resume", () => {
     expect(state.saved.teachingBlueprintAttempt.attemptsStarted).toBe(1);
   });
 
-  it.each(["blueprint", "figure", "capacity", "revalidation", "budget", "source"])(
+  it.each(["blueprint", "figure", "capacity", "revalidation"])(
     "preserves raw and accepted stages after a %s failure", async (reason) => {
       if (reason === "blueprint") mocks.generate.mockRejectedValueOnce(new Error("原稿定义不完整"));
       if (reason === "figure") mocks.figures.mockImplementation(() => { throw new Error("必用教材原图缺失"); });
       if (reason === "capacity") mocks.preflight.mockRejectedValue(new Error("真实字体容量不合法"));
       if (reason === "revalidation") mocks.revalidate.mockReturnValueOnce({ issues: ["分页后正文丢失"], blueprint: undefined });
-      if (reason === "budget") mocks.budget.mockReturnValueOnce(["小节时间不守恒"]);
-      if (reason === "source") mocks.source.mockImplementation(() => { throw new Error("教材步骤不完整"); });
       const original = structuredClone(state.saved);
-      await expect(resumeSavedCourseDesignFirstDraft("course-1")).rejects.toMatchObject({ code: "SAVED_FIRST_DRAFT_QUALITY_FAILED", status: 422 });
+      await expect(resumeSavedCourseDesignFirstDraft("course-1")).rejects.toMatchObject({
+        code: reason === 'revalidation' ? 'SAVED_FIRST_DRAFT_STRUCTURE_FAILED' : 'SAVED_FIRST_DRAFT_QUALITY_FAILED', status: 422 });
       expect(mocks.replace).not.toHaveBeenCalled();
       expect(mocks.provider).not.toHaveBeenCalled();
       expect(state.saved).toEqual(original);
       expect(mocks.save).toHaveBeenCalledWith("design-1", expect.stringMatching(/^course-design:local-blueprint-replay:/u),
         expect.objectContaining({ status: "rejected", providerCalls: 0, authorCalls: 0 }));
     });
+
+  it('keeps a usable saved draft queued with nonblocking budget diagnostics', async () => {
+    mocks.budget.mockReturnValueOnce(['小节时间不守恒']);
+    mocks.replace.mockReset().mockImplementation(async ({ data }) => ({ ...state.job, ...data }));
+    await expect(resumeSavedCourseDesignFirstDraft('course-1')).resolves.toMatchObject({ status: 'queued' });
+    expect(mocks.provider).not.toHaveBeenCalled();
+    expect(mocks.save.mock.calls[0][2]).toMatchObject({ status: 'validated', qualityDiagnostics: ['小节时间不守恒'] });
+  });
+
+  it("reuses the original saved draft without calling a content audit or another author", async () => {
+    mocks.source.mockImplementation(() => { throw new Error("教材步骤不完整"); });
+    const original = structuredClone(state.saved);
+    await expect(resumeSavedCourseDesignFirstDraft("course-1")).resolves.toMatchObject({ status: "queued" });
+    expect(mocks.source).not.toHaveBeenCalled();
+    expect(mocks.provider).not.toHaveBeenCalled();
+    expect(state.saved).toEqual(original);
+  });
 
   it("synchronizes deterministic pagination and rechecks its full blueprint before queueing", async () => {
     mocks.preflight.mockImplementation(async (outlines) => ({
@@ -327,6 +360,56 @@ describe("saved complete blueprint local resume", () => {
     await expect(resumeSavedCourseDesignFirstDraft("course-1")).rejects.toMatchObject({ code: "SAVED_FIRST_DRAFT_JOB_CONFLICT" });
     expect(mocks.replace).toHaveBeenCalledTimes(1);
     expect(state.saved.teachingBlueprintAttempt.attemptsStarted).toBe(1);
+  });
+});
+
+describe("resume after an accepted outline", () => {
+  async function accepted(teacherEdited = false) {
+    const blueprint = await mocks.generate(state.input, vi.fn().mockResolvedValue(JSON.stringify(state.candidate)));
+    Object.assign(state.saved.teachingBlueprint, { status: "validated", blueprint: structuredClone(blueprint) });
+    state.course.content.teachingBlueprint = structuredClone(blueprint);
+    state.course.content._openmaicSceneOutlines = teachingBlueprintToOutlines(blueprint, "使用简体中文");
+    const request = { ...state.request, generationScope: "test-lesson", testSectionId: blueprint.sections[0].id,
+      savedFirstDraftReplay: {
+        contentFingerprint: teachingBlueprintContentFingerprint({ ...state.input, priorSourceExamples: undefined }),
+        modelFingerprint: "model-fingerprint", authoringRequestId: state.request.authoringRequestId,
+      }, ...(teacherEdited ? { resumeFromOutlineReview: true, resumeReviewKind: "outline" } : {}) };
+    state.job.request = request as unknown as CourseDesignGenerationJob["request"];
+    if (teacherEdited) state.course.content.teachingBlueprint!.sections[0].pages[0].title += "（教师确认）";
+    mocks.generate.mockClear();
+    mocks.replace.mockReset().mockImplementation(async ({ data }) => ({ ...state.job, ...data }));
+    return request;
+  }
+
+  it.each([false, true])("continues an accepted plan after failure and preserves teacher edits=%s without authoring", async (teacherEdited) => {
+    const request = await accepted(teacherEdited);
+    const before = structuredClone(state.course);
+    const queued = await resumeSavedCourseDesignFirstDraft("course-1", "teacher-1");
+    expect(queued).toMatchObject({ status: "queued", request: { resumeFromOutlineReview: true,
+      resumeReviewKind: "outline", testSectionId: request.testSectionId, savedFirstDraftReplay: request.savedFirstDraftReplay } });
+    expect(mocks.replace).toHaveBeenCalledWith(expect.objectContaining({
+      where: { id: state.job.id, status: "failed", version: state.job.version }, checkpointPolicy: {},
+    }));
+    expect(mocks.save).toHaveBeenCalledWith("design-1", expect.stringMatching(/^course-design:local-blueprint-replay:/u),
+      expect.objectContaining({ preservedAcceptedBlueprintFingerprint: fingerprintGenerationValue(before.content.teachingBlueprint),
+        providerCalls: 0, authorCalls: 0 }));
+    expect(state.course).toEqual(before);
+    expect(mocks.generate).not.toHaveBeenCalled();
+    expect(mocks.preflight).not.toHaveBeenCalled();
+    expect(mocks.provider).not.toHaveBeenCalled();
+    expect(mocks.restore).not.toHaveBeenCalled();
+  });
+
+  it.each(["knowledge", "source", "model", "identity"])("still rejects a real %s change before resuming an accepted plan", async (reason) => {
+    const request = await accepted(true);
+    if (reason === "knowledge") state.course.content.knowledgePoints[0]!.description += "教师改变知识边界";
+    if (reason === "source") state.course.content.courseEvidence = { ...state.course.content.courseEvidence!, fingerprint: "new-source" };
+    if (reason === "model") mocks.modelFingerprint.mockReturnValue("new-model");
+    if (reason === "identity") Object.assign(request, { authoringRequestId: "new-request" });
+    await expect(resumeSavedCourseDesignFirstDraft("course-1")).rejects.toBeInstanceOf(Error);
+    expect(mocks.replace).not.toHaveBeenCalled();
+    expect(mocks.generate).not.toHaveBeenCalled();
+    expect(mocks.provider).not.toHaveBeenCalled();
   });
 });
 

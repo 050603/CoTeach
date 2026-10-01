@@ -49,6 +49,7 @@ import {
 import {
   isTestLessonPromotion,
   resolveFullCoursePromotionOutlines,
+  resolveGenerationOutlineSelection,
   selectClassroomGenerationOutlines,
   type ClassroomGenerationScope,
 } from "@/lib/course-generation/generation-scope";
@@ -57,6 +58,7 @@ import { refreshSectionQuizForGeneration } from "@/lib/openmaic/generation/termi
 import type { AICallFn } from "@/lib/openmaic/generation/pipeline-types";
 import { invalidGeneratedOutput } from "@/lib/openmaic/generation/generated-output-retry";
 import { prepareTeachingPageCapacity, TeachingPagePreflightError } from '@/lib/openmaic/generation/teaching-page-preflight';
+import { scopeCourseTextbookFigures } from '@/lib/textbook/figure-use';
 import { COURSE_FIRST_PASS_CONTRACT_VERSION } from '@/lib/course-generation/first-pass-policy';
 import { generateOpenMaicBaselineOutlines } from "@/lib/openmaic/generation/openmaic-baseline";
 import { ZH_CN_COURSE_LANGUAGE_DIRECTIVE } from "@/lib/openmaic/generation/course-language";
@@ -143,6 +145,7 @@ import { fingerprintGenerationValue } from "@/lib/course-generation/page-checkpo
 import {
   applyReviewedOutlinesToTeachingBlueprint,
   generateTeachingBlueprint,
+  buildSourceConceptStatements,
   legacyTeachingBlueprintInputFingerprint,
   revalidateStoredTeachingBlueprint,
   TEACHING_BLUEPRINT_SCHEMA_VERSION,
@@ -636,12 +639,14 @@ export function restoreTeachingBlueprintRepairSource(
       && checkpoint.inputFingerprint !== legacyFingerprint
       && !compatibleContentFingerprints.includes(String(checkpoint.contentFingerprint)))
     || checkpoint.modelFingerprint !== modelFingerprint) return undefined;
+  const firstAuthoringContract = checkpoint.firstAuthoringContract === 'blueprint-v5' ? 'blueprint-v5' as const : undefined;
   if (checkpoint.status === "validated") {
     if (!input || !checkpoint.blueprint || typeof checkpoint.blueprint !== "object"
       || (checkpoint.blueprint as { schemaVersion?: unknown }).schemaVersion !== TEACHING_BLUEPRINT_SCHEMA_VERSION) return undefined;
-    const rechecked = revalidateStoredTeachingBlueprint(checkpoint.blueprint as TeachingBlueprint, input);
+    const rechecked = revalidateStoredTeachingBlueprint(checkpoint.blueprint as TeachingBlueprint, input, { qualityMode: 'diagnostic' });
     return rechecked.blueprint ? undefined : {
       candidate: checkpoint.blueprint, issues: rechecked.issues, preserveAcceptedPagePlans: true,
+      ...(firstAuthoringContract ? { firstAuthoringContract } : {}),
     };
   }
   const issues = Array.isArray(checkpoint.validationIssues)
@@ -656,6 +661,7 @@ export function restoreTeachingBlueprintRepairSource(
   } : undefined;
   if (checkpoint.bestCandidate !== undefined) return {
     candidate: checkpoint.bestCandidate,
+    ...(firstAuthoringContract ? { firstAuthoringContract } : {}),
     issues,
     repairAttempts: Number(checkpoint.repairAttempts ?? 0),
     ...(repairFailure ? { repairFailure } : {}),
@@ -664,6 +670,7 @@ export function restoreTeachingBlueprintRepairSource(
   if (checkpoint.status !== "invalid-output" || !issues.length
     || typeof checkpoint.rawResponse !== "string" || !checkpoint.rawResponse) return undefined;
   return { response: checkpoint.rawResponse, issues, repairAttempts: Number(checkpoint.repairAttempts ?? 0),
+    ...(firstAuthoringContract ? { firstAuthoringContract } : {}),
     ...(repairFailure ? { repairFailure } : {}) };
 }
 
@@ -746,6 +753,7 @@ async function createDesignStreamingAiCall(input: {
   storedAttempt: unknown;
   maxOutputTokens?: number;
   temperature?: number;
+  firstAuthoringContract?: 'blueprint-v5';
 }): Promise<{
   aiCall: AICallFn;
   getAttemptsStarted: () => number;
@@ -822,12 +830,14 @@ async function createDesignStreamingAiCall(input: {
     timeoutMs: resolveLlmRequestTimeoutMs("long-generation"),
     maxRetries: 1,
     streamResponse: true,
+    responseFormat: 'json',
     requireResponsePersistence: true,
     onResponse: async ({ text, source, system, prompt, complete }) => {
       const rawCheckpoint = {
         schemaVersion: 1, status: 'response-complete', contractVersion: COURSE_FIRST_PASS_CONTRACT_VERSION,
         inputFingerprint: input.inputFingerprint, modelFingerprint,
         rawResponse: text, complete, source, systemCharacters: system.length, promptCharacters: prompt.length,
+        ...(input.firstAuthoringContract ? { firstAuthoringContract: input.firstAuthoringContract } : {}),
       };
       // Accepted projections must never replace the original model response.
       await saveGenerationCheckpoint(input.job.id, `design-authoring:${input.stage}`, rawCheckpoint,
@@ -948,6 +958,12 @@ async function awaitTeacherReviewCheckpoint(
     autoContinueMessage: string;
   },
 ): Promise<{ mode: "auto-adopted" | "teacher-confirmed"; actorId?: string }> {
+  // Full courses proceed directly from authored artifacts to classroom output.
+  // A requested one-section test still needs its explicit section selection.
+  if (checkpoint.kind === 'knowledge' || checkpoint.kind === 'capacity'
+    || checkpoint.kind === 'outline' && checkpoint.windowMs !== null) {
+    return { mode: 'auto-adopted' };
+  }
   const reviewAvailableUntil = checkpoint.windowMs === null ? null : new Date(Date.now() + checkpoint.windowMs);
   const waitsForTestSection = checkpoint.kind === "outline" && checkpoint.windowMs === null;
   const updated = await designGenerationJobs.update({
@@ -1153,7 +1169,7 @@ export async function resumeCourseDesignAfterOutlineReview(
         point.id === required.id || point.sourceKnowledgePointIds?.includes(required.id)
       )));
       if (missingRequiredPoints.length) {
-        throw new Error(`知识图谱不能移除资源包知识要求的课程映射：${missingRequiredPoints.map((point) => point.name).join("、")}`);
+        log.warn(`知识图谱来源覆盖诊断：${missingRequiredPoints.map((point) => point.name).join("、")}`);
       }
       const knowledgeScopePlan = reconcileReviewedKnowledgeScopePlan(
         course.content.knowledgeScopePlan,
@@ -1177,7 +1193,8 @@ export async function resumeCourseDesignAfterOutlineReview(
     const reviewedEvidence = currentCourse?.content.courseEvidence ? { ...currentCourse.content.courseEvidence,
       items: await hydrateCourseEvidenceFigureReferences(currentCourse.content.courseEvidence.items) } : undefined;
     const reviewedResources = currentCourse
-      ? await resolveCourseTextbookFigures(reviewedEvidence, currentCourse.content.knowledgePoints)
+      ? scopeCourseTextbookFigures(await resolveCourseTextbookFigures(reviewedEvidence, currentCourse.content.knowledgePoints),
+        review.sceneOutlines ?? currentCourse.content.teachingBlueprint?.sections.flatMap((section) => section.pages) ?? [])
       : [];
     const reviewedSequences = resolveCourseSourceSequenceContracts(reviewedEvidence, currentCourse?.content.knowledgePoints ?? []);
     assertRequiredTextbookFiguresAvailable(reviewedResources);
@@ -1198,9 +1215,12 @@ export async function resumeCourseDesignAfterOutlineReview(
         const compiled = bindRequiredTextbookFiguresToOutlines(
           teachingBlueprintToOutlines(teachingBlueprint, languageDirective), reviewedResources, reviewedSequences,
         );
-        const budgetIssues = validateTeachingBlueprintBudget(teachingBlueprint, compiled);
-        if (budgetIssues.length) throw invalidGeneratedOutput(budgetIssues.join("；"), "教学蓝图实际页面预算不一致");
-        assertSourceSequencesInOutlines(compiled, reviewedSequences, reviewedResources);
+        const budgetIssues = validateTeachingBlueprintBudget(teachingBlueprint, compiled, { reviewContent: false });
+        if (budgetIssues.length) {
+          teachingBlueprint.qualityDiagnostics = [...new Set([...(teachingBlueprint.qualityDiagnostics ?? []), ...budgetIssues])];
+          log.warn(`[outline-review] ${budgetIssues.join('；')}`);
+        }
+
         if (request.generationScope === "test-lesson") {
           try {
             selectClassroomGenerationOutlines(compiled, "test-lesson", "", testSectionId);
@@ -1816,9 +1836,7 @@ export async function inferCourseSeed(
   const grade = typeof parsed.grade === "string" && parsed.grade.trim()
     ? parsed.grade.trim().slice(0, 30)
     : course.grade.trim().slice(0, 30);
-  if (!grade) {
-    throw invalidGeneratedOutput('课程定位首稿缺少学段，已保存原稿供教师补充或主动重生成。', '课程定位');
-  }
+  if (!grade) log.warn('课程定位首稿未说明学段；保留原稿继续生成，供教师审阅。');
   const learningObjectives = Array.isArray(parsed.learningObjectives)
     ? parsed.learningObjectives
       .filter((objective): objective is string => typeof objective === "string" && objective.trim().length > 0)
@@ -2400,6 +2418,7 @@ export function buildTeachingBlueprintInput(
     teacherBrief: [teacherGenerationBrief(request), blueprintResourceCapabilityBrief(request)].filter(Boolean).join("\n"),
     teachingRequirements: recoverCourseTeachingRequirements(content.teachingRequirements, request.resourcePackage),
     sourceContext,
+    sourceConceptStatements: buildSourceConceptStatements(content.knowledgePoints, request.textbookEvidence),
     priorSourceExamples: collectPriorSourceExamples(
       priorContent?.teachingBlueprint,
       priorContent?.knowledgePoints ?? [],
@@ -2428,9 +2447,14 @@ export async function prepareTeachingBlueprintInput(
   legacyFingerprints: { inputFingerprint: string; contentFingerprint: string; previousInputs: string[] };
 }> {
   const evidence = request.textbookEvidence ? { ...request.textbookEvidence,
-    items: await hydrateCourseEvidenceFigureReferences(request.textbookEvidence.items) } : undefined;
+    items: await hydrateCourseEvidenceFigureReferences(request.textbookEvidence.items,
+      { includeAncestorIntroductions: true }) } : undefined;
   const hydratedRequest = { ...request, textbookEvidence: evidence };
-  const textbookFigureResources = await resolveCourseTextbookFigures(evidence, content.knowledgePoints);
+  // The source catalog is an authoring input. Figure choices are outputs of
+  // this same draft and are scoped after compilation; feeding them back here
+  // changes the replay identity when a teacher confirms the generated pages.
+  const textbookFigureResources = scopeCourseTextbookFigures(await resolveCourseTextbookFigures(evidence, content.knowledgePoints),
+    [{ sourceSequenceUses: [] }]);
   assertRequiredTextbookFiguresAvailable(textbookFigureResources);
   const textbookFigures: TeachingBlueprintTextbookFigure[] = textbookFigureResources
     .filter((resource) => resource.status === "available")
@@ -2452,6 +2476,8 @@ export async function prepareTeachingBlueprintInput(
     ...buildTeachingBlueprintInput(course, content, hydratedRequest, aiDurationMin, textbookFigures, priorContent),
     sourceSequences: resolveCourseSourceSequenceContracts(evidence, content.knowledgePoints),
     generationModelFingerprint: modelFingerprint,
+    contentReviewMode: 'teacher-final' as const,
+    firstAuthoringContract: 'blueprint-v5' as const,
   };
   const originalFigures = textbookFigures.map((figure) => {
     const original = { ...figure };
@@ -2492,11 +2518,17 @@ export async function prepareTeachingBlueprintInput(
   formatCourseEvidenceContext(request.textbookEvidence)].filter(Boolean).join('\n\n');
   const originalInput = { ...buildTeachingBlueprintInput(course, content, request, aiDurationMin, originalFigures, priorContent),
     sourceContext: oldSourceContext, generationModelFingerprint: modelFingerprint };
+  // Identify the earlier projection of these same immutable source passages.
+  // It is never supplied to first authoring or substituted for current source
+  // validation; a matching saved response still passes all current gates.
+  const previousConceptSourceInput = { ...input,
+    sourceConceptStatements: buildSourceConceptStatements(content.knowledgePoints, evidence, { legacyV59Projection: true }) };
   return { input, textbookFigureResources,
     legacyFingerprints: { ...legacySourceSequenceBlueprintFingerprints(originalInput, request.textbookEvidence),
       previousInputs: [...new Set([...previousTeachingBlueprintInputFingerprints(originalInput),
         ...previousTeachingBlueprintInputFingerprints({ ...input, sourceContext: oldSourceContext }),
-        ...previousTeachingBlueprintInputFingerprints(input)])] } };
+        ...previousTeachingBlueprintInputFingerprints(input),
+        ...previousTeachingBlueprintInputFingerprints(previousConceptSourceInput)])] } };
 }
 
 async function generateNewSystemTeachingBlueprintOutlines(
@@ -2521,9 +2553,10 @@ async function generateNewSystemTeachingBlueprintOutlines(
     stage: "scene-outlines-stream",
   });
   const modelFingerprint = resolvedCourseDesignModelFingerprint(resolved);
-  const { input, textbookFigureResources, legacyFingerprints } = await prepareTeachingBlueprintInput(
+  const { input, textbookFigureResources: availableTextbookFigureResources, legacyFingerprints } = await prepareTeachingBlueprintInput(
     course, content, request, aiDurationMin, modelFingerprint, priorContent,
   );
+  let textbookFigureResources = availableTextbookFigureResources;
   const textbookFigures = input.textbookFigures ?? [];
   const expectedFingerprint = teachingBlueprintInputFingerprint(input);
   const contentFingerprint = teachingBlueprintContentFingerprint(input);
@@ -2542,6 +2575,7 @@ async function generateNewSystemTeachingBlueprintOutlines(
         bestCandidate?: unknown;
         repairAttempts?: unknown;
         contentFingerprint?: unknown;
+        firstAuthoringContract?: unknown;
       }
     : undefined;
   // Existing completed blueprints used source-package IDs in textbook figure
@@ -2568,6 +2602,8 @@ async function generateNewSystemTeachingBlueprintOutlines(
     compatibleInputFingerprints) as typeof checkpoint;
   const storedBlueprintAttempt = migrateCourseDesignCheckpointIdentity(stored.teachingBlueprintAttempt,
     expectedFingerprint, modelFingerprint, compatibleInputFingerprints);
+  const storedFirstAuthoringContract = checkpoint?.firstAuthoringContract === 'blueprint-v5' ? 'blueprint-v5' as const : undefined;
+  let blueprintFirstAuthoringContract = storedFirstAuthoringContract;
   if (checkpoint?.inputFingerprint === expectedFingerprint) checkpoint.contentFingerprint = contentFingerprint;
   let persistedInvalidRepair = restoreTeachingBlueprintRepairSource(
     checkpoint, expectedFingerprint, contentFingerprint, legacyFingerprint, modelFingerprint,
@@ -2578,7 +2614,7 @@ async function generateNewSystemTeachingBlueprintOutlines(
   const confirmedOutlineResume = request.resumeFromOutlineReview && request.resumeReviewKind === "outline";
   if (content.teachingBlueprint?.schemaVersion === TEACHING_BLUEPRINT_SCHEMA_VERSION
     && (compatibleInputFingerprints.includes(content.teachingBlueprint.inputFingerprint) || confirmedOutlineResume)) {
-    const rechecked = revalidateStoredTeachingBlueprint(content.teachingBlueprint, input);
+    const rechecked = revalidateStoredTeachingBlueprint(content.teachingBlueprint, input, { qualityMode: 'diagnostic' });
     blueprint = rechecked.blueprint;
     // A teacher-confirmed draft remains the repair source even when a saved
     // checkpoint contains an earlier version of the same course.
@@ -2592,7 +2628,7 @@ async function generateNewSystemTeachingBlueprintOutlines(
     && checkpoint.modelFingerprint === modelFingerprint
     && checkpoint.blueprint && typeof checkpoint.blueprint === "object"
     && (checkpoint.blueprint as { schemaVersion?: unknown }).schemaVersion === TEACHING_BLUEPRINT_SCHEMA_VERSION) {
-    const rechecked = revalidateStoredTeachingBlueprint(checkpoint.blueprint as TeachingBlueprint, input);
+    const rechecked = revalidateStoredTeachingBlueprint(checkpoint.blueprint as TeachingBlueprint, input, { qualityMode: 'diagnostic' });
     // Repair the current saved draft rather than replacing it with an older
     // checkpoint that happens to satisfy the current acceptance contract.
     if (!persistedInvalidRepair) blueprint = rechecked.blueprint;
@@ -2606,6 +2642,14 @@ async function generateNewSystemTeachingBlueprintOutlines(
       expectedFingerprint,
       modelFingerprint,
     );
+    // A saved response is validation input, not a new model response. Retain
+    // its original request policy; legacy checkpoints have no such marker.
+    const repairFrom = persistedInvalidRepair ?? (storedResponse !== null
+      ? { response: storedResponse, issues: [], ...(storedFirstAuthoringContract
+        ? { firstAuthoringContract: storedFirstAuthoringContract } : {}) } : undefined);
+    const firstAuthoringContract = repairFrom?.firstAuthoringContract
+      ?? (repairFrom ? storedFirstAuthoringContract : input.firstAuthoringContract);
+    blueprintFirstAuthoringContract = firstAuthoringContract;
     let rawResponse = storedResponse ?? (typeof checkpoint?.rawResponse === 'string' ? checkpoint.rawResponse : "");
     let bestCandidate: unknown = persistedInvalidRepair?.candidate;
     let validationIssues: readonly string[] = persistedInvalidRepair?.issues ?? [];
@@ -2630,14 +2674,10 @@ async function generateNewSystemTeachingBlueprintOutlines(
         // a complete first pass is not truncated after expensive reasoning.
         maxOutputTokens: 131_072,
         temperature: 0.2,
+        firstAuthoringContract,
       });
       clearStreaming = streaming.clear;
-      let consumeStoredResponse = storedResponse !== null;
       aiCall = async (system, prompt, images) => {
-        if (consumeStoredResponse) {
-          consumeStoredResponse = false;
-          return storedResponse!;
-        }
         rawResponse = await streaming.aiCall(system, prompt, images);
         firstPassRawResponse = rawResponse;
         await saveGenerationCheckpoint(job.id, TEACHING_BLUEPRINT_STEP, {
@@ -2652,29 +2692,32 @@ async function generateNewSystemTeachingBlueprintOutlines(
           repairAttempts,
           repairFailure,
           preserveAcceptedPagePlans,
+          ...(firstAuthoringContract ? { firstAuthoringContract } : {}),
         }, designCheckpointOptions(job));
         return rawResponse;
       };
     }
     try {
       blueprint = await generateTeachingBlueprint(input, aiCall, {
+        firstAuthoringContract,
         resourceCapabilities: {
           imageGenerationEnabled: request.options?.enableImageGeneration === true,
           videoGenerationEnabled: request.options?.enableVideoGeneration === true,
         },
-        onValidation: async ({ issues, details, candidate, responseCharacters, repairAttempts: used, repairFailure: failure }) => {
+        onValidation: async ({ issues, usable, details, candidate, responseCharacters, repairAttempts: used, repairFailure: failure }) => {
           bestCandidate = candidate;
           validationIssues = issues;
           repairAttempts = used ?? repairAttempts;
           repairFailure = failure;
           if (issues.length) {
-            log.warn(`[teaching-blueprint] unusable output (${responseCharacters} chars): ${issues.join("；")}`);
+            log.warn(`[teaching-blueprint] ${usable ? 'nonblocking quality diagnostics' : 'unusable structure'} (${responseCharacters} chars): ${issues.join("；")}`);
           }
           if (repairFailure) log.warn(`[teaching-blueprint] ${repairFailure.message}${repairFailure.validationIssues?.length
             ? `：${repairFailure.validationIssues.join("；")}` : ""}`);
           await saveGenerationCheckpoint(job.id, TEACHING_BLUEPRINT_STEP, {
             schemaVersion: 1,
-            status: issues.length ? "invalid-output" : "response-complete",
+            status: usable === false ? "invalid-output" : "response-complete",
+            qualityGateMode: 'diagnostic',
             inputFingerprint: expectedFingerprint,
             contentFingerprint,
             modelFingerprint,
@@ -2686,9 +2729,10 @@ async function generateNewSystemTeachingBlueprintOutlines(
             repairFailure,
             preserveAcceptedPagePlans,
             responseCharacters,
+            ...(firstAuthoringContract ? { firstAuthoringContract } : {}),
           }, designCheckpointOptions(job));
         },
-        repairFrom: persistedInvalidRepair,
+        repairFrom,
       });
     } finally {
       if (clearStreaming) {
@@ -2696,6 +2740,7 @@ async function generateNewSystemTeachingBlueprintOutlines(
       }
     }
   }
+  textbookFigureResources = scopeCourseTextbookFigures(textbookFigureResources, blueprint.sections.flatMap((section) => section.pages));
   let boundBlueprint = bindRequiredTextbookFiguresToBlueprint(blueprint, textbookFigureResources, input.sourceSequences);
   const originalBoundBlueprint = boundBlueprint;
   let outlines = bindRequiredTextbookFiguresToOutlines(
@@ -2708,6 +2753,8 @@ async function generateNewSystemTeachingBlueprintOutlines(
       lockedOutlineIds: confirmedOutlineResume ? outlines.map((page) => page.id) : [],
       explanationNodes: boundBlueprint.sections.flatMap((section) => section.units
         .flatMap((unit) => unit.explanationNodes ?? [])),
+      resourceSequences: Object.fromEntries(textbookFigureResources.flatMap((resource) =>
+        resource.orderedSteps?.length ? [[resource.id, resource.orderedSteps]] : [])),
       resourceDimensions: Object.fromEntries(textbookFigureResources.flatMap((resource) =>
         resource.width && resource.height ? [[resource.id, { width: resource.width, height: resource.height }]] : [])),
     });
@@ -2716,15 +2763,16 @@ async function generateNewSystemTeachingBlueprintOutlines(
         _openmaicSceneOutlines: outlines }, prepared.outlines);
       boundBlueprint = synchronized.teachingBlueprint!;
       outlines = prepared.outlines as typeof outlines;
-      const rechecked = revalidateStoredTeachingBlueprint(boundBlueprint, input);
+      const rechecked = revalidateStoredTeachingBlueprint(boundBlueprint, input, { qualityMode: 'diagnostic' });
       if (!rechecked.blueprint) throw invalidGeneratedOutput(rechecked.issues.join('；'), '确定性分页后的蓝图验收');
+      boundBlueprint = rechecked.blueprint;
     }
-    const budgetIssues = validateTeachingBlueprintBudget(boundBlueprint, outlines);
-    if (budgetIssues.length) throw invalidGeneratedOutput(budgetIssues.join('；'), '教学蓝图实际页面预算不一致');
-    assertSourceSequencesInOutlines(outlines, input.sourceSequences ?? [], textbookFigureResources);
+    const budgetIssues = validateTeachingBlueprintBudget(boundBlueprint, outlines, { reviewContent: false });
+    boundBlueprint.qualityDiagnostics = [...new Set([...(boundBlueprint.qualityDiagnostics ?? []), ...(prepared.diagnostics ?? []), ...budgetIssues])];
+    if (boundBlueprint.qualityDiagnostics.length) log.warn(`[teaching-blueprint] nonblocking quality diagnostics: ${boundBlueprint.qualityDiagnostics.join('；')}`);
     await saveGenerationCheckpoint(job.id, 'design-page-capacity', {
       schemaVersion: 1, contractVersion: COURSE_FIRST_PASS_CONTRACT_VERSION, inputFingerprint: expectedFingerprint,
-      modelFingerprint, status: 'accepted', assessments: prepared.assessments,
+      modelFingerprint, status: 'accepted', assessments: prepared.assessments, qualityDiagnostics: prepared.diagnostics ?? [],
     }, designCheckpointOptions(job));
   } catch (error) {
     if (error instanceof TeachingPagePreflightError) {
@@ -2739,6 +2787,7 @@ async function generateNewSystemTeachingBlueprintOutlines(
         rawResponse: firstPassRawResponse, bestCandidate: originalBoundBlueprint,
         ...(boundBlueprint !== originalBoundBlueprint ? { capacityCandidate: boundBlueprint } : {}),
         validationIssues: [error instanceof Error ? error.message : String(error)], preserveAcceptedPagePlans: confirmedOutlineResume,
+        ...(blueprintFirstAuthoringContract ? { firstAuthoringContract: blueprintFirstAuthoringContract } : {}),
       }, designCheckpointOptions(job));
     throw error;
   }
@@ -2751,6 +2800,9 @@ async function generateNewSystemTeachingBlueprintOutlines(
     modelFingerprint,
     rawResponse: firstPassRawResponse,
     blueprint: boundBlueprint,
+    qualityGateMode: 'diagnostic',
+    qualityDiagnostics: boundBlueprint.qualityDiagnostics ?? [],
+    ...(blueprintFirstAuthoringContract ? { firstAuthoringContract: blueprintFirstAuthoringContract } : {}),
   }, designCheckpointOptions(job));
   return { blueprint: boundBlueprint, outlines };
 }
@@ -2763,9 +2815,11 @@ async function generateNewSystemAiOutlines(
   signal: AbortSignal,
 ): Promise<Array<SceneOutline & OpenMaicSceneOutlineSnapshot>> {
   const evidence = request.textbookEvidence ? { ...request.textbookEvidence,
-    items: await hydrateCourseEvidenceFigureReferences(request.textbookEvidence.items) } : undefined;
+    items: await hydrateCourseEvidenceFigureReferences(request.textbookEvidence.items,
+      { includeAncestorIntroductions: true }) } : undefined;
   const sourceSequences = resolveCourseSourceSequenceContracts(evidence, content.knowledgePoints);
-  const textbookFigureResources = await resolveCourseTextbookFigures(evidence, content.knowledgePoints);
+  const textbookFigureResources = scopeCourseTextbookFigures(await resolveCourseTextbookFigures(evidence, content.knowledgePoints),
+    content.teachingBlueprint?.sections.flatMap((section) => section.pages) ?? [{ sourceSequenceUses: [] }]);
   assertRequiredTextbookFiguresAvailable(textbookFigureResources);
   const textbookImages = availableTextbookFigures(textbookFigureResources);
   const aiAllocations = content.moduleTimingPlan?.allocations.filter(
@@ -2937,9 +2991,11 @@ async function enqueueClassroomGeneration(
   sourceContractRepair?: QuickDesignRequest["sourceContractRepair"],
 ): Promise<void> {
   const sourceEvidence = textbookEvidence ? { ...textbookEvidence,
-    items: await hydrateCourseEvidenceFigureReferences(textbookEvidence.items) } : undefined;
+    items: await hydrateCourseEvidenceFigureReferences(textbookEvidence.items,
+      { includeAncestorIntroductions: true }) } : undefined;
   const sourceSequences = resolveCourseSourceSequenceContracts(sourceEvidence, course.content.knowledgePoints);
-  const textbookFigureResources = await resolveCourseTextbookFigures(sourceEvidence, course.content.knowledgePoints);
+  const textbookFigureResources = scopeCourseTextbookFigures(await resolveCourseTextbookFigures(sourceEvidence, course.content.knowledgePoints),
+    course.content._openmaicSceneOutlines ?? course.content.teachingBlueprint?.sections.flatMap((section) => section.pages) ?? []);
   assertRequiredTextbookFiguresAvailable(textbookFigureResources);
   const textbookImages = availableTextbookFigures(textbookFigureResources);
   const textbookFigureContext = textbookImages.length
@@ -2961,10 +3017,9 @@ async function enqueueClassroomGeneration(
     outline as SceneOutline, assessmentMode,
   )) as Array<SceneOutline & OpenMaicSceneOutlineSnapshot>, textbookFigureResources, sourceSequences);
   if (course.content.teachingBlueprint?.schemaVersion === TEACHING_BLUEPRINT_SCHEMA_VERSION) {
-    const budgetIssues = validateTeachingBlueprintBudget(course.content.teachingBlueprint, confirmedSceneOutlines);
-    if (budgetIssues.length) throw invalidGeneratedOutput(budgetIssues.join("；"), "教学蓝图实际页面预算不一致");
+    const budgetIssues = validateTeachingBlueprintBudget(course.content.teachingBlueprint, confirmedSceneOutlines, { reviewContent: false });
+    if (budgetIssues.length) log.warn(`[classroom-handoff] nonblocking budget diagnostics: ${budgetIssues.join('；')}`);
   }
-  assertSourceSequencesInOutlines(confirmedSceneOutlines, sourceSequences, textbookFigureResources);
   const selection = selectClassroomGenerationOutlines(confirmedSceneOutlines, generationScope, teacherBrief, testSectionId);
   const sceneOutlines = confirmedSceneOutlines;
   const generatedLanguageDirective = sceneOutlines.find(
@@ -3151,13 +3206,22 @@ export async function promoteTestLessonToFullCourse(
       409,
     );
   }
-  const testOutlineCount = contentRequest.testLesson?.sceneOutlineIds.length ?? 0;
-  const fullSceneOutlines = resolveFullCoursePromotionOutlines({
-    persistedOutlines: contentRequest.sceneOutlines as Array<SceneOutline & OpenMaicSceneOutlineSnapshot> | undefined,
-    acceptedTestOutlines: course.content._openmaicSceneOutlines as Array<SceneOutline & OpenMaicSceneOutlineSnapshot> | undefined,
-    expectedFullSceneCount: contentRequest.fullSceneCount,
-    testLesson: contentRequest.testLesson,
-  });
+  const testLesson = contentRequest.testLesson;
+  const testOutlineCount = testLesson?.sceneOutlineIds.length ?? 0;
+  // Versioned course snapshots retain untouched sections as well as the test
+  // pages. Select the accepted test sources, including all split siblings.
+  const acceptedTestOutlines = resolveGenerationOutlineSelection(
+    course.content._openmaicSceneOutlines as Array<SceneOutline & OpenMaicSceneOutlineSnapshot> | undefined ?? [],
+    testLesson?.sceneOutlineIds ?? [],
+  );
+  const fullSceneOutlines = acceptedTestOutlines?.length
+    && acceptedTestOutlines.every((outline) => outline.lectureSectionId === testLesson?.sectionId)
+    ? resolveFullCoursePromotionOutlines({
+        persistedOutlines: contentRequest.sceneOutlines as Array<SceneOutline & OpenMaicSceneOutlineSnapshot> | undefined,
+        acceptedTestOutlines,
+        expectedFullSceneCount: contentRequest.fullSceneCount,
+        testLesson,
+      }) : null;
   if (!testOutlineCount || !fullSceneOutlines) {
     throw new TestLessonPromotionError(
       "FULL_COURSE_OUTLINE_MISSING",
@@ -3179,10 +3243,8 @@ export async function promoteTestLessonToFullCourse(
     );
   }
 
-  // A completed test run exposes only the selected section on the course
-  // preview. Restore every outline-backed field before enqueueing, otherwise
-  // enqueueClassroomGeneration would read the narrowed preview again and
-  // create another one-section job.
+  // Align all outline-backed fields with the promoted plan before enqueueing,
+  // whether the current preview contains one section or the full course.
   const promotionCourse = restoreCourseOutlineSnapshotForFullPromotion(course, fullSceneOutlines);
   await updateCourse(courseId, (current) => ({
     ...current,
@@ -3561,6 +3623,13 @@ async function runNewSystemCourseDesign(
         revisionCount: Number(storedKnowledge.revisionCount ?? 0),
       };
     } else {
+      // Expand immutable original context only when this stage needs authoring.
+      // Retrieval/adoption identity and accepted upstream checkpoints remain
+      // unchanged by an additive source-context projection.
+      const authoringKnowledgeContext = { ...knowledgeContext,
+        textbookEvidence: request.textbookEvidence ? { ...request.textbookEvidence,
+          items: await hydrateCourseEvidenceFigureReferences(request.textbookEvidence.items,
+            { includeAncestorIntroductions: true }) } : undefined };
       const streaming = await createDesignStreamingAiCall({
         job,
         request,
@@ -3574,7 +3643,7 @@ async function runNewSystemCourseDesign(
       try {
         const result = await generateDurableCourseDesignKnowledgeStructure(
           knowledgeInput,
-          knowledgeContext,
+          authoringKnowledgeContext,
           {
             inputFingerprint: knowledgeInputFingerprint,
             modelFingerprint: knowledgeModelFingerprint,
@@ -3661,15 +3730,15 @@ async function runNewSystemCourseDesign(
       stepIndex: 1,
       progress: 52,
       label: "知识图谱",
-      summary: `已将资源包知识要求映射并组织为 ${content.knowledgePoints.length} 个课程知识点，讲授分组与深度按 ${content.knowledgeScopePlan?.planningDurationMin ?? teachingCapacity.planningDurationMin} 分钟容量规划，等待教师确认`,
+      summary: `已组织 ${content.knowledgePoints.length} 个课程知识点，讲授分组与深度按 ${content.knowledgeScopePlan?.planningDurationMin ?? teachingCapacity.planningDurationMin} 分钟容量规划，正在继续生成课程`,
       status: "completed",
       checks: [
         `先按知识讲授预算完成范围规划：${content.knowledgeScopePlan?.explanationAndActivityMin ?? teachingCapacity.explanationAndActivityMin} 分钟用于解释与必要活动，${content.knowledgeScopePlan?.assessmentReserveMin ?? teachingCapacity.assessmentReserveMin} 分钟预留检测反馈`,
-        `资源目录 ${content.knowledgeScopePlan?.sourcePointCount ?? packageKnowledgePoints.length} 项要求均已建立可追踪课程映射；教材化节点可重命名、拆分或合并讲授`,
+        `已依据资源目录 ${content.knowledgeScopePlan?.sourcePointCount ?? packageKnowledgePoints.length} 项要求规划课程节点与分组；教材支持解释与案例，内容完成后交教师审阅`,
         "已完成字段、引用和关系元数据的确定性整理，未调用第二个 AI 审校",
         "知识图谱已具备可查看、可编辑的完整结构",
         ...(request.referenceMaterials?.length ? [`已参考 ${request.referenceMaterials.length} 份教师知识资料`] : []),
-        "教师可在继续前查看和编辑",
+        "课程生成完成后可查看和编辑",
       ],
       artifacts: [artifact(
         "new-system-knowledge",
@@ -3770,6 +3839,7 @@ async function runNewSystemCourseDesign(
       durationRecommendation = normalizeNewSystemAiDurationRecommendation(
         storedDuration.recommendation,
         durationInput,
+        { qualityMode: 'diagnostic' },
       );
     } else if (storedDurationResponse !== null) {
       durationRecommendation = await generateNewSystemAiDurationRecommendation(durationInput, {
@@ -3836,7 +3906,7 @@ async function runNewSystemCourseDesign(
       progress: 66,
       label: "知识讲授时长",
       summary: `${course.content.stagePlan ? "教案锁定" : "AI 确定"}知识讲授 ${timingPlan.totalMinutes} 分钟（占整课 ${Math.round(timingPlan.totalMinutes / (course.hours * 60) * 100)}%）`,
-      status: durationRecommendation.scopeWarning ? "warning" : "completed",
+      status: durationRecommendation.scopeWarning || durationRecommendation.qualityDiagnostics?.length ? "warning" : "completed",
       checks: [
         "已按知识簇的共同解释主线、依赖关系与学情动态判断",
         course.content.stagePlan ? `按教案确认的 ${timingPlan.totalMinutes} 分钟生成，讲解、互动和小测不再额外加时` : `已在整课 ${Math.round(course.hours * 60)} 分钟的 20%–40% 范围内确定预算，讲解、互动和小测不再额外加时`,
@@ -3844,6 +3914,7 @@ async function runNewSystemCourseDesign(
         ...(durationRecommendation.scopeWarning
           ? [`范围提醒：${durationRecommendation.scopeWarning}`]
           : []),
+        ...(durationRecommendation.qualityDiagnostics ?? []),
       ],
       artifacts: [artifact(
         "new-system-ai-duration",
@@ -3861,33 +3932,14 @@ async function runNewSystemCourseDesign(
         })),
       )],
     });
-    if (durationRecommendation.scopeWarning) {
-      const capacityAdoption = await awaitTeacherReviewCheckpoint(job, controller, {
-        kind: "capacity",
-        step: "capacityReview",
-        stepIndex: 2,
-        progress: 67,
-        windowMs: null,
-        availableMessage: `知识范围与 ${timingPlan.totalMinutes} 分钟预算存在冲突：${durationRecommendation.scopeWarning}。请明确决定后再制作课件。`,
-        autoContinueMessage: "",
-      });
-      await updateCourseForDesignExecution(job, request.courseId, (current) => ({
-        ...current,
-        content: {
-          ...current.content,
-          teachingAdoptions: [...(current.content.teachingAdoptions ?? []), {
-            kind: "capacity",
-            mode: capacityAdoption.mode,
-            contentRevision: fingerprintGenerationValue({
-              totalMinutes: timingPlan!.totalMinutes,
-              allocations: timingPlan!.allocations,
-              scopeWarning: durationRecommendation.scopeWarning,
-            }),
-            adoptedAt: new Date().toISOString(),
-            ...(capacityAdoption.actorId ? { actorId: capacityAdoption.actorId } : {}),
-          }],
-        },
-      }));
+    if (durationRecommendation.scopeWarning || durationRecommendation.qualityDiagnostics?.length) {
+      const diagnostics = [...(durationRecommendation.qualityDiagnostics ?? []),
+        ...(durationRecommendation.scopeWarning ? [durationRecommendation.scopeWarning] : [])];
+      log.warn(`[ai-duration] nonblocking quality diagnostics: ${diagnostics.join('；')}`);
+      await saveGenerationCheckpoint(job.id, 'course-design:capacity-diagnostics', {
+        schemaVersion: 1, qualityGateMode: 'diagnostic', qualityDiagnostics: diagnostics,
+        totalMinutes: timingPlan.totalMinutes, allocations: timingPlan.allocations,
+      }, designCheckpointOptions(job));
     }
   }
   if (resumeAtCapacity && timingPlan) {
@@ -3992,7 +4044,7 @@ async function runNewSystemCourseDesign(
       stepIndex: 2,
       progress: 88,
       label: "课程大纲",
-      summary: `已生成 ${sceneOutlines.length} 个知识讲授页面，等待教师确认`,
+      summary: `已规划 ${sceneOutlines.length} 个知识讲授页面，正在生成课堂内容`,
       status: "completed",
       checks: ["课程大纲已保存", "教师可在继续前查看和编辑"],
       artifacts: [artifact(
@@ -4133,6 +4185,7 @@ async function runNewSystemCourseDesign(
           ? "知识图谱与完整大纲已按正式流程生成；本次只将其中一个完整知识小节交给正式课堂生成器验证。"
           : "知识图谱与大纲草稿已生成；课堂内容完成后由教师预览、修改并确认发布。",
         checks: ["知识图谱确认", "动态时长判断", "分节小测", "课程大纲确认"],
+        warnings: content.teachingBlueprint?.qualityDiagnostics ?? [],
       } as unknown as Prisma.InputJsonValue,
       completedAt: new Date(),
       lastHeartbeatAt: new Date(),

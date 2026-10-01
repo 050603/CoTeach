@@ -63,7 +63,8 @@ describe('projectTeachingPageContent', () => {
     expect(projected.presentationContent).not.toContain(source);
     expect(projected.explanation).toEqual([source]);
     expect(projected.introducedConceptDefinitions).toEqual([source]);
-    expect(projected.visibleContent).toContain(source);
+    expect(projected.visibleContent).toEqual(authored.keyPoints);
+    expect(projected.visibleContent).not.toContain(source);
   });
 
   it('retains complete owned conditions and mechanisms without adding unowned source prose to the display', () => {

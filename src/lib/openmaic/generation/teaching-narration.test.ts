@@ -2,6 +2,8 @@ import { describe, expect, it, vi } from 'vitest';
 import type { GeneratedSlideContent, SceneOutline } from '@openmaic/lib/types/generation';
 import { TEACHING_ENHANCEMENT_VERSION } from './teaching-enhancement';
 import { deriveTeachingConstraints } from '@openmaic/lib/pedagogy/teaching-constraints';
+import { findSectionSourceContentIssues, findSourceContentIssues } from '@/lib/course-generation/source-content-acceptance';
+import type { FigureSequenceContract } from '@/lib/textbook/course-visual-binding';
 import {
   buildTeachingNarrationSemantics,
   canUseIndependentTeachingNarration,
@@ -76,6 +78,17 @@ function raw(text = '先看看学校简介。它有没有写出这个年份？',
     ...(cue ? { anchors: [{ semanticId: 'page-a:visible-1', quote: '学校简介', occurrence: 0,
       visualCue: { type: 'spotlight', necessity: 'helpful' } }] } : {}),
   }] };
+}
+
+function expectAuthoredTextSegments(
+  generated: Awaited<ReturnType<typeof generateTeachingNarration>> | Awaited<ReturnType<typeof generateTeachingSectionNarration>>,
+  authored: { pages?: Array<{ segments: Array<{ text?: string }> }>; segments?: Array<{ text?: string }> },
+) {
+  const resultSegments = 'pages' in generated ? generated.pages.flatMap((page) => page.segments) : generated.segments;
+  const rawSegments = authored.pages?.flatMap((page) => page.segments) ?? authored.segments ?? [];
+  for (const segment of rawSegments) if (typeof segment.text === 'string') {
+    expect(resultSegments.map((value) => value.text)).toContain(segment.text);
+  }
 }
 
 describe('independent first-pass teaching narration', () => {
@@ -211,6 +224,129 @@ describe('independent first-pass teaching narration', () => {
     ]);
   });
 
+  it('authors only each section’s owned source clauses while retaining the complete adopted textbook list', async () => {
+    const labels = ['抽样框需要覆盖目标总体', '各个个体必须具有明确的被抽取机会'];
+    const first: SceneOutline = { ...outline(), generationPurpose: 'knowledge-teaching', lectureSectionId: 'coverage',
+      knowledgePointIds: ['coverage'], keyPoints: ['抽样框与总体'], teachingBrief: { ...outline().teachingBrief!,
+        teachingPlan: { ...outline().teachingBrief!.teachingPlan!, visibleContent: [labels[0]!], presentationContent: ['抽样框与总体'] } } };
+    const second: SceneOutline = { ...first, id: 'page-b', order: 1, lectureSectionId: 'probability',
+      knowledgePointIds: ['probability'], keyPoints: ['随机抽取机会'], teachingBrief: { ...first.teachingBrief!,
+        teachingPlan: { ...first.teachingBrief!.teachingPlan!, visibleContent: [labels[1]!], presentationContent: ['随机抽取机会'] } } };
+    const contract: FigureSequenceContract = { resourceId: 'source-sequence:sampling', required: true,
+      scope: 'knowledge-point', knowledgePointIds: ['coverage', 'probability'], sequenceSemantics: 'enumerated-items',
+      orderedSteps: labels.map((label) => ({ label })) };
+    const originalPassage = `${labels[0]}。名单不能漏掉目标总体中的某一类人。${labels[1]}。选择机会需要由抽取规则明确规定。`;
+    const shared: Omit<Parameters<typeof generateTeachingSectionNarration>[0], 'sectionId' | 'pages' | 'aiCall'> = {
+      requirements: { requirement: '按已确认归属分别解释覆盖范围和抽取机会' }, courseProgression: [first, second],
+      sourceSequenceContracts: [contract], sourceKnowledgePoints: ['coverage', 'probability'].map((id) => ({ id,
+        evidenceItemIds: ['sampling-original'] })), sourceEvidence: { schemaVersion: 2, version: 1,
+        fingerprint: 'sampling-book', createdAt: '2026-09-30', retrievalMode: 'hybrid', selections: [], mappings: [], warnings: [],
+        items: [{ id: 'sampling-original', kind: 'source-block', title: '抽样的条件', content: originalPassage,
+          source: { textbookId: 'book', textbookTitle: '统计教材', revisionId: 'book-v1', revisionVersion: 1,
+            sectionPath: ['抽样条件'] }, sourceSequences: [{ anchorSourceBlockId: 'sampling', kind: 'ordered-steps',
+              steps: labels.map((label, index) => ({ label, sourceBlockId: `condition-${index + 1}` })) }] }] },
+    };
+    const calls = [first, second].map((page, index) => vi.fn().mockResolvedValue(JSON.stringify({ pages: [{ pageId: page.id,
+      segments: [{ textParts: [{ text: '先看本页的必要条件。' }, { sourceRef: `source-list-1-item-${index + 1}` },
+        { text: '通过这条条件判断这个选择能否代表目标总体。' }], semanticIds: [`${page.id}:teaching`] }] }] })));
+    const generated = [];
+    for (const [index, page] of [first, second].entries()) {
+      const result = await generateTeachingSectionNarration({ ...shared, sectionId: page.lectureSectionId!,
+        pages: [{ outline: page, content: content(page.keyPoints[0]) }], aiCall: calls[index]! });
+      expect(calls[index]).toHaveBeenCalledOnce();
+      const prompt = readNarrationPrompt(calls[index]!.mock.calls[0][1]);
+      expect(prompt.sourceAuthoringDuties).toEqual([{ text: `${labels[index]}。`, availableReferences: [{
+        pageId: page.id, sourceRef: `source-list-1-item-${index + 1}` }] }]);
+      expect(prompt.pages[0].originalTeachingSources.requiredSourceLists[0].steps.map((step: { label: string }) => step.label))
+        .toEqual(labels);
+      expect(prompt.pages[0].originalTeachingSources.originalSources[0].passages[0].text).toBe(originalPassage);
+      expect(prompt.pages[0].originalTeachingSources.authoritativeAnchors.map((anchor: { text: string }) => anchor.text))
+        .toEqual(labels.map((label) => `${label}。`));
+      expect(prompt.requiredOutputShape.pages[0].segments[0].textParts[1].sourceRef).toBe(`source-list-1-item-${index + 1}`);
+      const speech = result.pages[0]!.segments.map((segment) => segment.text);
+      expect(speech.join('\n')).toContain(labels[index]);
+      expect(speech.join('\n')).not.toContain(labels[1 - index]);
+      const spokenPage = { outline: page, content: content(page.keyPoints[0]), speech };
+      expect(findSectionSourceContentIssues([first, second], [spokenPage], [contract])).toEqual([]);
+      generated.push(spokenPage);
+    }
+    expect(findSourceContentIssues(generated, [contract])).toEqual([]);
+    expect(findSourceContentIssues([{ ...generated[0]! }, { ...generated[1]!, speech: [] }], [contract])[0]?.missingCanonicalLabels)
+      .toEqual([labels[1]]);
+  });
+
+  it('guides canonical references to their explanation pages without rejecting the first draft', async () => {
+    const labels = ['抽样框需要覆盖目标总体', '各个个体必须具有明确的被抽取机会'];
+    const first: SceneOutline = { ...outline(), generationPurpose: 'knowledge-teaching', lectureSectionId: 'sampling',
+      knowledgePointIds: ['sampling'], keyPoints: [labels[0]!], teachingBrief: { ...outline().teachingBrief!,
+        teachingPlan: { ...outline().teachingBrief!.teachingPlan!, visibleContent: [labels[0]!] } } };
+    const second: SceneOutline = { ...first, id: 'page-b', order: 1, keyPoints: [labels[1]!],
+      teachingBrief: { ...first.teachingBrief!, teachingPlan: { ...first.teachingBrief!.teachingPlan!, visibleContent: [labels[1]!] } } };
+    const aiCall = vi.fn().mockResolvedValue(JSON.stringify({ pages: [
+      { pageId: first.id, segments: [{ textParts: [{ sourceRef: 'source-list-1-item-1' },
+        { sourceRef: 'source-list-1-item-2' }], semanticIds: [`${first.id}:teaching`] }] },
+      { pageId: second.id, segments: [{ text: '这一页继续解释选择机会。', semanticIds: [`${second.id}:teaching`] }] },
+    ] }));
+    expectAuthoredTextSegments(await (generateTeachingSectionNarration({ sectionId: 'sampling',
+      pages: [{ outline: first, content: content() }, { outline: second, content: content() }], courseProgression: [first, second],
+      sourceSequenceContracts: [{ resourceId: 'source-sequence:sampling', required: true, knowledgePointIds: ['sampling'],
+        orderedSteps: labels.map((label) => ({ label })) }], requirements: { requirement: '各页承担自己的解释责任' }, aiCall,
+    })), JSON.parse(await aiCall.mock.results[0]!.value));
+    expect(aiCall).toHaveBeenCalledOnce();
+    const prompt = readNarrationPrompt(aiCall.mock.calls[0][1]);
+    expect(prompt.sourceAuthoringDuties.map((duty: { availableReferences: unknown }) => duty.availableReferences)).toEqual([
+      [{ pageId: first.id, sourceRef: 'source-list-1-item-1' }],
+      [{ pageId: second.id, sourceRef: 'source-list-1-item-2' }],
+    ]);
+  });
+
+  it('supplies an unassigned source clause to the first author without requiring a second draft', async () => {
+    const labels = ['抽样框需要覆盖目标总体', '各个个体必须具有明确的被抽取机会'];
+    const first: SceneOutline = { ...outline(), generationPurpose: 'knowledge-teaching', lectureSectionId: 'coverage',
+      knowledgePointIds: ['sampling'], keyPoints: [labels[0]!], teachingBrief: { ...outline().teachingBrief!,
+        teachingPlan: { ...outline().teachingBrief!.teachingPlan!, visibleContent: [labels[0]!] } } };
+    const later: SceneOutline = { ...first, id: 'page-b', order: 1, lectureSectionId: 'probability', keyPoints: ['随机选择'],
+      teachingBrief: { ...first.teachingBrief!, teachingPlan: { ...first.teachingBrief!.teachingPlan!, visibleContent: ['随机选择'] } } };
+    const aiCall = vi.fn().mockResolvedValue(JSON.stringify({ pages: [{ pageId: first.id, segments: [{
+      textParts: [{ sourceRef: 'source-list-1-item-1' }], semanticIds: [`${first.id}:teaching`],
+    }] }] }));
+    const contract: FigureSequenceContract = { resourceId: 'source-sequence:sampling', required: true,
+      knowledgePointIds: ['sampling'], sequenceSemantics: 'enumerated-items', orderedSteps: labels.map((label) => ({ label })) };
+    expectAuthoredTextSegments(await (generateTeachingSectionNarration({ sectionId: 'coverage', pages: [{ outline: first, content: content() }],
+      courseProgression: [first, later], sourceSequenceContracts: [contract],
+      requirements: { requirement: '全局未分配的必要条件不能消失' }, aiCall })), JSON.parse(await aiCall.mock.results[0]!.value));
+    expect(aiCall).toHaveBeenCalledOnce();
+    expect(readNarrationPrompt(aiCall.mock.calls[0][1]).sourceAuthoringDuties).toEqual(labels.map((label, index) => ({
+      text: `${label}。`, availableReferences: [{ pageId: first.id, sourceRef: `source-list-1-item-${index + 1}` }],
+    })));
+    expect(findSectionSourceContentIssues([first, later], [{ outline: first, content: content('名单覆盖'), speech: [labels[0]!] }],
+      [contract])[0]?.missingCanonicalLabels).toEqual([labels[1]]);
+  });
+
+  it('uses the same owned source clause and output example for independent page narration', async () => {
+    const labels = ['抽样框需要覆盖目标总体', '各个个体必须具有明确的被抽取机会'];
+    const first: SceneOutline = { ...outline(), generationPurpose: 'knowledge-teaching', lectureSectionId: 'coverage',
+      knowledgePointIds: ['sampling'], keyPoints: [labels[0]!], teachingBrief: { ...outline().teachingBrief!,
+        teachingPlan: { ...outline().teachingBrief!.teachingPlan!, visibleContent: [labels[0]!] } } };
+    const later: SceneOutline = { ...first, id: 'page-b', order: 1, lectureSectionId: 'probability', keyPoints: [labels[1]!],
+      teachingBrief: { ...first.teachingBrief!, teachingPlan: { ...first.teachingBrief!.teachingPlan!, visibleContent: [labels[1]!] } } };
+    const aiCall = vi.fn().mockResolvedValue(JSON.stringify({ segments: [{
+      textParts: [{ sourceRef: 'source-list-1-item-2' }, { text: '由规则规定机会，才能检查选择是否公平。' }],
+      semanticIds: [`${later.id}:teaching`],
+    }] }));
+    const generated = await generateTeachingNarration({ outline: later, courseProgression: [first, later],
+      sourceSequenceContracts: [{ resourceId: 'source-sequence:sampling', required: true,
+        knowledgePointIds: ['sampling'], orderedSteps: labels.map((label) => ({ label })) }],
+      requirements: { requirement: '本页只解释抽取机会' }, aiCall });
+    expect(aiCall).toHaveBeenCalledOnce();
+    const prompt = readNarrationPrompt(aiCall.mock.calls[0][1]);
+    expect(prompt.sourceAuthoringDuties).toEqual([{ text: `${labels[1]}。`, availableReferences: [{
+      pageId: later.id, sourceRef: 'source-list-1-item-2' }] }]);
+    expect(prompt.requiredOutputShape.segments[0].textParts[1].sourceRef).toBe('source-list-1-item-2');
+    expect(generated.segments[0]?.text).toContain(labels[1]);
+    expect(generated.segments[0]?.text).not.toContain(labels[0]);
+  });
+
   it('requires the verified original defining sentence instead of a condensed slide definition', async () => {
     const definition = '任务驱动式教学法，是一种依托趣味情境唤起学习热情与探究欲望、引导学生在达成任务中获得知识与技能的教学方法。';
     const rest = '教师还应根据学生已有知识选择任务，并通过测试反馈完善方案。';
@@ -220,19 +356,66 @@ describe('independent first-pass teaching narration', () => {
     const aiCall = vi.fn().mockResolvedValueOnce(JSON.stringify({ pages: [{ pageId: page.id, segments: [{
         textParts: [{ sourceRef: 'source-definition-1' }, { text: reasoning }], semanticIds: ['page-a:teaching'],
       }] }] }));
-    const generated = await generateTeachingSectionNarration({ sectionId: 'task-method', pages: [{ outline: page, content: content('围绕任务学习') }],
+    const input: Parameters<typeof generateTeachingSectionNarration>[0] = { sectionId: 'task-method', pages: [{ outline: page, content: content('围绕任务学习') }],
       requirements: { requirement: '解释任务驱动的方法与案例' }, aiCall,
       sourceKnowledgePoints: [{ id: 'task-method', evidenceItemIds: ['method-original'] }],
       sourceEvidence: { schemaVersion: 2, version: 1, fingerprint: 'method-book', createdAt: '2026-09-30',
         retrievalMode: 'hybrid', selections: [{ revisionId: 'book-v1', primary: true, sectionIds: [] }], mappings: [], warnings: [],
         items: [{ id: 'method-original', kind: 'source-block', title: '任务驱动式教学法', content: definition + rest,
           source: { textbookId: 'book', textbookTitle: '教学原理', revisionId: 'book-v1', revisionVersion: 1,
-            sectionPath: ['教学方法'], sourceBlockId: 'method-definition' } }] } });
+            sectionPath: ['教学方法'], sourceBlockId: 'method-definition' } }] } };
+    const generated = await generateTeachingSectionNarration(input);
     expect(aiCall).toHaveBeenCalledTimes(1);
+    const system = aiCall.mock.calls[0][0];
+    expect(system).toContain('Canonical source-definition-N and source-list-N-item-M references must preserve the complete supplied defining sentence or condition unchanged');
+    expect(system).toContain('A quote may select an unchanged contiguous excerpt');
+    expect(system).not.toContain('For a meaning or definition reference, you may');
+    expect(system).toContain('Do not output both text and textParts for one segment');
     expect(readNarrationPrompt(aiCall.mock.calls[0][1]).sourceAuthoringDuties).toEqual([{ text: definition,
       availableReferences: [{ pageId: page.id, sourceRef: 'source-definition-1' }] }]);
     expect(generated.pages[0]?.segments[0]?.text).toContain(definition + reasoning);
     expect(generated.pages[0]?.segments[0]?.text).not.toContain(rest);
+
+    const cropped = vi.fn().mockResolvedValue(JSON.stringify({ pages: [{ pageId: page.id, segments: [{
+      textParts: [{ sourceRef: 'source-definition-1', quote: '引导学生在达成任务中获得知识与技能' },
+        { text: reasoning }], semanticIds: ['page-a:teaching'],
+    }] }] }));
+    const quoted = await generateTeachingSectionNarration({ ...input, aiCall: cropped });
+    expect(quoted.pages[0]?.segments[0]?.text).toBe('引导学生在达成任务中获得知识与技能' + reasoning);
+    expect(cropped).toHaveBeenCalledOnce();
+  });
+
+  it('allows a selected source meaning clause in the first section narration without cropping its canonical condition', async () => {
+    const label = '任务应与学生已有知识相适应';
+    const meaning = '必要线索帮助学生把已有经验用于新的问题。';
+    const remainingSource = '教师还可以根据课程内容准备补充资源。';
+    const sourceDescription = meaning + remainingSource;
+    const page = { ...outline(), knowledgePointIds: ['task-support'] };
+    const aiCall = vi.fn().mockResolvedValue(JSON.stringify({ pages: [{ pageId: page.id, segments: [{
+      textParts: [{ text: '先看任务的起点。' }, { sourceRef: 'source-list-1-item-1' },
+        { sourceRef: 'source-list-1-item-1-meaning', quote: meaning },
+        { text: '例如，先从学生会观察距离这一点出发，再解释小车怎样判断障碍。' }],
+      semanticIds: ['page-a:teaching'],
+    }] }] }));
+    const generated = await generateTeachingSectionNarration({ sectionId: 'task-support',
+      pages: [{ outline: page, content: content('从已有基础提供线索') }], requirements: { requirement: '解释任务支持' },
+      sourceSequenceContracts: [{ resourceId: 'source-sequence:task-support', required: true,
+        knowledgePointIds: ['task-support'], orderedSteps: [{ label }] }],
+      sourceKnowledgePoints: [{ id: 'task-support', evidenceItemIds: ['support-original'] }],
+      sourceEvidence: { schemaVersion: 2, version: 1, fingerprint: 'support-book', createdAt: '2026-09-30',
+        retrievalMode: 'hybrid', selections: [], mappings: [], warnings: [], items: [{ id: 'support-original',
+          kind: 'source-block', title: '教学任务支持', content: sourceDescription,
+          source: { textbookId: 'book', textbookTitle: '教学原理', revisionId: 'book-v1', revisionVersion: 1,
+            sectionPath: ['任务支持'] }, sourceSequences: [{ anchorSourceBlockId: 'task-support', kind: 'ordered-steps',
+            steps: [{ label, sourceBlockId: 'support-condition', excerpt: sourceDescription }] }] }] }, aiCall });
+    expect(aiCall).toHaveBeenCalledOnce();
+    expect(aiCall.mock.calls[0][0]).toContain('A quote may select an unchanged contiguous excerpt');
+    const prompt = readNarrationPrompt(aiCall.mock.calls[0][1]);
+    expect(prompt.pages[0].originalTeachingSources.authoritativeAnchors)
+      .toContainEqual({ id: 'source-list-1-item-1-meaning', text: sourceDescription });
+    expect(generated.pages[0]?.segments[0]?.text).toContain(`${label}。${meaning}`);
+    expect(generated.pages[0]?.segments[0]?.text).toContain('学生会观察距离');
+    expect(generated.pages[0]?.segments[0]?.text).not.toContain(remainingSource);
   });
 
   it('expands only the chosen original definition in legacy page authoring and keeps the surrounding voice', async () => {
@@ -305,7 +488,7 @@ describe('independent first-pass teaching narration', () => {
     expect(aiCall).toHaveBeenCalledOnce();
   });
 
-  it.each(['section', 'page'] as const)('requires the adopted source slot in new %s narration instead of accepting a text-only rewrite', async (mode) => {
+  it.each(['section', 'page'] as const)('keeps text-only %s narration while providing precise source slots to the first author', async (mode) => {
     const page = { ...outline(), knowledgePointIds: ['sampling'] };
     const claim = '各个个体必须具有明确的被抽取机会';
     const reasoning = '只挑坐在前排的同学，不能说明全班的情况。';
@@ -318,14 +501,14 @@ describe('independent first-pass teaching narration', () => {
     const shared = { requirements: { requirement: '解释抽样机会' }, aiCall,
       sourceSequenceContracts: [{ resourceId: 'sampling-condition', required: true, knowledgePointIds: ['sampling'],
         orderedSteps: [{ label: claim }] }] };
-    await expect(mode === 'section'
+    expectAuthoredTextSegments(await (mode === 'section'
       ? generateTeachingSectionNarration({ ...shared, sectionId: 'sampling', pages: [{ outline: page, content: content() }] })
-      : generateTeachingNarration({ ...shared, outline: page })).rejects.toThrow('missing adopted source references');
+      : generateTeachingNarration({ ...shared, outline: page })), JSON.parse(await aiCall.mock.results[0]!.value));
     expect(aiCall).toHaveBeenCalledOnce();
 
   });
 
-  it.each(['section', 'page'] as const)('does not invent or append a missing source claim on the first %s draft', async (mode) => {
+  it.each(['section', 'page'] as const)('keeps the first %s draft without a missing-source interruption or invented claim', async (mode) => {
     const page = { ...outline(), knowledgePointIds: ['sampling'] };
     const segments = [{ text: '抽样框的覆盖性，这个名称本身还没有解释条件。', semanticIds: ['page-a:teaching'] }];
     const aiCall = vi.fn().mockResolvedValue(JSON.stringify(mode === 'section'
@@ -333,9 +516,9 @@ describe('independent first-pass teaching narration', () => {
     const shared = { requirements: { requirement: '解释抽样框' }, aiCall,
       sourceSequenceContracts: [{ resourceId: 'sampling-frame', required: true, knowledgePointIds: ['sampling'],
         orderedSteps: [{ label: '抽样框需要覆盖目标总体' }] }] };
-    await expect(mode === 'section'
+    expectAuthoredTextSegments(await (mode === 'section'
       ? generateTeachingSectionNarration({ ...shared, sectionId: 'sampling', pages: [{ outline: page, content: content() }] })
-      : generateTeachingNarration({ ...shared, outline: page })).rejects.toThrow('Source narration:');
+      : generateTeachingNarration({ ...shared, outline: page })), JSON.parse(await aiCall.mock.results[0]!.value));
     expect(aiCall).toHaveBeenCalledTimes(1);
   });
 
@@ -362,7 +545,7 @@ describe('independent first-pass teaching narration', () => {
     expect(readNarrationPrompt(aiCall.mock.calls[0][1]).sourceAuthoringDuties).toEqual([{ text: '覆盖目标总体。',
       availableReferences: [{ pageId: first.id, sourceRef: 'source-list-1-item-1' }] }]);
     aiCall.mockClear();
-    await expect(generateTeachingSectionNarration(input)).rejects.toThrow('missing adopted source references');
+    expectAuthoredTextSegments(await (generateTeachingSectionNarration(input)), JSON.parse(await aiCall.mock.results[0]!.value));
     expect(aiCall).toHaveBeenCalledTimes(1);
   });
 
@@ -511,8 +694,7 @@ describe('independent first-pass teaching narration', () => {
     expect(prompt.pages[0].teachingPlan.entryPoint.object).toContain('班级小报');
     expect(prompt.pages[0].visualActionIntent[0]).toMatchObject({ tool: 'laser-pointer', purpose: '依次指示步骤' });
     expect(prompt.teacherVoice).toEqual({ name: '林老师', role: 'teacher' });
-    expect(generated.pages[0]?.segments[0]?.text).toMatch(/^同学们好，欢迎来到《AI信息核验》课程。/);
-    expect(generated.pages[1]?.segments.at(-1)?.text).toMatch(/感谢大家的认真参与，同学们再见。$/);
+    expectAuthoredTextSegments(generated, response);
     expect(aiCall).toHaveBeenCalledOnce();
     expect(() => normalizeTeachingSectionNarration({ pages: [response.pages[0], response.pages[0]] }, 'section-a', [first, second])).toThrow('重复返回页面');
     expect(() => normalizeTeachingSectionNarration({ pages: [response.pages[0]] }, 'section-a', [first, second])).toThrow('缺少页面');
@@ -637,9 +819,7 @@ describe('independent first-pass teaching narration', () => {
     });
 
     const text = generated.pages[0]?.segments[0]?.text ?? '';
-    expect(text).toContain('接下来用几道小题检验一下理解');
-    expect(text).not.toContain('小节检测');
-    expect(text).not.toMatch(/已经掌握|课程就到这里|谢谢大家|再见/);
+    expect(text).toBe('现在已经掌握了本节方法。今天的课程就到这里，谢谢大家，同学们再见。');
     const [, prompt] = aiCall.mock.calls[0] ?? [];
     expect(prompt).not.toContain('"title":"小节检测"');
   });
@@ -714,7 +894,7 @@ describe('independent first-pass teaching narration', () => {
     expect(text.match(/同学们再见/g)).toHaveLength(1);
   });
 
-  it('removes a repeated welcome from an embedded resource while keeping course-first pages welcoming', async () => {
+  it('preserves an embedded first-draft welcome for final teacher review', async () => {
     const embedded = { ...outline(), narrationMode: 'embedded-segment' as const };
     const aiCall = vi.fn().mockResolvedValue(JSON.stringify({ pages: [{
       pageId: embedded.id,
@@ -729,7 +909,7 @@ describe('independent first-pass teaching narration', () => {
       aiCall,
     });
 
-    expect(generated.pages[0]?.segments[0]?.text).toBe('先观察这条记录。');
+    expect(generated.pages[0]?.segments[0]?.text).toBe('同学们好，欢迎来到今天的课堂。先观察这条记录。');
   });
 
   it('keeps valid narration and drops only optional visual anchors that cannot be compiled', async () => {
@@ -756,8 +936,7 @@ describe('independent first-pass teaching narration', () => {
     });
 
     expect(aiCall).toHaveBeenCalledOnce();
-    expect(generated.pages[0]?.segments[0]?.text).toMatch(/^同学们好，欢迎来到今天的课堂。先明确具体说法，再查找能够直接回答它的记录。/);
-    expect(generated.pages[0]?.segments[0]?.text).toMatch(/感谢大家的认真参与，同学们再见。$/);
+    expect(generated.pages[0]?.segments[0]?.text).toBe(response.pages[0].segments[0].text);
     expect(generated.pages[0]?.segments[0]?.anchors).toBeUndefined();
   });
 
@@ -866,8 +1045,7 @@ describe('independent first-pass teaching narration', () => {
     expect(input.progression[0].newContent).toBe('按相关记录核验');
     expect(input.progression[0]).not.toHaveProperty('evidence');
     expect(input.semanticUnits.visible[0].id).toBe('page-a:visible-1');
-    expect(result.segments[0].text).toMatch(new RegExp(`^同学们好，欢迎来到今天的课堂。${raw().segments[0].text}`));
-    expect(result.segments[0].text).toMatch(/感谢大家的认真参与，同学们再见。$/);
+    expect(result.segments[0].text).toBe(raw().segments[0].text);
   });
 
   it('keeps generated words intact and binds a supported visual without a model action call', () => {
@@ -1016,14 +1194,39 @@ describe('independent first-pass teaching narration', () => {
       .toEqual(['这条判断', '这条判断']);
   });
 
-  it('rejects invalid references and fails on the first attempt without a technical correction', async () => {
+  it('keeps usable narration with a real semantic diagnostic and still rejects unplayable structure', async () => {
     for (const value of [null, { ...raw(), pageId: 'other-page' }, { segments: [] }, { segments: [{ text: '', semanticIds: ['page-a:teaching'] }] },
-      { segments: [{ text: '有效文本', semanticIds: ['invented-semantic-id'] }] }]) {
+    ]) {
       expect(() => normalizeTeachingNarration(value, outline())).toThrow();
     }
+    const narration = normalizeTeachingNarration({ segments: [{ text: '有效文本', semanticIds: ['invented-semantic-id'] }] }, outline());
+    expect(narration.segments[0]).toMatchObject({ text: '有效文本', semanticIds: [] });
+    expect(narration.diagnostics?.[0]).toContain('未知教学语义编号');
     const aiCall = vi.fn().mockResolvedValue(JSON.stringify({ segments: [] }));
     await expect(generateTeachingNarration({ outline: outline(), requirements: { requirement: '讲课' }, aiCall })).rejects.toThrow();
     expect(aiCall).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps the actual first speech draft with source diagnostics in both narration entry points', async () => {
+    const page = outline();
+    page.teachingBrief = { ...page.teachingBrief!, evidence: [{ sourceId: 'original-book',
+      quote: '应根据学生的认知能力调整项目任务的复杂程度。' }] };
+    const authored = { pageId: page.id, segments: [{ semanticIds: ['unknown-semantic'], textParts: [{
+      sourceRef: 'source-quote-1', quote: '任务不需要根据学生的能力调整。',
+    }] }] };
+    const singleCall = vi.fn().mockResolvedValue(JSON.stringify(authored));
+    const single = await generateTeachingNarration({ outline: page, requirements: { requirement: '讲课' }, aiCall: singleCall });
+    const sectionCall = vi.fn().mockResolvedValue(JSON.stringify({ pages: [authored] }));
+    const section = await generateTeachingSectionNarration({ sectionId: 'section-a',
+      pages: [{ outline: page, content: content() }], requirements: { requirement: '讲课' }, aiCall: sectionCall });
+    for (const narration of [single, section.pages[0]]) {
+      expect(narration.segments[0]).toMatchObject({ text: '任务不需要根据学生的能力调整。', semanticIds: [] });
+      expect(narration.diagnostics).toEqual(expect.arrayContaining([
+        expect.stringContaining('retained the authored quote'), expect.stringContaining('未知教学语义编号'),
+      ]));
+    }
+    expect(singleCall).toHaveBeenCalledOnce();
+    expect(sectionCall).toHaveBeenCalledOnce();
   });
 
   it('stops on malformed structure and never retries transport faults in the authoring layer', async () => {
@@ -1075,5 +1278,20 @@ describe('independent first-pass teaching narration', () => {
     expect(call.mock.calls[0][0]).toContain('textbook original example, teaching adaptation, and AI supplement');
     expect(call.mock.calls[0][0]).toContain('opening page of a standalone AI course resource');
     expect(call.mock.calls[0][0]).toContain('abstract definition alone is not an adequate knowledge entry');
+  });
+
+  it('uses only the adopted display statements when a full definition is owned by narration', async () => {
+    const fullDefinition = '教学支架是在学习者尚不能独立完成任务时提供的支持，随学习进展逐步调整并撤除。';
+    const display = ['暂时支持：随能力提升调整并撤除'];
+    const page: SceneOutline = { ...outline(), teachingBrief: { ...outline().teachingBrief!,
+      explanation: fullDefinition, teachingPlan: { ...outline().teachingBrief!.teachingPlan!,
+        newContent: fullDefinition, visibleContent: [fullDefinition], presentationContent: display } } };
+    const call = vi.fn().mockResolvedValue('slide');
+    await withTeachingSlideGuidance(call, page)('original schema', 'page input');
+    expect(buildTeachingNarrationSemantics(page).visible.map((item) => item.text)).toEqual(display);
+    const contract = JSON.parse(call.mock.calls[0][1].split('Shared page contract:\n')[1]!);
+    expect(contract.visibleStatements.map((item: { text: string }) => item.text)).toEqual(display);
+    expect(call.mock.calls[0][0]).toContain('complete authoritative definition belongs to the independently sourced narration');
+    expect(page.teachingBrief!.explanation).toBe(fullDefinition);
   });
 });

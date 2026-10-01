@@ -47,8 +47,8 @@ import type { PBLRuntimeEvent } from '../pbl/v2/types';
 import { buildPrompt, PROMPT_IDS } from '@openmaic/lib/prompts';
 import { DEFAULT_LANGUAGE_DIRECTIVE } from './outline-generator';
 import { postProcessInteractiveHtml } from './interactive-post-processor';
+import { findInteractiveRuntimeContractIssues } from './interactive-quality';
 import { extractInteractiveElements } from './interactive-element-inventory';
-import { auditInteractiveHtml } from './interactive-quality';
 import {
   formatCourseVisualStyle,
   resolveCourseVisualStyle,
@@ -86,7 +86,7 @@ import type {
 import type { ThinkingConfig } from '@openmaic/lib/types/provider';
 import { createLogger } from '@openmaic/lib/logger';
 import { throwIfAborted } from '@openmaic/lib/generation/generation-retry';
-import { buildNarrationContext, enforceNarrationContinuity } from './narration-continuity';
+import { buildNarrationContext } from './narration-continuity';
 import { formatTeachingConstraintsForPrompt } from '@openmaic/lib/pedagogy/teaching-constraints';
 
 /** Keep class-level readiness available across the upstream adapter boundary.
@@ -109,8 +109,7 @@ function withInteractiveActivityContract(aiCall: AICallFn): AICallFn {
   ].join('\n');
   return (system, user, images) => aiCall(system, `${user}\n\n${contract}`, images);
 }
-import { normalizeQuizQuestions, selectQuizFormats } from '@openmaic/lib/quiz/quality';
-import { validateQuizQuestionDrafts, type QuizQuestionDraft } from '@openmaic/lib/quiz/authoring-evidence';
+import { compileAuthoredQuizQuestions, selectQuizFormats } from '@openmaic/lib/quiz/quality';
 import { SECTION_QUIZ_FORMATS } from './terminal-mastery-assessment-policy';
 import { normalizeWhiteboardActionLifecycle } from './whiteboard-action-lifecycle';
 import { normalizeWhiteboardActionLayout } from './whiteboard-layout';
@@ -532,12 +531,10 @@ export async function generateSceneContent(
       allowProceduralSkill,
     });
     if (!generated || !('html' in generated)) return null;
-    const audit = auditInteractiveHtml(
-      generated.html,
-      generated.widgetType ?? outline.widgetType ?? 'simulation',
-    );
-    if (!audit.passed) {
-      log.warn(`Interactive output for "${outline.title}" failed the activity contract: ${audit.reasons.join('; ')}`);
+    const protocolIssues = findInteractiveRuntimeContractIssues(generated.html);
+    if (protocolIssues.length) {
+      log.error(`Interactive "${outline.title}" cannot synchronize player state: ${protocolIssues.join('; ')}`);
+      options.onFailure?.({ code: 'invalid-model-output', detail: protocolIssues.join('; ') });
       return null;
     }
     return generated;
@@ -1095,28 +1092,6 @@ type PlannedQuizQuestionType = NonNullable<SceneOutline['quizConfig']>['question
 
 export const QUIZ_GENERATION_POLICY_VERSION = 'grounded-section-quiz-v14-mode-specific-first-pass';
 
-const QUIZ_FORMAT_BY_PLANNED_TYPE: Record<PlannedQuizQuestionType, string> = {
-  single: 'single_choice',
-  multiple: 'multiple_choice',
-  matching: 'matching',
-  short_answer: 'short_answer',
-  true_false: 'true_false',
-  fill_blank: 'fill_blank',
-  scenario_task: 'scenario_task',
-};
-
-function generatedQuizText(value: unknown): string {
-  return typeof value === 'string' ? value.trim() : '';
-}
-
-/**
- * Detect an additional written-response instruction on an objective item.
- *
- * Keep this deliberately narrower than searching for words such as “请”、
- * “说明” or “原因” independently. Those words also appear in valid stems like
- * “请选择最能说明该现象原因的一项”, where the only learner response is still
- * an option selection.
- */
 export function objectiveQuestionRequiresWrittenExplanation(stem: string): boolean {
   const value = stem.replace(/\s+/g, ' ').trim();
   if (!value) return false;
@@ -1157,65 +1132,6 @@ function formatQuizTestPoints(
   }).join('\n');
 }
 
-function validateGeneratedQuizQuality(
-  questions: unknown[],
-  title: string,
-  requireTwoMultipleChoiceDistractors = false,
-): void {
-  const issues: string[] = [];
-  const seenIds = new Set<string>();
-
-  questions.forEach((value, index) => {
-    const questionNumber = index + 1;
-    const record = value && typeof value === 'object' ? value as Record<string, unknown> : {};
-    const id = generatedQuizText(record.id) || `q_${questionNumber}`;
-    if (seenIds.has(id)) issues.push(`duplicate question id "${id}"`);
-    seenIds.add(id);
-
-    const analysis = generatedQuizText(record.analysis) || generatedQuizText(record.explanation);
-    if (!analysis) issues.push(`question ${questionNumber} has empty analysis`);
-
-    if (!Array.isArray(record.options)) return;
-    const optionRecords = record.options.map((option, optionIndex) => {
-      if (typeof option === 'string') {
-        return { value: String.fromCharCode(65 + optionIndex), label: option.trim() };
-      }
-      const optionRecord = option && typeof option === 'object' ? option as Record<string, unknown> : {};
-      return {
-        value: generatedQuizText(optionRecord.value) || String.fromCharCode(65 + optionIndex),
-        label: generatedQuizText(optionRecord.label)
-          || generatedQuizText(optionRecord.text)
-          || generatedQuizText(optionRecord.value),
-      };
-    });
-    const labels = optionRecords.map((option) => option.label);
-    if (new Set(labels).size !== labels.length) {
-      issues.push(`question ${questionNumber} has duplicate trimmed option labels`);
-    }
-
-    const rawType = generatedQuizText(record.format) || generatedQuizText(record.type);
-    if (!/multiple|multi_choice|多选/iu.test(rawType)) return;
-    const rawAnswer = record.answer ?? record.correctAnswer ?? record.correct_answer;
-    const answerTokens = (Array.isArray(rawAnswer) ? rawAnswer : [rawAnswer])
-      .map((answer) => generatedQuizText(String(answer ?? '')))
-      .filter(Boolean);
-    const correctValues = new Set(answerTokens.flatMap((answer) => {
-      const option = optionRecords.find((candidate) => candidate.value === answer || candidate.label === answer);
-      return option ? [option.value] : [];
-    }));
-    if (optionRecords.length > 0 && correctValues.size === optionRecords.length) {
-      issues.push(`question ${questionNumber} marks every multiple-choice option as correct`);
-    } else if (requireTwoMultipleChoiceDistractors && correctValues.size > 0
-      && optionRecords.length - correctValues.size < 2) {
-      issues.push(`question ${questionNumber} has fewer than two incorrect multiple-choice options`);
-    }
-  });
-
-  if (issues.length > 0) {
-    throw new Error(`Quiz "${title}" failed deterministic quality checks: ${issues.join('; ')}`);
-  }
-}
-
 async function generateQuizContent(
   outline: SceneOutline,
   aiCall: AICallFn,
@@ -1239,9 +1155,6 @@ async function generateQuizContent(
   const exactQuestionTypePlan = quizConfig.questionTypePlan?.length === quizConfig.questionCount
     ? [...quizConfig.questionTypePlan]
     : undefined;
-  if (ordinarySectionQuiz && exactQuestionTypePlan?.some((type) => !(SECTION_QUIZ_FORMATS as readonly string[]).includes(type))) {
-    throw new Error(`Quiz "${outline.title}" has a written-response format in ordinary mode`);
-  }
   const requestedFormats = quizConfig.questionTypes.length > 0
     ? [...quizConfig.questionTypes]
     : selectQuizFormats({
@@ -1312,140 +1225,19 @@ async function generateQuizContent(
     return null;
   }
 
-  const validateResponse = (generatedQuestions: unknown[]): GeneratedQuizContent => {
-    if (generatedQuestions.length < minQuestions || generatedQuestions.length > maxQuestions) {
-      throw new Error(countRange
-        ? `Quiz "${outline.title}" returned ${generatedQuestions.length} questions; expected ${minQuestions}–${maxQuestions}`
-        : `Quiz "${outline.title}" returned ${generatedQuestions.length}/${quizConfig.questionCount} questions`);
+  const compileResponse = (generatedQuestions: unknown[]): GeneratedQuizContent => {
+    let questions: QuizQuestion[];
+    try { questions = compileAuthoredQuizQuestions(generatedQuestions); }
+    catch (error) {
+      throw new Error(`Quiz "${outline.title}" returned invalid questions: ${error instanceof Error ? error.message : String(error)}`);
     }
-    if (groundedContract) {
-      const issues = validateQuizQuestionDrafts(generatedQuestions, outline.knowledgePointIds ?? []);
-      if (issues.length) throw new Error(`Quiz "${outline.title}" has invalid authoring evidence: ${issues.join('; ')}`);
-    }
-    validateGeneratedQuizQuality(generatedQuestions, outline.title, !exactQuestionTypePlan && !shortAnswerOnly);
-    const preparedQuestions = groundedContract ? generatedQuestions.map((raw) => {
-      const item = raw as QuizQuestionDraft;
-      if (!['fill_blank', 'short_answer', 'scenario_task'].includes(String(item.format ?? item.type))) return item;
-      return { ...item, commentPrompt: `${String(item.commentPrompt).trim()}\n参考答案：${String(item.referenceAnswer).trim()}` };
-    }) : generatedQuestions;
-    const normalized = normalizeQuizQuestions(preparedQuestions, outline.knowledgePointIds?.length
-      ? { allowedKnowledgePointIds: outline.knowledgePointIds }
-      : {});
-    const attributionIssues = normalized.issues.filter((issue) => issue.includes('knowledgePointIds'));
-    if (attributionIssues.length > 0 || ((groundedContract || !shortAnswerOnly) && normalized.issues.length > 0)) {
-      throw new Error(`Quiz "${outline.title}" returned invalid questions: ${normalized.issues.join('; ')}`);
-    }
-    if (normalized.questions.length !== generatedQuestions.length) {
-      throw new Error(`Quiz "${outline.title}" returned ${normalized.questions.length}/${generatedQuestions.length} usable questions`);
-    }
-    if (normalized.questions.some((question) => !question.knowledgePointIds?.length)) {
-      throw new Error(`Quiz "${outline.title}" returned a question without explicit knowledgePointIds`);
-    }
-
-    const withTeachingUnitIds = quizConfig.coveragePolicy === 'each-target'
-      ? (() => {
-          const targets = outline.assessmentTargets ?? [];
-          if (targets.length !== generatedQuestions.length) {
-            throw new Error(`Quiz "${outline.title}" has ${targets.length}/${generatedQuestions.length} explicit assessment targets`);
-          }
-          const unused = new Set(normalized.questions.map((_, index) => index));
-          return targets.map((target): QuizQuestion => {
-            const selectedIndex = [...unused].find((index) => {
-              const question = normalized.questions[index];
-              return question?.teachingUnitIds?.includes(target.unitId)
-                && question.knowledgePointIds?.includes(target.knowledgePointId);
-            });
-            if (typeof selectedIndex !== 'number') {
-              throw new Error(`Quiz "${outline.title}" cannot cover assessment target ${target.unitId}/${target.knowledgePointId}`);
-            }
-            unused.delete(selectedIndex);
-            return normalized.questions[selectedIndex]!;
-          });
-        })()
-      : normalized.questions.map((question): QuizQuestion => {
-          const mappedUnitIds = (outline.assessmentUnitMap ?? [])
-            .filter((unit) => unit.knowledgePointIds.some((id) => question.knowledgePointIds?.includes(id)))
-            .map((unit) => unit.unitId);
-          return {
-            ...question,
-            teachingUnitIds: mappedUnitIds.length
-              ? mappedUnitIds
-              : [...(outline.assessmentUnitIds ?? [])],
-          };
-        });
-    const withRequiredShortAnswers = shortAnswerOnly || groundedContract ? withTeachingUnitIds : (() => {
-      let needed = Math.max(0, Math.min(
-        Math.floor(quizConfig.minShortAnswerQuestions ?? 0),
-        Math.floor(quizConfig.maxShortAnswerQuestions ?? 0),
-      )) - withTeachingUnitIds.filter((question) => question.type === 'short_answer'
-        && (question.format === 'short_answer' || question.format === 'scenario_task')).length;
-      return withTeachingUnitIds.map((question): QuizQuestion => {
-        if (needed <= 0 || (question.type === 'short_answer'
-          && (question.format === 'short_answer' || question.format === 'scenario_task'))) return question;
-        needed -= 1;
-        const { options, answer, ...base } = question;
-        const choiceContext = options?.map((option) => option.label).filter(Boolean).join('；');
-        void answer;
-        return {
-          ...base,
-          type: 'short_answer',
-          format: 'short_answer',
-          question: `${question.question}\n请写出结论并简短说明理由。${choiceContext ? `可参考原题材料：${choiceContext}` : ''}`,
-          commentPrompt: '评分规则：结论准确占40%；理由依据符合本节知识占50%；表达清楚占10%。',
-          hasAnswer: false,
-        };
-      });
-    })();
-    const questions = shortAnswerOnly && !groundedContract
-      ? withRequiredShortAnswers.map((question): QuizQuestion => {
-          if (question.type === 'short_answer') return question;
-          const choiceContext = question.options?.map((option) => option.label).filter(Boolean).join('；');
-          return {
-            id: question.id,
-            knowledgePointIds: question.knowledgePointIds,
-            teachingUnitIds: question.teachingUnitIds,
-            type: 'short_answer',
-            format: 'short_answer',
-            question: `${question.question}\n请直接写出正确结论并说明理由。${choiceContext ? `可参考这些原题信息：${choiceContext}` : ''}`,
-            analysis: question.analysis,
-            commentPrompt: '评分规则：结论准确占40%；理由或证据符合本节知识点占50%；表达清楚占10%。',
-            hasAnswer: false,
-            points: question.points,
-          };
-        })
-      : withRequiredShortAnswers;
-
-    const explanationQuestions = questions.filter((question) => question.type === 'short_answer'
-      && (question.format === 'short_answer' || question.format === 'scenario_task'));
-    const maxShortAnswers = ordinarySectionQuiz ? 0 : Math.max(0, Math.floor(quizConfig.maxShortAnswerQuestions ?? 0));
-    if (!shortAnswerOnly && explanationQuestions.length > maxShortAnswers) {
-      throw new Error(`Quiz "${outline.title}" returned ${explanationQuestions.length} open-response questions; maximum is ${maxShortAnswers}`);
-    }
-    const choiceWithWrittenExplanation = questions.find((question) => question.type !== 'short_answer'
-      && objectiveQuestionRequiresWrittenExplanation(question.question));
-    if (choiceWithWrittenExplanation) {
-      throw new Error(`Quiz "${outline.title}" returned a choice or true/false item that also requires a written explanation: ${choiceWithWrittenExplanation.id}`);
-    }
-    if (exactQuestionTypePlan) {
-      const actualFormats = questions.map((question) => question.format);
-      const expectedFormats = exactQuestionTypePlan.map((type) => QUIZ_FORMAT_BY_PLANNED_TYPE[type]);
-      const mismatched = expectedFormats.some((format, index) => actualFormats[index] !== format);
-      if (mismatched) {
-        throw new Error(`Quiz "${outline.title}" returned question formats ${actualFormats.join(', ') || 'none'}; expected exact plan ${expectedFormats.join(', ')}`);
-      }
-    } else {
-      const allowedFormats = new Set(questionFormats.map((type) => QUIZ_FORMAT_BY_PLANNED_TYPE[type as PlannedQuizQuestionType]));
-      const unsupported = questions.find((question) => !question.format || !allowedFormats.has(question.format));
-      if (unsupported) {
-        throw new Error(`Quiz "${outline.title}" returned unrequested question format ${unsupported.format ?? 'unknown'} for ${unsupported.id}`);
-      }
-    }
-    const coveredKnowledgePointIds = new Set(questions.flatMap((question) => question.knowledgePointIds ?? []));
-    const missingKnowledgePointIds = (outline.knowledgePointIds ?? []).filter((id) => !coveredKnowledgePointIds.has(id));
-    if (missingKnowledgePointIds.length > 0) {
-      throw new Error(`Quiz "${outline.title}" does not cover knowledge points: ${missingKnowledgePointIds.join(', ')}`);
-    }
-    return { questions };
+    const unitMap = outline.assessmentUnitMap ?? [];
+    return { questions: questions.map((question) => {
+      if (question.teachingUnitIds?.length) return question;
+      const mapped = unitMap.filter((unit) => unit.knowledgePointIds.some((id) => question.knowledgePointIds?.includes(id)))
+        .map((unit) => unit.unitId);
+      return mapped.length ? { ...question, teachingUnitIds: mapped } : question;
+    }) };
   };
 
   log.debug(`Generating quiz content in one pass for: ${outline.title}`);
@@ -1475,7 +1267,7 @@ async function generateQuizContent(
     ? parsed as Record<string, unknown> : null;
   const generatedQuestions = options.singlePassQuiz ? combined?.questions : parsed;
   if (!Array.isArray(generatedQuestions)) throw new Error(`Quiz "${outline.title}" returned invalid questions`);
-  const content = validateResponse(generatedQuestions);
+  const content = compileResponse(generatedQuestions);
   if (options.singlePassQuiz) {
     if (!parseQuizNarrationActions(JSON.stringify(combined?.phaseNarration))) {
       throw new Error(`Quiz "${outline.title}" returned invalid phase narration; expected intro, review-guidance, handoff`);
@@ -1745,7 +1537,7 @@ export async function generateSceneActions(
   options: SceneActionsOptions = {},
 ): Promise<Action[]> {
   const { ctx, agents, userProfile, languageDirective } = options;
-  const finalizeActions = (actions: Action[]) => enforceNarrationContinuity(actions, ctx);
+  const finalizeActions = (actions: Action[]) => actions;
   const finalizeSlideActions = (actions: Action[]) => finalizeActions(
     normalizeWhiteboardActionLifecycle(
       normalizeWhiteboardActionLayout(applyPlannedTeachingToolActions(outline, actions)),

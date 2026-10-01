@@ -32,6 +32,44 @@ afterEach(() => {
 });
 
 describe("QuickGenerationStage", () => {
+  it.each([
+    { completed: false, failed: false, paused: false, recovering: false },
+    { completed: false, failed: false, paused: true, recovering: false },
+    { completed: true, failed: false, paused: false, recovering: false },
+    { completed: false, failed: true, paused: false, recovering: false },
+    { completed: false, failed: false, paused: false, recovering: true },
+  ])("keeps saved design details available across generation states: %j", (state) => {
+    const onViewOutline = vi.fn();
+    const onReview = vi.fn();
+    render(<QuickGenerationStage
+      {...state} artifacts={[outlineArtifact]} backgroundEnabled brief="课程设计" cancelling={false}
+      confirmCancel={false} message="课程生成" onCancel={vi.fn()} onOpenCourse={vi.fn()}
+      onReview={onReview} onViewOutline={onViewOutline} outlineDetailsAvailable progress={72}
+      remainingLabel="正在生成" reviewAvailable={false} startedAt={null}
+    />);
+    fireEvent.click(within(screen.getByTestId("quick-generation-command-bar")).getByRole("button", { name: "查看大纲与蓝图" }));
+    expect(onViewOutline).toHaveBeenCalledTimes(1);
+    expect(onReview).not.toHaveBeenCalled();
+    if (!state.failed && !state.recovering) {
+      fireEvent.click(screen.getByRole("button", { name: "查看详细大纲与蓝图" }));
+      expect(onViewOutline).toHaveBeenCalledTimes(2);
+    }
+  });
+
+  it("waits for saved design data before enabling the details entry", () => {
+    const onViewOutline = vi.fn();
+    render(<QuickGenerationStage
+      artifacts={[]} backgroundEnabled brief="课程设计" cancelling={false} completed={false}
+      confirmCancel={false} message="课程生成" onCancel={vi.fn()} onOpenCourse={vi.fn()}
+      onReview={vi.fn()} onViewOutline={onViewOutline} progress={5}
+      paused={false} remainingLabel="正在生成" reviewAvailable={false} startedAt={null}
+    />);
+    const button = screen.getByRole("button", { name: "查看大纲与蓝图" });
+    expect(button).toBeDisabled();
+    fireEvent.click(button);
+    expect(onViewOutline).not.toHaveBeenCalled();
+  });
+
   it("shows the actual textbook teaching sequence and explains local adjustments", () => {
     render(<QuickGenerationStage
       artifacts={[{

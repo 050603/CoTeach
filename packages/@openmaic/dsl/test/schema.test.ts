@@ -275,6 +275,15 @@ describe('generated JSON Schema — SerializedScene', () => {
   it('accepts a well-formed slide scene', () => {
     expect(v(slideScene)).toBe(true);
   });
+  it('accepts adopted chart font sizes while keeping historical charts optional', () => {
+    const chart = { id: 'chart', type: 'chart', chartType: 'bar', left: 50, top: 140, width: 900, height: 300,
+      rotate: 0, data: { labels: ['甲', '乙'], legends: ['数量'], series: [[12, 20]] }, themeColors: ['#123456'] };
+    const withChart = (fontSize?: unknown) => ({ ...slideScene, content: { ...slideScene.content,
+      canvas: { ...slideScene.content.canvas, elements: [{ ...chart, ...(fontSize === undefined ? {} : { options: { fontSize } }) }] } } });
+    for (const fontSize of [undefined, 18, 16]) expect(v(withChart(fontSize)), JSON.stringify(v.errors)).toBe(true);
+    expect(v(withChart('18'))).toBe(false);
+    expect(v(withChart(0))).toBe(false);
+  });
   it('rejects a scene missing required fields', () => {
     expect(v({ id: 'sc' })).toBe(false);
   });

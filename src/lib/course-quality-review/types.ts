@@ -187,9 +187,18 @@ export type TeachingBrief = {
     reasoningSteps: string[];
     takeaway: string;
     visibleContent: string[];
+    sourceSequenceUses?: import('@/lib/textbook/source-sequence-use').SourceSequenceUse[];
     /** Accurate presentation points derived from original teaching sources.
      * Detailed source wording remains in explanation/evidence for narration. */
     presentationContent?: string[];
+    /** Independently authored display wording with teaching-node provenance. */
+    presentationItems?: import('@/lib/session/types').TeachingPresentationItem[];
+    /** Fixed before authoring; saved drafts retain their original font profile. */
+    presentationTypography?: {
+      profile: 'reference-lecture-v1';
+      bodyFontSize: 18;
+      minimumBodyFontSize: 16;
+    };
     narrationFocus: string[];
     /** Actual learner-facing entry and the reasoning bridge into new content. */
     entryPoint?: {

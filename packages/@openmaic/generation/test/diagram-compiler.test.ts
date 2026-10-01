@@ -240,6 +240,38 @@ describe('compileDiagramComponent', () => {
     expect(byId.get(`${diagram.id}-node-end`)!.top).toBeGreaterThan(byId.get(`${diagram.id}-node-right`)!.top);
   });
 
+  it('reserves readable label height when a multi-level conditional branch must flow horizontally', async () => {
+    const diagram: DiagramComponent = { ...branch, top: 112, height: 394, annotation: undefined,
+      nodes: [{ id: 'input', label: '读取记录' }, { id: 'decision', label: '是否一致' },
+        { id: 'accepted', label: '保存结果' }, { id: 'mismatch', label: '重新核对' },
+        { id: 'corrected', label: '记录修正' }],
+      edges: [{ from: 'input', to: 'decision' }, { from: 'decision', to: 'accepted', label: '是' },
+        { from: 'decision', to: 'mismatch', label: '否' }, { from: 'mismatch', to: 'corrected', label: '核对完成' }] };
+    for (const elements of [compileDiagramComponent(diagram), await compileMeasuredDiagramComponent(diagram, fontMeasure)]) {
+      const nodes = elements.filter((element): element is PPTShapeElement => element.type === 'shape');
+      const lines = elements.filter((element): element is PPTLineElement => element.type === 'line');
+      const labels = elements.filter((element): element is PPTTextElement => element.type === 'text');
+      const byId = new Map(nodes.map((node) => [node.id, node]));
+      expect(nodes.map((node) => node.text?.content.replace(/<[^>]+>/gu, ''))).toEqual(diagram.nodes.map((node) => node.label));
+      expect(lines).toHaveLength(diagram.edges!.length);
+      expect(labels).toHaveLength(3);
+      const decision = byId.get(`${diagram.id}-node-decision`)!;
+      const input = byId.get(`${diagram.id}-node-input`)!;
+      expect(decision.left).toBeGreaterThan(input.left + input.width);
+      for (const [index, edge] of diagram.edges!.entries()) {
+        expect(onBoundary(absoluteStart(lines[index]!), byId.get(`${diagram.id}-node-${edge.from}`)!)).toBe(true);
+        expect(onBoundary(absoluteEnd(lines[index]!), byId.get(`${diagram.id}-node-${edge.to}`)!)).toBe(true);
+      }
+      for (const [index, label] of labels.entries()) {
+        for (const other of [...nodes, ...labels.slice(index + 1)]) {
+          expect(label.left + label.width + 4 <= other.left || other.left + other.width + 4 <= label.left
+            || label.top + label.height + 4 <= other.top || other.top + other.height + 4 <= label.top).toBe(true);
+        }
+      }
+    }
+    expect(() => compileDiagramComponent({ ...diagram, width: 220, height: 160 })).toThrow(/do not fit|cannot fit/);
+  });
+
   it('routes a level-skipping branch edge around the intervening node', () => {
     const diagram: DiagramComponent = { ...branch, annotation: undefined,
       nodes: [{ id: 'root', label: '原始证据' }, { id: 'middle', label: '分析证据' }, { id: 'end', label: '形成结论' }],

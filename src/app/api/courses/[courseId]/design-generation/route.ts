@@ -177,27 +177,22 @@ async function structuredResponse(work: () => Promise<Response>): Promise<Respon
 export async function GET(request: NextRequest, context: { params: Promise<{ courseId: string }> }) {
   return structuredResponse(async () => {
     const { courseId } = await context.params;
-  const requestedBy = await authorizeTemplateRequest(request, courseId);
+    const requestedBy = await authorizeTemplateRequest(request, courseId);
     if (requestedBy instanceof Response) return requestedBy;
     let job = await designGenerationJobs.findUnique({ where: { courseId } });
     const systemMode = getOpenPblSystemMode();
     if (job && persistedJobMode(job) !== systemMode) {
-      return Response.json({
-        backgroundEnabled: isBackgroundCourseGenerationEnabled(),
-        job: null,
-        outlinePreview: [],
-      });
+      job = null;
     }
     if (job?.status === "failed") {
       job = await resumeRecoverableCourseDesignJob(courseId);
     }
-    const course = job && ["review_available", "paused"].includes(job.status)
-      ? await getCourse(courseId)
-      : null;
+    const course = await getCourse(courseId);
+    const reviewAvailable = job && ["review_available", "paused"].includes(job.status);
     return Response.json({
       backgroundEnabled: isBackgroundCourseGenerationEnabled(),
       job: responseJob(job),
-      knowledgePreview: course
+      knowledgePreview: reviewAvailable && course
         ? {
             knowledgePoints: course.content.knowledgePoints,
             knowledgeGraph: course.content.knowledgeGraph ?? { nodes: [], edges: [] },
@@ -206,6 +201,7 @@ export async function GET(request: NextRequest, context: { params: Promise<{ cou
           }
         : null,
       outlinePreview: course?.content._openmaicSceneOutlines ?? [],
+      blueprintPreview: course?.content.teachingBlueprint ?? null,
     });
   });
 }

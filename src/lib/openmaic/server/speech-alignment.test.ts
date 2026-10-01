@@ -115,7 +115,7 @@ describe('alignSpeechFile', () => {
     })))) as typeof fetch;
 
     await expect(alignSpeechFile({ audioPath, text: '人工 AI', cacheDir, fetchImpl }))
-      .rejects.toMatchObject({ code: 'INVALID_RESPONSE', retryable: true });
+      .rejects.toMatchObject({ code: 'INVALID_SPANS', retryable: false });
     expect(await readFile(path.join(cacheDir, 'missing'), 'utf8').catch(() => null)).toBeNull();
   });
 
@@ -128,7 +128,7 @@ describe('alignSpeechFile', () => {
       fetchImpl: vi.fn(async () => new Response(JSON.stringify(serviceResponse({
         spans: [{ text: '智', startChar: 0, endChar: 1, startMs: 80, endMs: 220 }],
       })))) as typeof fetch,
-    })).rejects.toMatchObject({ code: 'INVALID_RESPONSE' });
+    })).rejects.toMatchObject({ code: 'INVALID_SPANS' });
 
     await expect(alignSpeechFile({
       ...input,
@@ -138,7 +138,7 @@ describe('alignSpeechFile', () => {
           { text: '工', startChar: 1, endChar: 2, startMs: 250, endMs: 380 },
         ],
       })))) as typeof fetch,
-    })).rejects.toMatchObject({ code: 'INVALID_RESPONSE' });
+    })).rejects.toMatchObject({ code: 'INVALID_SPANS' });
   });
 
   it('classifies busy, rejected, and unreachable service errors', async () => {
@@ -151,7 +151,7 @@ describe('alignSpeechFile', () => {
     await expect(alignSpeechFile({
       ...input,
       fetchImpl: vi.fn(async () => new Response(JSON.stringify({ error: 'INVALID_TIMESTAMPS' }), { status: 422 })) as typeof fetch,
-    })).rejects.toMatchObject({ code: 'ALIGNMENT_REJECTED', retryable: false });
+    })).rejects.toMatchObject({ code: 'INVALID_SPANS', retryable: false });
     await expect(alignSpeechFile({
       ...input,
       fetchImpl: vi.fn(async () => { throw new TypeError('connection refused'); }) as typeof fetch,

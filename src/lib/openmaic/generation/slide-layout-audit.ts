@@ -7,6 +7,7 @@ import { auditGeneratedSlide } from './slide-quality';
 import { canonicalVisibleContent } from './semantic-page-capacity';
 import { adoptedPageAuthoringContent } from './adopted-page-content';
 import { nativeTextRelationCaption } from './native-text-placement';
+import { hasReferenceLectureTypography, slideBodyFontSizes } from './slide-presentation-typography';
 
 export type SlideLayoutAuditStatus = 'checked' | 'unavailable';
 
@@ -31,6 +32,7 @@ export interface SlideLayoutRepairResult {
   initialAudit: SlideLayoutAudit;
   finalAudit: SlideLayoutAudit;
   repairAttempted: boolean;
+  repairDiagnostics?: string[];
   adopted: 'first-draft' | 'repair';
   initialKnowledgeCoverage: number;
   finalKnowledgeCoverage: number;
@@ -313,6 +315,8 @@ export function slideKnowledgeCoverage(
  * and narration remain under their independent source/teaching acceptance gates.
  * Historical drafts without that projection retain their existing obligations. */
 export function slideRequiredVisibleStatements(outline: SceneOutline): string[] {
+  const authored = outline.teachingBrief?.teachingPlan?.presentationItems;
+  if (authored?.length) return [...new Set(authored.map((item) => item.text.trim()).filter(Boolean))];
   const adopted = canonicalVisibleContent({ proposed: outline.teachingBrief?.teachingPlan?.presentationContent });
   if (adopted.length) return adopted;
   return [...new Set([
@@ -332,12 +336,16 @@ function exactVisibleText(value: string): string {
     }).normalize('NFKC').replace(/\s+/gu, '').toLocaleLowerCase();
 }
 
-function displayedContentElements(elements: readonly PPTElement[]): PPTElement[] {
+function displayedContentElements(elements: readonly PPTElement[], minimumTeachingFont?: number): PPTElement[] {
   return elements.filter((element) => 'height' in element && element.width > 0 && element.height > 0
     && element.left >= 0 && element.top >= 0 && element.left + element.width <= 1000.5
     && element.top + element.height <= 563
     && (!('opacity' in element) || element.opacity === undefined || element.opacity > 0)
-    && !/(?:display\s*:\s*none|visibility\s*:\s*hidden|(?:opacity|font-size)\s*:\s*0(?:px|[;"\s])|color\s*:\s*transparent)/iu.test(elementVisibleTextHtml(element)));
+    && !/(?:display\s*:\s*none|visibility\s*:\s*hidden|(?:opacity|font-size)\s*:\s*0(?:px|[;"\s])|color\s*:\s*transparent)/iu.test(elementVisibleTextHtml(element))
+    && (minimumTeachingFont === undefined || (element.type === 'table'
+      ? element.data.flat().every((cell) => Number.parseFloat(String(cell.style?.fontsize ?? minimumTeachingFont)) >= minimumTeachingFont)
+      : [...elementVisibleTextHtml(element).matchAll(/font-size\s*:\s*([\d.]+)px/giu)]
+        .every((match) => Number(match[1]) >= minimumTeachingFont))));
 }
 
 function elementVisibleTextHtml(element: PPTElement): string {
@@ -358,9 +366,10 @@ function hasCompleteVisibleRelationCaption(outline: SceneOutline, elements: read
     || outline.mediaGenerations?.length || !nativeTextRelationCaption(outline, adopted)) return false;
   const texts = displayedContentElements(elements).filter((element) => element.type === 'text'
     && [...element.content.matchAll(/font-size\s*:\s*([\d.]+)px/giu)].length > 0
-    && [...element.content.matchAll(/font-size\s*:\s*([\d.]+)px/giu)].every((match) => Number(match[1]) >= 22));
+    && [...element.content.matchAll(/font-size\s*:\s*([\d.]+)px/giu)].every((match) => Number(match[1]) >= slideBodyFontSizes(outline)[1]));
   const matches = adopted.map((point) => texts.find((element) => completeVisibleStatement(point.text, [element])));
-  return adopted.length > 1 && matches.every(Boolean) && new Set(matches).size === adopted.length;
+  return adopted.length > 1 && matches.every(Boolean)
+    && (hasReferenceLectureTypography(outline) || new Set(matches).size === adopted.length);
 }
 
 function keyPointCoverage(keyPoint: string, elements: readonly PPTElement[]): number {
@@ -799,10 +808,12 @@ export function auditSlideDensity(
     };
   }
   const visibleCharacters = visibleTextCharacters(content.elements);
+  const referenceLecture = hasReferenceLectureTypography(outline);
   const verticalSpan = instructionalVerticalSpan(content.elements);
   const requiredVisibleStatements = slideRequiredVisibleStatements(outline);
-  const hasAdoptedProjection = Boolean(outline.teachingBrief?.teachingPlan?.presentationContent?.some((point) => point.trim()));
-  const displayElements = displayedContentElements(content.elements);
+  const hasAdoptedProjection = Boolean(outline.teachingBrief?.teachingPlan?.presentationItems?.some((item) => item.text.trim())
+    || outline.teachingBrief?.teachingPlan?.presentationContent?.some((point) => point.trim()));
+  const displayElements = displayedContentElements(content.elements, referenceLecture ? slideBodyFontSizes(outline)[1] : undefined);
   const pointCoverage = (point: string) => hasAdoptedProjection
     ? Number(completeVisibleStatement(point, displayElements)) : keyPointCoverage(point, content.elements);
   const knowledgeCoverage = hasAdoptedProjection
@@ -833,7 +844,7 @@ export function auditSlideDensity(
   if (requiredVisibleStatements.length > 0 && underrepresentedKeyPoints.length > 0) {
     issues.push(`关键教学点可见覆盖率仅 ${(knowledgeCoverage * 100).toFixed(1)}%，存在 ${underrepresentedKeyPoints.length} 条未完整可见的已确认要点`);
   }
-  if (!hasSemanticEvidence && visibleCharacters < 150) {
+  if (!referenceLecture && !hasSemanticEvidence && visibleCharacters < 150) {
     issues.push(`普通讲授页可见教学文字仅 ${visibleCharacters} 个有效字符，低于 150 个字符的信息密度基线`);
   }
   if (!deepBlueTitle) {
@@ -853,10 +864,10 @@ export function auditSlideDensity(
   }
   // Utilization is a continuous comparison signal, not a pass/fail target.
   // Intentional whitespace alone must not trigger another model request.
-  if (area.maxBlankBand > 125) {
+  if (!referenceLecture && area.maxBlankBand > 125) {
     issues.push(`正文区域存在 ${area.maxBlankBand}px 的连续空白带，信息分布明显失衡`);
   }
-  if (!hasMedia && instructionalCount <= 3 && verticalSpan < 300) {
+  if (!referenceLecture && !hasMedia && instructionalCount <= 3 && verticalSpan < 300) {
     issues.push(`有效内容纵向仅占 ${verticalSpan}px，页面下半部存在大面积无教学作用的空白`);
   }
   return {
@@ -1090,7 +1101,16 @@ export async function auditAndRepairSlideOnce(input: {
   onRepair?: () => Promise<void> | void;
   preserveOpenMaicFirstDraft?: boolean;
 }): Promise<SlideLayoutRepairResult> {
-  const audit = input.audit ?? auditSlideLayout;
+  const requestedAudit = input.audit ?? auditSlideLayout;
+  const repairDiagnostics: string[] = [];
+  const audit: typeof auditSlideLayout = async (content, outlineId) => {
+    try { return await requestedAudit(content, outlineId); }
+    catch (error) {
+      if (error instanceof Error && error.name === 'AbortError') throw error;
+      return { status: 'unavailable', method: 'openmaic-renderer-chromium-v1', issues: [],
+        reason: error instanceof Error ? error.message : String(error) };
+    }
+  };
   const initialAudit = await audit(input.content, input.outline.id);
   const requiredVisibleStatements = slideRequiredVisibleStatements(input.outline);
   const initialCoverage = slideKnowledgeCoverage(requiredVisibleStatements, input.content.elements);
@@ -1184,7 +1204,11 @@ export async function auditAndRepairSlideOnce(input: {
           deterministicDensity ?? initialDensity,
         ),
         repairBaseline ?? input.content,
-      );
+      ).catch((error) => {
+        if (error instanceof Error && error.name === 'AbortError') throw error;
+        repairDiagnostics.push(`可选排版修复未完成，保留可用原稿：${error instanceof Error ? error.message : String(error)}`);
+        return null;
+      });
   // If the one allowed model rewrite is unavailable or invalid, retain a
   // browser-measured geometry improvement instead of falling all the way back
   // to an avoidably overflowing first draft.
@@ -1195,6 +1219,7 @@ export async function auditAndRepairSlideOnce(input: {
       initialAudit,
       finalAudit: initialAudit,
       repairAttempted: true,
+      ...(repairDiagnostics.length ? { repairDiagnostics } : {}),
       adopted: 'first-draft',
       initialKnowledgeCoverage: initialCoverage,
       finalKnowledgeCoverage: initialCoverage,
@@ -1281,6 +1306,7 @@ export async function auditAndRepairSlideOnce(input: {
     initialAudit,
     finalAudit: adoptRepair ? candidateAudit : initialAudit,
     repairAttempted: true,
+    ...(repairDiagnostics.length ? { repairDiagnostics } : {}),
     adopted: adoptRepair ? 'repair' : 'first-draft',
     initialKnowledgeCoverage: initialCoverage,
     finalKnowledgeCoverage: adoptRepair ? candidateCoverage : initialCoverage,

@@ -58,12 +58,16 @@ describe('knowledge structure keeps a single first draft', () => {
     expect(onCandidate).not.toHaveBeenCalled();
   });
 
-  it('retains the original complete-source gate and reports missing canonical facts', async () => {
+  it('preserves incomplete source prose and its full source context for final teacher review', async () => {
     const wrong = sourceDraft('基本流程是确定目标、设计活动等环节。');
     const aiCall = vi.fn().mockResolvedValue(wrong);
     const onRejected = vi.fn();
-    await expect(generateKnowledgeStructureOnce(input, { textbookEvidence: evidence }, { aiCall, onRejected })).rejects.toThrow('遗漏教材步骤：评价效果');
-    expect(onRejected).toHaveBeenCalledWith(expect.objectContaining({ rawResponse: wrong }));
+    const onCandidate = vi.fn();
+    const first = await generateKnowledgeStructureOnce(input, { textbookEvidence: evidence }, { aiCall, onRejected, onCandidate });
+    expect(first.knowledgePoints[0]!.description).toBe('基本流程是确定目标、设计活动等环节。');
+    expect(first.knowledgePoints[0]!.sourceSequenceReferences![0]!.orderedSteps).toHaveLength(3);
+    expect(onCandidate).toHaveBeenCalledWith({ rawResponse: wrong, attempt: 1 });
+    expect(onRejected).not.toHaveBeenCalled();
     expect(aiCall).toHaveBeenCalledOnce();
     const result = await generateKnowledgeStructureOnce(input, { textbookEvidence: evidence }, {
       initialResponse: sourceDraft('基本流程是确定目标、设计活动、评价效果。'), aiCall,

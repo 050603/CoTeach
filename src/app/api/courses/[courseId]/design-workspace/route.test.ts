@@ -73,7 +73,7 @@ describe("course design workspace route", () => {
     });
   });
 
-  it.each([false, true])("saves independent textbook lists and rejects a missing adopted item (missing=%s)", async (missing) => {
+  it.each([false, true])("saves independent textbook lists with a retained diagnostic for a missing adopted item (missing=%s)", async (missing) => {
     const figureLabels = ["图流程甲", "图流程乙", "图流程丙", "图流程丁", "图流程戊", "图流程己"];
     const sourceLabels = ["正文步骤甲", "正文步骤乙", "正文步骤丙", "正文步骤丁", "正文步骤戊"];
     const visible = [`图流程有6个环节：${figureLabels.join("、")}`, `正文流程有5个环节：${(missing ? sourceLabels.slice(0, -1) : sourceLabels).join("、")}`];
@@ -107,9 +107,9 @@ describe("course design workspace route", () => {
       method: "PATCH", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ action: "save", section: "blueprint", expectedVersion: 10, data: blueprint }),
     }), { params: Promise.resolve({ courseId: "course-1" }) });
-    expect(response.status).toBe(missing ? 400 : 200);
-    if (missing) expect((await response.json()).message).toContain("正文步骤戊");
-    else expect(course.content.teachingBlueprint?.sections[0]?.pages[0]?.keyPoints).toEqual(visible);
+    expect(response.status).toBe(200);
+    if (missing) expect(course.content.teachingBlueprint?.qualityDiagnostics?.join('\n')).toContain("正文步骤戊");
+    expect(course.content.teachingBlueprint?.sections[0]?.pages[0]?.keyPoints).toEqual(visible);
   });
 
   it("saves teacher edits as a draft while preserving generated classroom data", async () => {

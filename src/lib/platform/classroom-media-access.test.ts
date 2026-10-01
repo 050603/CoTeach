@@ -135,6 +135,7 @@ describe('precisely adopted classroom media access', () => {
           { result: { path: ['teacherClassroomId'], equals: 'source-test' } },
           { checkpoints: { some: { step: 'classroom-media-origin:source-test', state: { path: ['classroomId'], equals: 'source-test' } } } },
           { checkpoints: { some: { step: 'course-finalization', OR: [
+            { state: { path: ['generated', 'id'], equals: 'source-test' } },
             { state: { path: ['split', 'studentClassroomId'], equals: 'source-test' } },
             { state: { path: ['split', 'teacherClassroomId'], equals: 'source-test' } },
           ] } } },
@@ -155,4 +156,3 @@ describe('precisely adopted classroom media access', () => {
     expect((await authorizeClassroomMediaRead(request(), 'source-test', ['audio', 'speech-1.mp3']))?.status).toBe(401);
   });
 });
-

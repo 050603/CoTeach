@@ -5,12 +5,13 @@ import type { SceneOutline } from "@/lib/openmaic/types/generation";
 vi.mock("@/components/openmaic/generation/outlines-editor", async () => {
   const { useI18n } = await import("@/lib/openmaic/hooks/use-i18n");
   return {
-    OutlinesEditor: ({ hideFooter, onChange }: { hideFooter: boolean; onChange: (outlines: SceneOutline[]) => void }) => {
+    OutlinesEditor: ({ hideFooter, readOnly, outlines, onChange }: { hideFooter: boolean; readOnly?: boolean; outlines: SceneOutline[]; onChange: (outlines: SceneOutline[]) => void }) => {
       useI18n();
       return <div>
         大纲编辑器已加载
         <span data-testid="editor-footer-state">{hideFooter ? "footer-hidden" : "footer-visible"}</span>
-        <button onClick={() => onChange([{ id: "page-1", title: "" } as SceneOutline])} type="button">清空标题</button>
+        <span data-testid="editor-page-titles">{outlines.map((outline) => outline.title).join("、")}</span>
+        <button disabled={readOnly} onClick={() => onChange([{ id: "page-1", title: "" } as SceneOutline])} type="button">清空标题</button>
       </div>;
     },
   };
@@ -19,6 +20,23 @@ vi.mock("@/components/openmaic/generation/outlines-editor", async () => {
 import { QuickOutlineReviewDialog } from "./quick-outline-review-dialog";
 
 describe("QuickOutlineReviewDialog", () => {
+  it("can reopen saved outlines without offering a confirmation or test selection", () => {
+    const onClose = vi.fn();
+    const outline = { id: "page-1", title: "课程导入" } as SceneOutline;
+    const { rerender } = render(<QuickOutlineReviewDialog initialOutlines={[outline]} readOnly testMode onClose={onClose} />);
+    expect(screen.getByRole("dialog", { name: "查看课程大纲与教学蓝图" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "清空标题" })).toBeDisabled();
+    expect(screen.queryByRole("button", { name: "生成所选小节" })).toBeNull();
+    expect(screen.queryByRole("radio")).toBeNull();
+    expect(screen.queryByText("快速生成已暂停")).toBeNull();
+    rerender(<QuickOutlineReviewDialog initialOutlines={[{ ...outline, title: "最新页面安排" }]} readOnly onClose={onClose} />);
+    expect(screen.getByTestId("editor-page-titles")).toHaveTextContent("最新页面安排");
+    fireEvent.click(screen.getByRole("button", { name: "教学蓝图" }));
+    expect(screen.getByText(/教学蓝图尚未生成/)).toBeTruthy();
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
   it("provides OpenMAIC i18n context while expanding the outline editor", () => {
     expect(() => render(
       <QuickOutlineReviewDialog initialOutlines={[]} onClose={vi.fn()} onConfirm={vi.fn()} />,

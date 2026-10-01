@@ -25,6 +25,38 @@ export function isOutlineWithinSourceSelection(
   return sources.length > 0 && sources.every((id) => selectedIds.has(id));
 }
 
+/** Select the current pages of stable source IDs, including every measured
+ * sibling. Explicit physical page IDs remain supported for legacy callers. */
+export function resolveGenerationOutlineSelection<T extends GenerationPlanIdentity>(
+  outlines: readonly T[], requestedIds?: readonly string[],
+): T[] | null {
+  if (requestedIds === undefined) return [...outlines];
+  const requested = new Set(requestedIds);
+  if (!requested.size || requested.size !== requestedIds.length
+    || requestedIds.some((id) => !id.trim())) return null;
+  const selected = outlines.filter((page) => requested.has(page.id)
+    || getOutlineSourcePageIds(page).some((id) => requested.has(id)));
+  if (!selected.length || new Set(selected.map((page) => page.id)).size !== selected.length
+    || requestedIds.some((id) => !selected.some((page) => page.id === id
+      || getOutlineSourcePageIds(page).includes(id)))
+    || selected.some((page) => !requested.has(page.id)
+      && !isOutlineWithinSourceSelection(page, requested))) return null;
+  return selected;
+}
+
+/** Shared source coverage alone cannot prove that all adopted siblings exist.
+ * An older physical page may expand again through the spatial compiler. */
+export function hasCompleteGenerationOutlineCoverage(
+  expected: readonly GenerationPlanIdentity[], actual: readonly GenerationPlanIdentity[],
+): boolean {
+  const expectedIds = new Set(expected.map((page) => page.id));
+  return expected.length > 0 && new Set(actual.map((page) => page.id)).size === actual.length
+    && expected.every((page) => actual.some((candidate) => (candidate.id === page.id
+      || candidate.spatialParentId === page.id && !expectedIds.has(candidate.id))
+      && candidate.lectureSectionId === page.lectureSectionId
+      && (page.sectionPlanVersion === undefined || candidate.sectionPlanVersion === page.sectionPlanVersion)));
+}
+
 /** Replanning may redistribute time only inside one explicitly versioned section. */
 export function hasCompatibleOutlinePlan(
   expected: readonly GenerationPlanIdentity[],

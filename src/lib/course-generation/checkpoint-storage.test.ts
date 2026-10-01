@@ -32,6 +32,27 @@ beforeEach(() => {
 });
 
 describe("generation checkpoint execution ownership", () => {
+  it.each([undefined, 'execution-current'])('saves synthesis and routed media origins atomically with finalization (%s)', async (executionId) => {
+    await saveGenerationCheckpoint('job-1', 'course-finalization', {
+      generated: { id: 'synthesis-classroom' },
+      split: { studentClassroomId: 'student-classroom', teacherClassroomId: 'teacher-classroom' },
+    }, { executionId });
+    expect(mocks.lockJob).toHaveBeenCalledOnce();
+    expect(mocks.upsert.mock.calls.slice(0, 3).map(([args]) => args.create)).toEqual([
+      { jobId: 'job-1', step: 'classroom-media-origin:synthesis-classroom', state: { classroomId: 'synthesis-classroom' } },
+      { jobId: 'job-1', step: 'classroom-media-origin:student-classroom', state: { classroomId: 'student-classroom' } },
+      { jobId: 'job-1', step: 'classroom-media-origin:teacher-classroom', state: { classroomId: 'teacher-classroom' } },
+    ]);
+    expect(mocks.upsert.mock.calls.at(-1)?.[0].create.step).toBe('course-finalization');
+  });
+
+  it('does not grant media ownership from a finalization whose execution lease was lost', async () => {
+    await expect(saveGenerationCheckpoint('job-1', 'course-finalization', {
+      generated: { id: 'expired-classroom' },
+    }, { executionId: 'execution-expired' })).rejects.toThrow('GENERATION_JOB_EXECUTION_LOST');
+    expect(mocks.upsert).not.toHaveBeenCalled();
+  });
+
   it('creates the immutable original once and returns it when a later recovery races to save another draft', async () => {
     let stored: unknown;
     mocks.upsert.mockImplementation(async (input) => {

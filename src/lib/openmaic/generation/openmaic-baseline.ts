@@ -28,7 +28,6 @@ import type {
   GenerationResult,
   SceneGenerationContext,
 } from './pipeline-types';
-import { enforceNarrationContinuity } from './narration-continuity';
 import {
   applyPlannedTeachingToolActions,
   normalizeTeachingToolPlan,
@@ -39,6 +38,8 @@ import { formatOpenMaicWebsiteReferenceProfile } from './course-visual-theme';
 import { withTeachingEnhancement } from './teaching-enhancement';
 import { calibrateGeneratedVisualCues } from './semantic-visual-cues';
 import { adoptedPageAuthoringContent } from './adopted-page-content';
+import { formatSlidePresentationTypography, slideTypography } from './slide-presentation-typography';
+import { formatLecturePresentationReference } from './lecture-presentation-reference';
 import { nativeAuthoringEnvelopeContract, normalizeNativeAuthoringEnvelope } from './native-authoring-envelope';
 import { buildNativeTextPlacementPlan, expandNativeTextPlacements, formatNativeTextPlacementPlan, formatNativeTextRelationCaption } from './native-text-placement';
 import type { SemanticPageCapacityAssessment } from './semantic-page-capacity';
@@ -56,8 +57,8 @@ export const OPENMAIC_GENERATION_BASELINE = {
   promptHashes: {
     requirementsSystem: '344c33e57f72ee86056c12d072c337f609838eab209517a05cc9b57a90b02e32',
     requirementsUser: 'f04381208fe2837b806a910579b43f0433e8e2d6bee5654b03ac5ded0530e16e',
-    slideContentSystem: 'd55f5967f839d1b072eadd674814d09565f57cac1e3bc2453738aa66042a5a6f',
-    slideContentUser: '6e4fd25ae1428a8d6f45000caa73f6b661044a5f12a6dbdd55fede10802ff77d',
+    slideContentSystem: '36940238cb32a2dd6e410cec5a0043ca33112983be58a0fa5dde530df3727b8c',
+    slideContentUser: '787b6ae5e857eeb52ea71e1cda509164342ff00d64b2a843a10c68d0176f276e',
     upstreamSlideActionsSystem: '219e8da1eb3c854dbe6ee6fdedda1936e0092fff6c8984b9277c5c6cef2443b6',
     slideActionsSystem: 'b1fd18bcaeea294fa204bab84dc16c81946d0c7a0abb2408b4a44eaa8007f058',
     slideActionsUser: '71a95329793ba0fae6030b6b9eb562bed62e9460bd26c2fcbd92d7c53f549512',
@@ -271,11 +272,16 @@ export async function generateOpenMaicBaselineContent(
   aiCall: AICallFn,
   options: BaselineContentOptions = {},
 ): Promise<GeneratedSlideContent | GeneratedInteractiveContent | null> {
+  const qualityDiagnostics: string[] = [];
   if (outline.type !== 'slide' && outline.type !== 'interactive') {
     throw new Error(`OpenMAIC baseline content adapter does not own ${outline.type} scenes`);
   }
   const authoringContent = options.componentAuthoring && !options.editDirective && !options.baselineContent
     ? adoptedPageAuthoringContent(outline) : undefined;
+  const typography = outline.teachingBrief?.teachingPlan?.presentationTypography
+    ? { ...slideTypography(outline),
+        chartFontSize: options.pageCapacityAssessment?.selectedLayout?.bodyFontSize ?? slideTypography(outline).bodyFontSize,
+      } : undefined;
   const textPlacementPlan = outline.type === 'slide' && options.slideAuthoring !== 'flow'
     && authoringContent?.length && options.textMeasure && !options.assignedImages?.length
     ? await buildNativeTextPlacementPlan(outline, authoringContent, {
@@ -287,7 +293,7 @@ export async function generateOpenMaicBaselineContent(
   const placementGuidance = textPlacementPlan ? formatNativeTextPlacementPlan(textPlacementPlan) : '';
   const pageDecisionAiCall: AICallFn = authoringContent?.length ? (system, user, images) => aiCall(
     `${system}\n${formatNativeTextRelationCaption(placementGuidance ? textPlacementPlan?.relationCaption : undefined)}`,
-    `${user}\n\n## Current page first-draft decisions\nThe original-source and course context above do not expand this page’s adopted display responsibility. Put every required catalog point into supported contentRef/paragraphRefs display slots (or its exact placementRef under the host-selected measured layout), using exact IDs: ${JSON.stringify(authoringContent.filter((item) => item.required !== false).map((item) => item.id))}. Do not shorten or rewrite those points. Use the supplied playback-font text measurements for readable allocations. If a planned diagram exists, select one complete measured feasible width/height pair already supplied, preserving its entire nodes, edges and annotation; never mix dimensions from different candidates. Keep peer content regions separate. Return the existing native/component JSON contract in this first response.${placementGuidance ? `\n\n## Required measured placement for this first response\nThe host selected default layout ${JSON.stringify(textPlacementPlan?.defaultCandidateId)} before this request. Use bare placementRef components for this default; omit layoutCandidateId unless you actively select another advertised candidate. In components, give every title and adopted point exactly one kind:textBox + placementRef. Omit contentRef/paragraphRefs, authored text, coordinates and typography on those selected components. The host compiler expands placementRef into canonical contentRef plus the full measured rectangle, so all catalog coverage remains mandatory. Keep native decoration in elements; do not duplicate the title/body as native text. This selected-placement grammar supersedes the general reference-slot/free-coordinate examples above.` : ''}\n${formatNativeTextRelationCaption(placementGuidance ? textPlacementPlan?.relationCaption : undefined)}`, images) : aiCall;
+    `${user}\n\n## Current page first-draft decisions\nThe original-source and course context above do not expand this page’s adopted display responsibility. Put every required catalog point into supported contentRef/paragraphRefs display slots (or a placementRef if you choose one of the measured candidates), using exact IDs: ${JSON.stringify(authoringContent.filter((item) => item.required !== false).map((item) => item.id))}. Do not shorten or rewrite those points. Use the supplied playback-font text measurements for readable allocations. If a planned diagram exists, select one complete measured feasible width/height pair already supplied, preserving its entire nodes, edges and annotation; never mix dimensions from different candidates. Keep peer content regions separate. Return the existing native/component JSON contract in this first response.${placementGuidance && !textPlacementPlan?.flexibleComposition ? `\n\n## Required measured placement for this first response\nThe host selected default layout ${JSON.stringify(textPlacementPlan?.defaultCandidateId)} before this request. Use bare placementRef components for this default; omit layoutCandidateId unless you actively select another advertised candidate. In components, give every title and adopted point exactly one kind:textBox + placementRef. Omit contentRef/paragraphRefs, authored text, coordinates and typography on those selected components. The host compiler expands placementRef into canonical contentRef plus the full measured rectangle, so all catalog coverage remains mandatory. Keep native decoration in elements; do not duplicate the title/body as native text. This selected-placement grammar supersedes the general reference-slot/free-coordinate examples above.` : ''}\n${formatNativeTextRelationCaption(placementGuidance ? textPlacementPlan?.relationCaption : undefined)}`, images) : aiCall;
   const referenceAiCall = outline.type === 'slide' && options.websiteReferenceContext
     ? withWebsiteReferenceProfile(pageDecisionAiCall, options.websiteReferenceContext)
     : pageDecisionAiCall;
@@ -303,12 +309,14 @@ export async function generateOpenMaicBaselineContent(
         // Match the selected package protocol; an explicitly selected flow
         // response has a different grammar and must retain its own contract.
         const native = system.includes('## Optional first-draft measured components');
-        const response = await contentAiCall(native ? `${system}\n\n${nativeAuthoringEnvelopeContract(authoringContent?.[0]?.id)}\n\n${placementGuidance}` : system, user, images);
+        const response = await contentAiCall(native ? `${system}\n\n${nativeAuthoringEnvelopeContract(authoringContent?.[0]?.id)}\n\n${placementGuidance}\n\n${formatSlidePresentationTypography(outline)}${typography ? `\nFor native chart elements, options.fontSize is preselected at ${typography.chartFontSize}px for axis labels, axis names, legends and value labels. If explicitly choosing the compact composition, ${typography.minimumBodyFontSize}px is also supported. Do not use generic 12/14px chart defaults; omitted chart fonts receive the preselected value before compilation.` : ''}\n\n${formatLecturePresentationReference({ audience: 'slide' })}` : system, user, images);
         if (!native) return response;
         const normalized = normalizeNativeAuthoringEnvelope(response);
-        return textPlacementPlan ? expandNativeTextPlacements(normalized, textPlacementPlan) : normalized;
+        return textPlacementPlan ? expandNativeTextPlacements(normalized, textPlacementPlan,
+          (detail) => { qualityDiagnostics.push(detail); }) : normalized;
       } : contentAiCall;
   const adapted = adaptOutlineToOpenMaicBaseline(outline);
+  if (typography) adapted.presentationTypography = typography;
   if (options.componentAuthoring && outline.teachingBrief?.teachingPlan?.presentationContent?.length) {
     adapted.keyPoints = [...outline.teachingBrief.teachingPlan.presentationContent];
   }
@@ -334,7 +342,7 @@ export async function generateOpenMaicBaselineContent(
   );
   if (!generated) return null;
   if (outline.type === 'slide' && 'elements' in generated) {
-    return generated as GeneratedSlideContent;
+    return { ...generated, qualityDiagnostics: [...new Set([...(generated.qualityDiagnostics ?? []), ...qualityDiagnostics])] } as GeneratedSlideContent;
   }
   if (outline.type === 'interactive' && 'html' in generated) {
     return generated as GeneratedInteractiveContent;
@@ -404,13 +412,10 @@ export async function generateOpenMaicBaselineSlideActions(
       requireStructuredOutput: true,
     },
   );
-  const finalized = enforceNarrationContinuity(
-    normalizeWhiteboardActionLifecycle(
-      normalizeWhiteboardActionLayout(
-        applyPlannedTeachingToolActions(outline, actions as Action[]),
-      ),
+  const finalized = normalizeWhiteboardActionLifecycle(
+    normalizeWhiteboardActionLayout(
+      applyPlannedTeachingToolActions(outline, actions as Action[]),
     ),
-    options.ctx,
   );
   return calibrateGeneratedVisualCues({
     outline,

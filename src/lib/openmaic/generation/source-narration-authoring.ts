@@ -64,11 +64,12 @@ export function assertNarrationSourceDuties(
 }
 
 /** Expand only authored source slots. Missing source duties remain missing for
- * acceptance to detect; neither source text nor narration order is invented. */
+ * final teacher review to assess; neither source text nor narration order is invented. */
 export function resolveNarrationSourceParts(
   value: unknown,
   anchorsByPage: ReadonlyMap<string, ReadonlyMap<string, string>>,
   fallbackPageId?: string,
+  options: { qualityReviewMode?: 'diagnostic'; onDiagnostic?: (message: string, pageId?: string) => void } = {},
 ): unknown {
   const page = (raw: unknown, fallback?: string): unknown => {
     if (!record(raw)) return raw;
@@ -78,51 +79,72 @@ export function resolveNarrationSourceParts(
     const segmentOwner = narrationSegmentOwner(raw);
     if (!segmentOwner || !Array.isArray(segmentOwner.segments)) return raw;
     const pageId = typeof raw.pageId === 'string' ? raw.pageId : fallback;
+    const diagnose = (message: string) => options.onDiagnostic?.(message, pageId);
     let changed = false;
     const segments = segmentOwner.segments.map((segment: unknown) => {
       if (!record(segment) || !Object.hasOwn(segment, 'textParts')) return segment;
-      if (segment.text !== undefined && typeof segment.text !== 'string') {
-        throw new Error('Source narration: textParts cannot be combined with nonempty text');
-      }
-      if (!Array.isArray(segment.textParts) || !segment.textParts.length) {
-        throw new Error('Source narration: textParts must be a nonempty array');
-      }
-      const text = segment.textParts.map((part: unknown) => {
-        if (!record(part)) throw new Error('Source narration: each text part must be an object');
-        const hasText = Object.hasOwn(part, 'text');
-        const hasRef = Object.hasOwn(part, 'sourceRef');
-        if (hasText === hasRef || Object.keys(part).some((key) => key !== 'text' && key !== 'sourceRef' && key !== 'quote')
-          || (hasText && Object.hasOwn(part, 'quote'))) {
-          throw new Error('Source narration: each text part must contain exactly text or sourceRef');
+      const authoredText = typeof segment.text === 'string' && segment.text.trim() ? segment.text : undefined;
+      const expand = () => {
+        if (segment.text !== undefined && typeof segment.text !== 'string') {
+          throw new Error('Source narration: textParts cannot be combined with nonempty text');
         }
-        if (hasText) {
-          if (typeof part.text !== 'string') throw new Error('Source narration: authored text must be a string');
-          return part.text;
+        if (!Array.isArray(segment.textParts) || !segment.textParts.length) {
+          throw new Error('Source narration: textParts must be a nonempty array');
         }
-        if (typeof part.sourceRef !== 'string' || !part.sourceRef.trim()) {
-          throw new Error('Source narration: sourceRef must be a nonempty source id');
-        }
-        const source = pageId ? anchorsByPage.get(pageId)?.get(part.sourceRef) : undefined;
-        if (source === undefined) {
-          throw new Error(`Source narration: unknown source reference ${part.sourceRef} for page ${pageId ?? '(missing)'}`);
-        }
-        if (typeof source !== 'string' || !source.trim()) {
-          throw new Error(`Source narration: source reference ${part.sourceRef} has no authoritative text`);
-        }
-        if (Object.hasOwn(part, 'quote')) {
-          if (typeof part.quote !== 'string' || !part.quote.trim() || !source.includes(part.quote)) {
-            throw new Error('Source narration: a selected quote must occur unchanged in its authoritative source');
+        const text = segment.textParts.map((part: unknown) => {
+          if (!record(part)) throw new Error('Source narration: each text part must be an object');
+          const hasText = Object.hasOwn(part, 'text');
+          const hasRef = Object.hasOwn(part, 'sourceRef');
+          if (hasText === hasRef || Object.keys(part).some((key) => key !== 'text' && key !== 'sourceRef' && key !== 'quote')
+            || (hasText && Object.hasOwn(part, 'quote'))) {
+            throw new Error('Source narration: each text part must contain exactly text or sourceRef');
           }
-          if (/^(?:source-list-\d+-item-\d+|source-definition-\d+)$/u.test(part.sourceRef) && part.quote !== source) {
-            throw new Error(`Source narration: a canonical source ${part.sourceRef.startsWith('source-definition-') ? 'definition' : 'condition'} cannot be shortened`);
+          if (hasText) {
+            if (typeof part.text !== 'string') throw new Error('Source narration: authored text must be a string');
+            return part.text;
           }
-          return part.quote;
+          if (typeof part.sourceRef !== 'string' || !part.sourceRef.trim()) {
+            throw new Error('Source narration: sourceRef must be a nonempty source id');
+          }
+          const source = pageId ? anchorsByPage.get(pageId)?.get(part.sourceRef) : undefined;
+          if (source === undefined) {
+            if (options.qualityReviewMode === 'diagnostic' && typeof part.quote === 'string' && part.quote.trim()) {
+              diagnose(`Source narration: unknown source reference ${part.sourceRef}; retained the authored quote`);
+              return part.quote;
+            }
+            throw new Error(`Source narration: unknown source reference ${part.sourceRef} for page ${pageId ?? '(missing)'}`);
+          }
+          if (typeof source !== 'string' || !source.trim()) {
+            throw new Error(`Source narration: source reference ${part.sourceRef} has no authoritative text`);
+          }
+          if (Object.hasOwn(part, 'quote')) {
+            if (typeof part.quote !== 'string' || !part.quote.trim() || !source.includes(part.quote)) {
+              if (options.qualityReviewMode === 'diagnostic' && typeof part.quote === 'string' && part.quote.trim()) {
+                diagnose(`Source narration: selected quote differs from ${part.sourceRef}; retained the authored quote`);
+                return part.quote;
+              }
+              throw new Error('Source narration: a selected quote must occur unchanged in its authoritative source');
+            }
+            return part.quote;
+          }
+          return source;
+        }).reduce((joined, part) => /。[ \t]*$/u.test(joined) && /^[ \t]*。/u.test(part)
+          ? joined + part.replace(/^([ \t]*)。/u, '$1') : joined + part, '');
+        if (typeof segment.text === 'string' && segment.text.trim() && segment.text !== text) {
+          if (options.qualityReviewMode === 'diagnostic') {
+            diagnose('Source narration: authored text differs from its source-parts expansion; retained the authored speech');
+            return segment.text;
+          }
+          throw new Error('Source narration: textParts cannot be combined with nonempty text that differs from its authoritative expansion');
         }
-        return source;
-      }).reduce((joined, part) => /。[ \t]*$/u.test(joined) && /^[ \t]*。/u.test(part)
-        ? joined + part.replace(/^([ \t]*)。/u, '$1') : joined + part, '');
-      if (typeof segment.text === 'string' && segment.text.trim() && segment.text !== text) {
-        throw new Error('Source narration: textParts cannot be combined with nonempty text that differs from its authoritative expansion');
+        return text;
+      };
+      let text: string;
+      try { text = expand(); }
+      catch (error) {
+        if (options.qualityReviewMode !== 'diagnostic' || !authoredText) throw error;
+        diagnose(`${error instanceof Error ? error.message : String(error)}; retained the available authored speech`);
+        text = authoredText;
       }
       changed = true;
       const { textParts: _parts, ...rest } = segment;

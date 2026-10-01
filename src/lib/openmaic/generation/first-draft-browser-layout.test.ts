@@ -5,8 +5,9 @@ import { compileFlowLayout } from '../../../../packages/@openmaic/generation/src
 import { generateSceneContent } from '../../../../packages/@openmaic/generation/src/scene-generator';
 import type { SceneOutline } from '../../../../packages/@openmaic/generation/src/outline-types';
 import { closeSpatialMeasurementBrowser, measureAuthoredSlideText } from './slide-spatial-measurement';
+import { auditSlideLayout, closeSlideLayoutAuditBrowser } from './slide-layout-audit';
 
-afterAll(async () => { await closeSpatialMeasurementBrowser(); });
+afterAll(async () => { await closeSpatialMeasurementBrowser(); await closeSlideLayoutAuditBrowser(); });
 
 describe('first draft with the actual slide font', () => {
   it('measures native rich typography without flattening mixed-size spans into separate lines', async () => {
@@ -218,6 +219,49 @@ describe('flow layout in the actual playback font', () => {
 
 
 describe('native slide authoring with actual renderer typography', () => {
+  it('keeps all three complete comparison definitions, subtitle and original panels when a narrower estimated row wraps once more', async () => {
+    const texts = [
+      '教学理论是对教学过程中的基本原则、规律和概念的系统阐述，它基于教育学、生物学、心理学等学科的研究成果，为教师提供关于如何教学和学习的理论支持。',
+      '教学模式是教学理论的具体化，它形成了一套相对固定的教学结构或流程，用来指导教师如何组织和实施教学。',
+      '教学方法是教师在课堂上实际应用的具体技巧和手段，相较于教学模式，它更加灵活，可以根据学生的需要和教学情境进行调整。',
+    ];
+    const catalog = texts.map((text, index) => ({ id: `point-${index}`, text }));
+    const title = { id: 'title', type: 'text', left: 60, top: 50, width: 880, height: 70,
+      content: '<p style="font-size:32px;color:#1E3A8A"><strong>教学理论、教学模式与教学方法</strong></p>' };
+    const subtitle = { id: 'subtitle', type: 'text', left: 60, top: 124, width: 880, height: 49,
+      content: '<p style="font-size:18px;color:#64748B">同一组维度对照：各自是什么、为教学提供什么、具体到什么程度</p>' };
+    const surfaces = texts.flatMap((_, index) => [
+      { id: `panel-${index}`, type: 'shape', left: 56, top: 183 + index * 110, width: 892, height: 100,
+        fill: '#F1F5F9', path: 'M0 0 L1 0 L1 1 L0 1 Z', viewBox: [1, 1], fixedRatio: false },
+      { id: `bar-${index}`, type: 'shape', left: 56, top: 183 + index * 110, width: 5, height: 100,
+        fill: '#1E3A8A', path: 'M0 0 L1 0 L1 1 L0 1 Z', viewBox: [1, 1], fixedRatio: false },
+    ]);
+    const ai = vi.fn().mockResolvedValue(JSON.stringify({ elements: [title, subtitle, ...surfaces],
+      components: catalog.map((point, index) => ({ kind: 'textBox', role: 'body', contentRef: point.id,
+        left: 62, top: 187 + index * 110, width: 880, height: 92, fontSize: 24 })) }));
+    const failure = vi.fn();
+    const slide = await generateSceneContent({ id: 'comparison', type: 'slide', title: '教学理论、教学模式与教学方法',
+      keyPoints: texts, order: 0, description: '按同一维度比较三个概念。', visualIntent: {
+        representation: 'table', observationGoal: '同一组维度对照。',
+      } }, ai, { componentAuthoring: true, textMeasure: measureAuthoredSlideText, authoringContent: catalog, onFailure: failure });
+    expect(ai).toHaveBeenCalledOnce();
+    expect(failure).not.toHaveBeenCalled();
+    if (!slide || !('elements' in slide)) throw new Error('Expected complete editable comparison');
+    expect(slide).not.toHaveProperty('continuationPages');
+    for (const original of [title, subtitle, ...surfaces]) expect(slide.elements.find((element) => element.id === original.id)).toMatchObject(original);
+    for (const [index, text] of texts.entries()) {
+      const body = slide.elements.find((element) => element.id === `comparison-component-${index}`);
+      if (!body || body.type !== 'text') throw new Error('Missing complete definition');
+      expect(body).toMatchObject({ left: 62, top: 187 + 110 * index, width: 886, height: 92 });
+      expect(body.content.replace(/<[^>]+>/g, '')).toBe(text);
+      expect(body.content).toContain('font-size:24px');
+    }
+    const audit = await auditSlideLayout(slide, 'comparison');
+    expect(audit.status).toBe('checked');
+    expect(audit.findings).toEqual([]);
+    expect(audit.issues).toEqual([]);
+  });
+
   it('preserves rich emphasis and balances only an orphan label inside its original rectangle', async () => {
     const element = { id: 'native-label', type: 'text' as const, left: 60, top: 120, width: 100, height: 82,
       rotate: 0, defaultFontName: 'Noto Sans SC', defaultColor: '#334155', lineHeight: 1.5,

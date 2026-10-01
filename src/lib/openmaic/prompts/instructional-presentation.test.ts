@@ -52,6 +52,10 @@ describe('instructional presentation prompt contract', () => {
     expect(prompt?.system).toContain('No isolated 5–15px decorative lines');
     expect(prompt?.system).toContain('make the material to inspect and the changed condition visible before showing a complete classification');
     expect(prompt?.system).toContain('A setting label alone is not a worked case');
+    expect(prompt?.system).toContain("the page's independent presentation catalog");
+    expect(prompt?.system).toContain('they do not all become visible text');
+    expect(prompt?.system).toContain('quantities, negation, qualifications, and necessary conditions');
+    expect(prompt?.system).not.toContain('concise but complete definitions');
   });
 
   it('keeps quiz scope separate from answer authority and discourages worked-example replay', () => {

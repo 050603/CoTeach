@@ -168,6 +168,27 @@ class AlignmentRuntimeTests(unittest.TestCase):
         ], 600)
         self.assertEqual([(span["startChar"], span["endChar"]) for span in result], [(0, 2), (4, 6)])
 
+    def test_token_mapping_returns_exact_source_for_normalized_mixed_text(self):
+        source = "😀 ＡＩ，Problem-Based Learning (PBL)"
+        result = MODULE.map_tokens_to_source(source, [
+            {"text": "ai", "start_time": 0.0, "end_time": 0.1},
+            {"text": "ProblemBased", "start_time": 0.1, "end_time": 0.3},
+            {"text": "Learning", "start_time": 0.3, "end_time": 0.5},
+            {"text": "pbl", "start_time": 0.5, "end_time": 0.7},
+        ], 800)
+        self.assertEqual([span["text"] for span in result], ["ＡＩ", "Problem-Based", "Learning", "PBL"])
+        utf16_source = source.encode("utf-16-le")
+        for span in result:
+            exact_source = utf16_source[span["startChar"] * 2:span["endChar"] * 2].decode("utf-16-le")
+            self.assertEqual(span["text"], exact_source)
+
+    def test_token_mapping_rejects_overlapping_timestamps(self):
+        with self.assertRaisesRegex(MODULE.InvalidAlignment, "INVALID_TIMESTAMPS"):
+            MODULE.map_tokens_to_source("Go, go！", [
+                {"text": "Go", "start_time": 0.0, "end_time": 0.3},
+                {"text": "go", "start_time": 0.2, "end_time": 0.5},
+            ], 600)
+
     def test_device_probe_requires_matching_cuda_architecture_and_fp32_kernel(self):
         unavailable = types.SimpleNamespace(cuda=types.SimpleNamespace(is_available=lambda: False))
         self.assertEqual(MODULE.select_torch_device(unavailable), "cpu")

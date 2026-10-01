@@ -4,6 +4,8 @@ import type { SceneOutline } from '../types/generation';
 import { buildNativeTextPlacementPlan, expandNativeTextPlacements, formatNativeTextPlacementPlan, type NativeTextPlacementCandidate } from './native-text-placement';
 import { generateOpenMaicBaselineContent } from './openmaic-baseline';
 import { closeSpatialMeasurementBrowser, measureAuthoredSlideText } from './slide-spatial-measurement';
+import { REFERENCE_LECTURE_TYPOGRAPHY } from './slide-presentation-typography';
+import { evaluateSemanticPageCapacity } from './semantic-page-capacity';
 
 const texts = [
   '教学理论：系统阐述教学原则与规律，回答“为什么教”。',
@@ -14,6 +16,14 @@ const texts = [
 const points: AuthoringContentItem[] = texts.map((text, i) => ({ id: `adopted-content-${i + 1}`, text }));
 const outline = { id: 'placement', type: 'slide', order: 0, title: '教学概念体系辨析', description: '', keyPoints: texts,
   generationPurpose: 'knowledge-teaching', teachingBrief: { teachingPlan: { presentationContent: texts } } } as SceneOutline;
+function lectureOutline(patch: Partial<NonNullable<NonNullable<SceneOutline['teachingBrief']>['teachingPlan']>> = {}): SceneOutline {
+  return { ...outline, teachingBrief: { schemaVersion: 1, explanation: texts.join('\n'), examples: [],
+    conditions: [], evidence: [], assessmentFocus: '区分三个概念', teachingPlan: {
+      purpose: '认识概念体系', priorKnowledge: '', newContent: texts.join('\n'), learnerQuestion: '',
+      reasoningSteps: [], takeaway: '从抽象到具体', visibleContent: texts, narrationFocus: texts,
+      presentationContent: texts, presentationTypography: REFERENCE_LECTURE_TYPOGRAPHY, ...patch,
+    } } };
+}
 const measure: TextMeasure = (input) => ({ height: input.fontSize * 1.5 + 20,
   naturalWidth: input.text.length * input.fontSize, lines: [input.text] });
 function response(candidate: NativeTextPlacementCandidate) {
@@ -23,6 +33,109 @@ function response(candidate: NativeTextPlacementCandidate) {
 afterAll(() => closeSpatialMeasurementBrowser());
 
 describe('first-response native text placement', () => {
+  it('advertises a measured paragraph composition when separate placement boxes cannot hold the same claims', async () => {
+    const catalog = Array.from({ length: 10 }, (_, index) => ({ id: `point-${index}`,
+      text: `试验${index + 1}：只有温度与培养时间相同，甲组与乙组的颜色才可比较。` }));
+    const page = lectureOutline({ presentationContent: catalog.map((point) => point.text),
+      presentationItems: catalog.map((point) => ({ text: point.text, nodeIds: ['experiment'], role: 'key-point' })),
+    });
+    page.keyPoints = catalog.map((point) => point.text);
+    const capacity = await evaluateSemanticPageCapacity(page);
+    const plan = await buildNativeTextPlacementPlan(page, catalog, { measure: measureAuthoredSlideText, capacity });
+    expect(capacity.selectedLayout?.fits).toBe(true);
+    expect(plan.candidates).toHaveLength(0);
+    expect(plan.measuredComposition).toBe(capacity.selectedLayout);
+    expect(formatNativeTextPlacementPlan(plan)).toContain('contentRef/paragraphRefs');
+    expect(formatNativeTextPlacementPlan(plan)).toContain('No placementRef candidate is advertised');
+    expect(formatNativeTextPlacementPlan(plan)).toContain('experiment');
+    const draft = JSON.stringify({ elements: [], components: [{ kind: 'textBox', paragraphRefs: catalog.map((point) => point.id),
+      left: 50, top: 130, width: 900, fontSize: 18 }] });
+    expect(expandNativeTextPlacements(draft, plan)).toBe(draft);
+  });
+
+  it('chooses a semantic comparison at lecture fonts even when a single column also fits', async () => {
+    const comparison = lectureOutline({
+      presentationItems: points.map((point, index) => ({ text: point.text, nodeIds: [`node-${index}`], role: 'comparison' })),
+      visualRelationship: { kind: 'comparison', preferredForm: 'text', readingOrder: points.map((point) => point.id),
+        description: '对齐三个概念', rationale: '比较理论、模式与方法的层级' },
+    });
+    const plan = await buildNativeTextPlacementPlan(comparison, points, { measure });
+    expect(plan.flexibleComposition).toBe(true);
+    expect(plan.defaultCandidateId).toBe('native-text-v2-18-2col-gap24');
+    expect(plan.candidates.some((candidate) => candidate.id === 'native-text-v2-18-1col-gap24')).toBe(true);
+    expect(plan.candidates.flatMap((candidate) => candidate.placements.slice(1).map((box) => box.fontSize)))
+      .toEqual(expect.arrayContaining([18, 16]));
+    expect(plan.presentationRoles?.map((item) => item.nodeIds)).toEqual(points.map((_, index) => [`node-${index}`]));
+    const prompt = formatNativeTextPlacementPlan(plan);
+    expect(prompt).toContain('rather than compulsory one-item/one-box placements');
+    expect(prompt).toContain('contentRef/paragraphRefs');
+    expect(prompt).not.toContain('largest offered readable body font');
+  });
+
+  it('chooses a measured 28px title before authoring when the complete 32px title exceeds its band', async () => {
+    const page = lectureOutline();
+    const titleMeasure: TextMeasure = (input) => ({ height: input.text === page.title && input.fontSize === 32 ? 140 : 60,
+      naturalWidth: 320, lines: [input.text] });
+    const plan = await buildNativeTextPlacementPlan(page, points, { measure: titleMeasure });
+    expect(plan.candidates.length).toBeGreaterThan(0);
+    expect(plan.candidates.every((candidate) => candidate.placements[0]?.fontSize === 28)).toBe(true);
+    expect(plan.title).toBe(page.title);
+    expect(page.teachingBrief?.teachingPlan?.presentationTypography).toBe(REFERENCE_LECTURE_TYPOGRAPHY);
+  });
+
+  it('keeps authored headings across the measured comparison columns with real bold-font measurements', async () => {
+    const items = [
+      { id: 'heading', text: '比较抽样依据' },
+      { id: 'random', text: '随机抽样：抽取机会明确' },
+      { id: 'convenience', text: '便利抽样：取决于可接近性' },
+    ];
+    const page = lectureOutline({ presentationContent: items.map((item) => item.text),
+      presentationItems: items.map((item) => ({ text: item.text, nodeIds: ['sampling'],
+        role: item.id === 'heading' ? 'heading' : 'comparison' })),
+      visualRelationship: { kind: 'comparison', preferredForm: 'text', description: '比较两种抽样',
+        rationale: '对齐抽样依据', readingOrder: items.map((item) => item.id) },
+    });
+    const measured = vi.fn(measureAuthoredSlideText);
+    const plan = await buildNativeTextPlacementPlan(page, items, { measure: measured });
+    const candidate = plan.candidates.find((item) => item.id === plan.defaultCandidateId)!;
+    const heading = candidate.placements.find((item) => item.ref === 'heading')!;
+    const sides = candidate.placements.filter((item) => ['random', 'convenience'].includes(item.ref));
+    expect(heading).toMatchObject({ left: 50, width: 900, bold: true, fontSize: 18 });
+    expect(sides).toHaveLength(2);
+    expect(sides[0]?.top).toBe(sides[1]?.top);
+    expect(sides.every((item) => item.top > heading.top + heading.height)).toBe(true);
+    expect(measured.mock.calls.some(([input]) => input.text === items[0]!.text
+      && input.width === 900 && input.fontSize === 18 && input.fontWeight === 700)).toBe(true);
+  });
+
+  it('compiles grouped catalog paragraphs at the adopted font without a compulsory placement template', async () => {
+    const page = lectureOutline();
+    const plan = await buildNativeTextPlacementPlan(page, points, { measure: measureAuthoredSlideText });
+    const draft = JSON.stringify({ elements: [], components: [
+      { kind: 'textBox', id: 'title', role: 'title', text: page.title, left: 50, top: 50, width: 900,
+        fontSize: 32, bold: true, color: '#1E3A8A' },
+      { kind: 'textBox', id: 'concept-group', role: 'body', paragraphRefs: points.map((point) => point.id),
+        left: 50, top: 140, width: 900, fontSize: 18, color: '#334155' },
+    ] });
+    expect(expandNativeTextPlacements(draft, plan)).toBe(draft);
+    const call = vi.fn(async (system: string, user: string) => {
+      expect(system).toContain('Measured lecture composition choices');
+      expect(user).not.toContain('Required measured placement for this first response');
+      return draft;
+    });
+    const result = await generateOpenMaicBaselineContent(page, call, {
+      componentAuthoring: true, slideAuthoring: 'native', textMeasure: measureAuthoredSlideText,
+    });
+    expect(call).toHaveBeenCalledOnce();
+    const elements = result && 'elements' in result ? result.elements : [];
+    expect(elements).toHaveLength(2);
+    const body = elements.find((element) => element.type === 'text' && element.content.includes(texts[0]!));
+    if (!body || body.type !== 'text') throw new Error('Expected editable grouped lecture text');
+    expect(body.content).toContain('font-size:18px');
+    for (const text of texts) expect(body.content.replace(/<[^>]+>/g, '')).toContain(text);
+    expect(body.top + body.height).toBeLessThanOrEqual(512.5);
+  });
+
   it('measures the complete title and every adopted point at the playback font and compiles editable text', async () => {
     const plan = await buildNativeTextPlacementPlan(outline, points, { measure: measureAuthoredSlideText });
     expect(plan.supported).toBe(true);
@@ -139,6 +252,35 @@ describe('first-response native text placement', () => {
     expect(onFailure).not.toHaveBeenCalled();
     expect(result && 'elements' in result ? result.elements : []).toHaveLength(points.length + 1);
   });
+
+  it('plans text-only comparisons in measured equal-width rows before the first call without replacing the comparison intent', async () => {
+    const comparison = { ...outline, visualIntent: { representation: 'table', observationGoal: '按同一维度逐项比较。' },
+      teachingBrief: { teachingPlan: { presentationContent: texts, visualRelationship: {
+        kind: 'comparison', preferredForm: 'table', readingOrder: points.map((point) => point.id),
+        description: '三个完整定义按同一维度比较。', rationale: '同宽行便于比较。',
+      } } } } as SceneOutline;
+    const plan = await buildNativeTextPlacementPlan(comparison, points, { measure: measureAuthoredSlideText });
+    expect(plan).toMatchObject({ supported: true, comparisonRows: true });
+    expect(plan.defaultCandidateId).toContain('-24-1col-');
+    expect(plan.candidates.every((candidate) => !candidate.connectors.length
+      && candidate.placements.slice(1).every((placement) => placement.width === 900 && placement.left === 50))).toBe(true);
+    const ai = vi.fn(async (system: string, user: string) => {
+      expect(system).toContain('aligned, equal-width rows');
+      expect(user).toContain('Required measured placement for this first response');
+      expect(user).toContain('"representation": "table"');
+      expect(system).toContain('Do not invent new column headings');
+      return JSON.stringify(response(plan.candidates[0]!));
+    });
+    const onFailure = vi.fn();
+    const result = await generateOpenMaicBaselineContent(comparison, ai, {
+      componentAuthoring: true, slideAuthoring: 'native', textMeasure: measureAuthoredSlideText, onFailure,
+    });
+    expect(ai).toHaveBeenCalledOnce();
+    expect(onFailure).not.toHaveBeenCalled();
+    const displayed = result && 'elements' in result ? result.elements
+      .filter((element) => element.type === 'text').map((element) => element.content.replace(/<[^>]+>/g, '')) : [];
+    expect(displayed).toEqual([comparison.title, ...texts]);
+  });
 });
 
 // Saved first response, not a repaired/re-authored slide. This fixture captures
@@ -176,10 +318,13 @@ describe('saved text-relationship first-input conflict', () => {
         .toBeGreaterThan(user.lastIndexOf('用文字分组列出三个概念的定义，并用箭头表示从理论到模式到方法的关系。'));
       return conflict.response;
     });
-    await expect(generateOpenMaicBaselineContent(conflictOutline, withTeachingSlideGuidance(call, conflictOutline), {
+    const generated = await generateOpenMaicBaselineContent(conflictOutline, withTeachingSlideGuidance(call, conflictOutline), {
       componentAuthoring: true, slideAuthoring: 'native', textMeasure: measureAuthoredSlideText,
       websiteReferenceContext: { courseTitle: '中小学人工智能教育', slideTitles: [conflictOutline.title] },
-    })).rejects.toThrow(conflict.expectedFailure);
+    });
+    expect(generated).toMatchObject({ qualityDiagnostics: expect.arrayContaining([expect.stringContaining(conflict.expectedFailure)]) });
+    expect(generated && 'elements' in generated ? generated.elements.filter((element) => element.type === 'line') : []).toHaveLength(2);
+    for (const point of adoptedPageAuthoringContent(conflictOutline)) expect(JSON.stringify(generated)).toContain(point.text);
     expect(call).toHaveBeenCalledOnce();
     expect(JSON.stringify(conflictOutline)).toBe(before);
   });

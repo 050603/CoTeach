@@ -80,11 +80,12 @@ export class AudioPlayer {
           if (this.warmupAudio === audio || this.audio !== audio) return;
           this.onEndedCallback?.();
         });
-        if (!await this.warmupIfNeeded(audio, startRatio)) return false;
         try {
+          if (!await this.warmupIfNeeded(audio, startRatio)) return false;
           await audio.play();
           return true;
         } catch (playError) {
+          if (this.audio !== audio) return false;
           this.stop();
           const response = await fetch(audioUrl);
           if (!response.ok) throw playError;
@@ -105,11 +106,12 @@ export class AudioPlayer {
             this.revokeObjectUrl();
             this.onEndedCallback?.();
           });
-          if (!await this.warmupIfNeeded(fallbackAudio, startRatio)) return false;
           try {
+            if (!await this.warmupIfNeeded(fallbackAudio, startRatio)) return false;
             await fallbackAudio.play();
           } catch (retryError) {
-            this.revokeObjectUrl();
+            if (this.audio !== fallbackAudio) return false;
+            this.stop();
             log.error(
               `Retry failed for audioUrl=${audioUrl}; ${await describeAudioBlob(normalizedBlob)}`,
               retryError,
@@ -154,15 +156,15 @@ export class AudioPlayer {
         this.revokeObjectUrl();
         this.onEndedCallback?.();
       });
-      if (!await this.warmupIfNeeded(audio, startRatio)) return false;
-
       // Play. If play() rejects (autoplay policy, decode error, interrupted
       // load) the 'ended' listener never fires, so revoke the blob URL here to
       // avoid leaking it for the lifetime of the document.
       try {
+        if (!await this.warmupIfNeeded(audio, startRatio)) return false;
         await audio.play();
       } catch (playError) {
-        this.revokeObjectUrl();
+        if (this.audio !== audio) return false;
+        this.stop();
         log.error(
           `IndexedDB audio failed for audioId=${audioId}; format=${audioRecord.format}; ${await describeAudioBlob(
             playableBlob,

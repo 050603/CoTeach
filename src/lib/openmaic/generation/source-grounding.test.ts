@@ -26,6 +26,29 @@ const outline: SceneOutline = { id: 'sampling-page', type: 'slide', title: '随�
 };
 
 describe('direct original teaching source', () => {
+  it('keeps an adopted ancestor introduction at its actual source location in the first narration catalog', () => {
+    const original = '分层缓存策略，又称多级缓存策略，它强调按不同缓存层的一致性和回退规则组织数据访问。';
+    const item = sourceEvidence.items[0]!;
+    const parentSource = { ...item.source, sectionId: 'parent', sectionPath: ['缓存策略'], sourceBlockPosition: 10, quote: original };
+    const evidence = { ...sourceEvidence, items: [{ ...item, completeSourceBlocks: [
+      { sourceBlockId: 'parent-intro', content: original, source: parentSource },
+      { sourceBlockId: 'stale-intro', content: '另一版本的错误引言。',
+        source: { ...parentSource, revisionId: 'other-version' } },
+    ] }] };
+    const page = { ...outline, teachingBrief: { ...outline.teachingBrief!, evidence: [{ sourceId: 'book', quote: original }] } };
+    const sources = pageOriginalTeachingSources(page, { sourceEvidence: evidence,
+      sourceKnowledgePoints: [{ id: 'lesson-sampling', evidenceItemIds: [item.id] }] });
+    expect(sources.originalSources[0]!.passages[0]).toEqual({ sourceBlockId: 'parent-intro', text: original, source: parentSource });
+    expect(sources.originalSources[0]!.sectionPath).toEqual(item.source.sectionPath);
+    expect(sources.authoritativeAnchors.find((anchor) => anchor.sourceDefinitionKey)?.text).toBe(original);
+    const catalog = buildAuthoringSourceCatalog(new Map([[page.id, sources]]));
+    expect(JSON.stringify(catalog.catalog)).toContain('"sectionId":"parent"');
+    expect(JSON.stringify(catalog.catalog).split(original)).toHaveLength(2);
+    expect(JSON.stringify(catalog.catalog)).not.toContain('另一版本的错误引言');
+    expect(catalog.catalog.texts[catalog.pages.get(page.id)!.authoritativeAnchors
+      .find((anchor) => anchor.id === 'source-definition-1')!.textRef]).toBe(original);
+  });
+
   it('uses current lesson evidence ownership to recover the unchanged original passage', () => {
     const sources = pageOriginalTeachingSources(outline, { sourceEvidence,
       sourceKnowledgePoints: [{ id: 'lesson-sampling', evidenceItemIds: ['sampling-original'] }] });
@@ -212,6 +235,7 @@ describe('verified original definition slots', () => {
     '所谓任务,即是将课程的知识与技能融入其中,它通常源自于真实情境。',
     '随机抽样指的是总体中的个体具有明确被抽取机会的抽样方法。',
     '教学支架被定义为帮助学生完成暂时不能独立完成任务的支持。',
+    '分层缓存策略，又称多级缓存策略，它强调按不同缓存层的一致性和回退规则组织数据访问。',
     '在抛锚式教学法中,“锚”指的是教师为学生构建的真实而复杂的问题情境。',
   ])('requires an unchanged, adopted original definition sentence: %s', (sentence) => {
     const { page, input } = verified(sentence);
@@ -262,7 +286,7 @@ describe('verified original definition slots', () => {
     expect(pageOriginalTeachingSources(page, {}).authoritativeAnchors).toEqual([{ id: 'source-quote-1', text: sentence }]);
   });
 
-  it('uses only primary verified definitions while keeping secondary source quotes available for selective comparison', () => {
+  it('makes both actually adopted verified definitions available for selective comparison', () => {
     const primary = '随机抽样是指每个个体具有明确被抽取机会的抽样方法。';
     const secondary = '随机抽样是指通过随机规则选择研究对象的一种抽样方法。';
     const { page, input } = verified(primary);
@@ -276,14 +300,15 @@ describe('verified original definition slots', () => {
       sourceKnowledgePoints: [{ id: 'lesson-sampling', evidenceItemIds: [other.id, original.id] }],
     });
     expect(sources.authoritativeAnchors.filter((anchor) => anchor.sourceDefinitionKey)).toEqual([
-      { id: 'source-definition-1', text: primary, sourceDefinitionKey: JSON.stringify(['book-v1', primary]) },
+      { id: 'source-definition-1', text: secondary, sourceDefinitionKey: JSON.stringify(['other-book-v1', secondary]) },
+      { id: 'source-definition-2', text: primary, sourceDefinitionKey: JSON.stringify(['book-v1', primary]) },
     ]);
     expect(sources.originalQuotes).toEqual([secondary, primary]);
     expect(sources.originalSources.map((source) => source.evidenceId)).toEqual([original.id, other.id]);
     expect(sources.authoritativeAnchors.find((anchor) => anchor.id === 'source-quote-1')?.text).toBe(secondary);
   });
 
-  it('does not promote a secondary definition when adopted primary passages are available but have no quoted definition', () => {
+  it('retains an actually adopted secondary definition when primary passages contain no quoted definition', () => {
     const sentence = '随机抽样是指通过随机规则选择研究对象的一种抽样方法。';
     const { page, input } = verified(sentence, 'secondary-v1');
     const primary = sourceEvidence.items[0]!;
@@ -292,7 +317,9 @@ describe('verified original definition slots', () => {
       sourceKnowledgePoints: [{ id: 'lesson-sampling', evidenceItemIds: ['sampling-original', 'primary-evidence'] }],
     });
     expect(sources.originalQuotes).toEqual([sentence]);
-    expect(sources.authoritativeAnchors.some((anchor) => anchor.sourceDefinitionKey)).toBe(false);
+    expect(sources.authoritativeAnchors.filter((anchor) => anchor.sourceDefinitionKey)).toEqual([
+      { id: 'source-definition-1', text: sentence, sourceDefinitionKey: JSON.stringify(['secondary-v1', sentence]) },
+    ]);
   });
 
   it('deduplicates the same original definition across evidence and pages without mixing different adopted book revisions', () => {

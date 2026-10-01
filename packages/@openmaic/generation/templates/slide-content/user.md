@@ -43,7 +43,7 @@ Based on the scene information above, generate a complete Canvas/PPT component f
 {{/if}}
 5. All TextElement `height` values must be selected from the quick reference table in the system prompt
 6. Unless a current explicit edit instruction asks to change it, render `{{title}}` verbatim as the visible primary heading; only line wrapping is allowed
-7. When Key Points first define a concept, display its complete basic meaning on this page. A term name plus the question it answers is insufficient when the supplied definition also specifies what the concept is and how it works. Preserve the defining distinction for every introduced concept; organize longer statements into readable labeled lines and give them space before adding a duplicate diagram or a learner prompt.
+7. Present the selected core meaning and distinguishing relationships of the Key Points, using short labeled statements, aligned comparison dimensions or a clear native relationship. Teaching a concept does not require displaying its complete spoken definition, supporting basis or explanation. Preserve the accuracy of the condensed claim and every necessary visible formula, flow label, comparison object or case condition. Do not replace meaning with isolated terms, and do not expand the adopted display catalog with full source passages or narration. Show a complete formal definition only when this page explicitly requires inspection of that wording.
 
 Choose the page's native element types from the teaching need. Do not copy a fixed title-plus-bullets composition. Return one object with `background` and `elements`, using only the element contracts enabled in the system prompt.
 

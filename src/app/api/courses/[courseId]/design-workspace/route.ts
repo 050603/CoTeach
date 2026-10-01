@@ -205,6 +205,13 @@ function blueprintFrom(value: unknown, course: Course, figures: readonly CourseT
   }
   const knownPointIds = new Set(course.content.knowledgePoints.map((point) => point.id));
   for (const section of blueprint.sections) {
+    if (!Array.isArray(section.units) || !section.units.length || !Array.isArray(section.pages) || !section.pages.length
+      || !Array.isArray(section.knowledgePointIds)) throw new WorkspaceInputError('教学蓝图缺少可执行的讲授单元或页面。');
+    if (section.units.some((unit) => !unit.id?.trim() || !Array.isArray(unit.knowledgePointIds))
+      || section.pages.some((page) => !page.id?.trim() || !page.title?.trim()
+        || !Array.isArray(page.unitIds) || !Array.isArray(page.knowledgePointIds) || !Array.isArray(page.keyPoints))) {
+      throw new WorkspaceInputError('教学蓝图的页面身份或正文格式无效。');
+    }
     const unitIds = new Set(section.units.map((unit) => unit.id));
     const referencedKnowledge = [
       ...section.knowledgePointIds,
@@ -218,26 +225,23 @@ function blueprintFrom(value: unknown, course: Course, figures: readonly CourseT
       throw new WorkspaceInputError(`小节“${section.title}”的页面引用了不存在的讲授单元。`);
     }
   }
-  let boundBlueprint: TeachingBlueprint;
-  try {
-    boundBlueprint = bindRequiredTextbookFiguresToBlueprint(blueprint, figures, sourceSequences);
-  } catch (error) {
-    throw new WorkspaceInputError(error instanceof Error ? error.message : "教材完整步骤校验失败");
-  }
+  const boundBlueprint = bindRequiredTextbookFiguresToBlueprint(blueprint, figures, sourceSequences);
+  const qualityDiagnostics = [...(boundBlueprint.qualityDiagnostics ?? [])];
   const sequenceIssues = findBlueprintFigureSequenceIssues(boundBlueprint, [
     ...figures.map((figure) => ({ resourceId: figure.id, required: figure.required,
       knowledgePointIds: figure.knowledgePointIds, orderedSteps: figure.orderedSteps })), ...sourceSequences,
   ]);
-  if (sequenceIssues.length) throw new WorkspaceInputError(sequenceIssues.slice(0, 5)
-    .map((issue) => `教材步骤不完整：${issue.detail}`).join("；"));
+  qualityDiagnostics.push(...sequenceIssues.map((issue) => `教材步骤待核对 [${issue.pageId}]：${issue.detail}`));
   const outlines = teachingBlueprintToOutlines(boundBlueprint, ZH_CN_COURSE_LANGUAGE_DIRECTIVE);
   try {
     assertSourceSequencesInOutlines(outlines, sourceSequences, figures);
   } catch (error) {
-    throw new WorkspaceInputError(error instanceof Error ? error.message : "教材完整步骤校验失败");
+    if (!(error instanceof Error) || !error.message.startsWith('教材完整步骤 ')) throw error;
+    qualityDiagnostics.push(error.message);
   }
   const issues = validateTeachingBlueprintBudget(boundBlueprint, outlines);
-  if (issues.length) throw new WorkspaceInputError(issues.slice(0, 5).join("；"));
+  qualityDiagnostics.push(...issues);
+  if (qualityDiagnostics.length) boundBlueprint.qualityDiagnostics = [...new Set(qualityDiagnostics)];
   return { blueprint: boundBlueprint, outlines };
 }
 
@@ -523,9 +527,6 @@ async function adoptClassroomCandidate(
   });
   const missingOriginals = audit.issues.filter((issue) =>
     issue.id.startsWith("media:source-image:") || issue.id.startsWith("content:source-sequence:"));
-  if (missingOriginals.length) {
-    throw new WorkspaceInputError("候选课堂缺少必用教材原图，原课堂保持不变，请重新生成。", "CANDIDATE_SOURCE_IMAGE_MISSING", 409);
-  }
   const persisted = await updatePersistedClassroomForEditing(
     candidate.classroomId,
     { stage: base.stage, scenes: mergedScenes },
@@ -557,6 +558,12 @@ async function adoptClassroomCandidate(
         teacherReview: undefined,
         renderReview: undefined,
         qualityReview: undefined,
+        ...(current.content.teachingBlueprint && missingOriginals.length ? {
+          teachingBlueprint: { ...current.content.teachingBlueprint, qualityDiagnostics: [...new Set([
+            ...(current.content.teachingBlueprint.qualityDiagnostics ?? []),
+            ...missingOriginals.map((issue) => `${issue.title}：${issue.detail}`),
+          ])] },
+        } : {}),
         teachingTimingAudit: timingAudit,
         teachingRevisionState: undefined,
         teacherReviewItems: reviewItems,

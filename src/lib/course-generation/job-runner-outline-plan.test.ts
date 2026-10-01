@@ -50,6 +50,31 @@ function courseContent(): CourseContent {
 }
 
 describe('persisting versioned section plans into course content', () => {
+  it('synchronizes the actual new display provenance instead of inheriting items from a source page', () => {
+    const content = courseContent();
+    content.teachingBlueprint!.sections[0]!.pages[0]!.presentationItems = [
+      { text: '旧页完整句', nodeIds: ['node-0'], role: 'key-point' },
+    ];
+    const original = structuredClone(content);
+    const replanned = after.map((outline): SceneOutline => !outline.teachingBrief?.teachingPlan ? outline : {
+      ...outline, teachingBrief: { ...outline.teachingBrief, teachingPlan: {
+        ...outline.teachingBrief.teachingPlan, presentationItems: [
+          { text: outline.keyPoints[0]!, nodeIds: [...outline.teachingBrief.teachingPlan.introduces!], role: 'comparison' },
+        ],
+      } },
+    });
+    const updated = applyVersionedOutlinePlanToCourseContent(content, replanned);
+    updated.teachingBlueprint!.sections[0]!.pages.forEach((page, index) => {
+      expect(page.presentationItems).toEqual(replanned[index]!.teachingBrief!.teachingPlan!.presentationItems);
+      expect(page.presentationItems![0]!.text).toBe(page.keyPoints[0]);
+      expect(page.presentationItems).not.toBe(replanned[index]!.teachingBrief!.teachingPlan!.presentationItems);
+    });
+    expect(content).toEqual(original);
+    expect(applyVersionedOutlinePlanToCourseContent(updated, replanned)).toEqual(updated);
+    expect(applyVersionedOutlinePlanToCourseContent(content, after).teachingBlueprint!.sections[0]!.pages[0]!.presentationItems)
+      .toBeUndefined();
+  });
+
   it('leaves all teacher-confirmed content untouched when no version is supplied', () => {
     const content = courseContent();
     expect(applyVersionedOutlinePlanToCourseContent(content, before.map((outline) => ({ ...outline, title: '不同标题' }))))
@@ -87,12 +112,18 @@ describe('persisting versioned section plans into course content', () => {
       .toBe(content._openmaicSceneOutlines?.[3]);
   });
 
-  it('rejects incomplete, foreign, or unowned blueprint plans without mutating the adopted course', () => {
+  it('retains timing diagnostics while rejecting foreign or unowned source identities without mutating the adopted course', () => {
     const content = courseContent();
     const original = structuredClone(content);
-    expect(() => applyVersionedOutlinePlanToCourseContent(content, after.slice(0, 1))).toThrow('来源或时长不完整');
+    const timingDifference = after.map((outline, index) => index ? outline : {
+      ...outline, targetDurationSec: outline.targetDurationSec! + 1,
+    });
+    const retained = applyVersionedOutlinePlanToCourseContent(content, timingDifference);
+    expect(retained.teachingBlueprint?.qualityDiagnostics?.join('\n')).toContain('实际重规划时长');
+    expect(retained._openmaicSceneOutlines?.[0]?.targetDurationSec).toBe(after[0]!.targetDurationSec! + 1);
+    expect(() => applyVersionedOutlinePlanToCourseContent(content, after.slice(0, 1))).toThrow('来源不完整');
     expect(() => applyVersionedOutlinePlanToCourseContent(content,
-      [{ ...after[0]!, sourcePageIds: ['a', 'other'] }, ...after.slice(1)])).toThrow('来源或时长不完整');
+      [{ ...after[0]!, sourcePageIds: ['a', 'other'] }, ...after.slice(1)])).toThrow('来源不完整');
     expect(() => applyVersionedOutlinePlanToCourseContent(content,
       after.map((outline) => ({ ...outline, lectureSectionId: 'new-section' })))).toThrow('已确认的教学蓝图小节');
     const missingBlueprint = { ...content, teachingBlueprint: { ...content.teachingBlueprint!,
@@ -125,6 +156,47 @@ describe('persisting versioned section plans into course content', () => {
       kind: 'none', imageWouldHelp: false, reason: expect.stringContaining('重新分配 1'),
     });
     expect(updated.teachingBlueprint?.sections[0]?.pages[1]?.caseObservation).toEqual(observation);
-    expect(() => applyVersionedOutlinePlanToCourseContent(content, after)).toThrow('案例观察配图未完整保留');
+    const missingImage = applyVersionedOutlinePlanToCourseContent(content, after);
+    expect(missingImage.teachingBlueprint?.qualityDiagnostics?.join('\n')).toContain('案例观察配图未完整保留');
+    expect(missingImage.teachingBlueprint?.sections[0]?.pages[0]?.caseObservation).toEqual(observation);
+    expect(missingImage.teachingBlueprint?.sections[0]?.pages[0]?.caseObservation?.reason).not.toContain('完整保留于');
+  });
+
+  it('preserves the actual image observation after a preceding no-image source page across repeated synchronization', () => {
+    const content = courseContent();
+    content.teachingBlueprint!.sections[0]!.pages[0]!.caseObservation = {
+      kind: 'none', imageWouldHelp: false, observableDifference: '', reason: '仅讲定义。',
+    };
+    const observation = { kind: 'source-image' as const, imageWouldHelp: true, resourceIds: ['figure'],
+      observableDifference: '三个环节按真实顺序连接，最后一条箭头回到第一个环节。', reason: '观察完整循环。' };
+    content.teachingBlueprint!.sections[0]!.pages[1]!.caseObservation = observation;
+    const paginated = after.map((outline, index): SceneOutline => index === 1 ? { ...outline,
+      visualIntent: { representation: 'mixed', observationGoal: observation.observableDifference,
+        resourceRefs: [{ resourceId: 'figure', kind: 'source-image', reason: '循环关系', required: true }] },
+    } : outline);
+    const updated = applyVersionedOutlinePlanToCourseContent(content, paginated);
+    expect(updated.teachingBlueprint!.sections[0]!.pages[1]!.caseObservation).toEqual(observation);
+    expect(updated.teachingBlueprint!.sections[0]!.pages[0]!.caseObservation!.kind).toBe('none');
+    expect(applyVersionedOutlinePlanToCourseContent(updated, paginated)).toEqual(updated);
+    expect(updated.teachingBlueprint!.sections[0]!.units).toBe(content.teachingBlueprint!.sections[0]!.units);
+  });
+
+  it('preserves different generated-image observations using their actual original media identities', () => {
+    const content = courseContent();
+    const observations = ['三角形具有三条边。', '四边形具有四条边。'].map((observableDifference) => ({
+      kind: 'generated-image' as const, imageWouldHelp: true, observableDifference, reason: '比较真实形状。',
+    }));
+    content.teachingBlueprint!.sections[0]!.pages.forEach((page, index) => { page.caseObservation = observations[index]; });
+    content._openmaicSceneOutlines = content._openmaicSceneOutlines!.map((outline, index) => index < 2 ? { ...outline,
+      visualIntent: { representation: 'generated-image' as const, observationGoal: observations[index]!.observableDifference,
+        resourceRefs: [{ resourceId: `shape-${index}`, kind: 'generated-image' as const, required: true, reason: '观察形状' }] },
+    } : outline);
+    const paginated = after.map((outline, index): SceneOutline => index < 2 ? { ...outline,
+      visualIntent: { representation: 'mixed', observationGoal: observations[1 - index]!.observableDifference,
+        resourceRefs: [{ resourceId: `shape-${1 - index}`, kind: 'generated-image', required: true, reason: '观察形状' }] },
+    } : outline);
+    const updated = applyVersionedOutlinePlanToCourseContent(content, paginated);
+    expect(updated.teachingBlueprint!.sections[0]!.pages.map((page) => page.caseObservation)).toEqual([...observations].reverse());
+    expect(applyVersionedOutlinePlanToCourseContent(updated, paginated)).toEqual(updated);
   });
 });

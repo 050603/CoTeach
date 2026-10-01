@@ -49,9 +49,86 @@ function retrievalBlockIds(metadata: unknown, firstId?: string): string[] {
   ])];
 }
 
+/** Add direct parent prose to an authoring view without changing adopted IDs. */
+async function hydrateAncestorIntroductions(
+  items: readonly CourseEvidenceItem[],
+  idsByItem: ReadonlyMap<string, readonly string[]>,
+  blockById: ReadonlyMap<string, {
+    id: string; revisionId: string; sectionId: string; position: number;
+  }>,
+): Promise<CourseEvidenceItem[]> {
+  const adoptedBlocks = (item: CourseEvidenceItem) => (idsByItem.get(item.id) ?? [])
+    .flatMap((id) => {
+      const block = blockById.get(id);
+      return block && block.revisionId === item.source.revisionId && block.sectionId
+        && (!item.source.sectionId || block.sectionId === item.source.sectionId) ? [block] : [];
+    });
+  const revisionIds = [...new Set(items.flatMap(adoptedBlocks).map((block) => block.revisionId))];
+  if (!revisionIds.length) return [...items];
+  const sections = await prisma.textbookSection.findMany({
+    where: { revisionId: { in: revisionIds } },
+    select: { id: true, revisionId: true, parentId: true, title: true, path: true,
+      kind: true, level: true, position: true },
+  });
+  const sectionsById = new Map(sections.map((section) => [section.id, section]));
+  const scopeByItem = new Map(items.map((item) => {
+    const scopes = adoptedBlocks(item).flatMap((block) => {
+      const section = sectionsById.get(block.sectionId);
+      const parent = section?.parentId ? sectionsById.get(section.parentId) : undefined;
+      if (!section || !parent || section.revisionId !== item.source.revisionId
+        || parent.revisionId !== section.revisionId || parent.position >= section.position) return [];
+      const firstChildPosition = Math.min(...sections.filter((child) => child.parentId === parent.id
+        && child.revisionId === parent.revisionId).map((child) => child.position));
+      if (!Number.isFinite(firstChildPosition) || firstChildPosition <= parent.position) return [];
+      return [{ revisionId: parent.revisionId, sectionId: parent.id,
+        position: { gt: parent.position, lt: firstChildPosition } }];
+    });
+    return [item.id, [...new Map(scopes.map((scope) => [scope.sectionId, scope])).values()]] as const;
+  }));
+  const scopes = [...new Map([...scopeByItem.values()].flat().map((scope) => [scope.sectionId, scope])).values()];
+  if (!scopes.length) return [...items];
+  const introductions = await prisma.textbookSourceBlock.findMany({
+    where: { OR: scopes, blockType: "PARAGRAPH" }, orderBy: { position: "asc" },
+    select: { id: true, revisionId: true, sectionId: true, position: true, blockType: true, content: true },
+  });
+  return items.map((item) => {
+    const representedText = [item.content, item.source.quote ?? "",
+      ...(item.completeSourceBlocks ?? []).map((block) => block.content)].map(normalizeTextbookText);
+    const representedIds = new Set((item.completeSourceBlocks ?? []).map((block) => block.sourceBlockId));
+    const additions = introductions.flatMap((block) => {
+      const scope = scopeByItem.get(item.id)?.find((candidate) => candidate.revisionId === block.revisionId
+        && candidate.sectionId === block.sectionId && block.position > candidate.position.gt
+        && block.position < candidate.position.lt);
+      const content = normalizeTextbookText(block.content);
+      if (!scope || block.blockType !== "PARAGRAPH" || !content || representedIds.has(block.id)
+        || representedText.some((text) => text.includes(content))) return [];
+      const section = sectionsById.get(scope.sectionId)!;
+      const hierarchy: NonNullable<CourseEvidenceItem["source"]["sectionHierarchy"]> = [];
+      const visited = new Set<string>();
+      let ancestor: typeof section | undefined = section;
+      while (ancestor && ancestor.revisionId === scope.revisionId && !visited.has(ancestor.id)) {
+        visited.add(ancestor.id);
+        hierarchy.unshift({ id: ancestor.id, title: ancestor.title, kind: ancestor.kind, level: ancestor.level });
+        ancestor = ancestor.parentId ? sectionsById.get(ancestor.parentId) : undefined;
+      }
+      representedIds.add(block.id);
+      representedText.push(content);
+      return [{ sourceBlockId: block.id, content: block.content,
+        source: { textbookId: item.source.textbookId, textbookTitle: item.source.textbookTitle,
+          revisionId: scope.revisionId, revisionVersion: item.source.revisionVersion,
+          sectionId: section.id, sectionPath: sectionPath(section.path, section.title),
+          sectionHierarchy: hierarchy, sectionPosition: section.position,
+          sourceBlockId: block.id, sourceBlockPosition: block.position, quote: block.content } }];
+    });
+    return additions.length ? { ...item,
+      completeSourceBlocks: [...additions, ...(item.completeSourceBlocks ?? [])] } : item;
+  });
+}
+
 /** Recover figure links from all blocks of the adopted retrieval chunks. */
 export async function hydrateCourseEvidenceFigureReferences(
   items: readonly CourseEvidenceItem[],
+  options: { includeAncestorIntroductions?: boolean } = {},
 ): Promise<CourseEvidenceItem[]> {
   const missingChunkIds = items.filter((item) => !item.source?.sourceBlockIds?.length && item.source?.revisionId && item.id)
     .map((item) => item.id);
@@ -91,7 +168,7 @@ export async function hydrateCourseEvidenceFigureReferences(
     const sectionIds = [...new Set(blockIds.map((id) => blockById.get(id))
       .filter((block) => block?.revisionId === item.source?.revisionId)
       .map((block) => block?.sectionId).filter((id): id is string => typeof id === "string"))];
-    const completeSourceBlocks = item.kind === "source-block"
+    const omittedSourceBlocks = item.kind === "source-block"
       ? blockIds.map((id) => blockById.get(id))
         .filter((block): block is NonNullable<typeof block> => block !== undefined
           && block.revisionId === item.source?.revisionId
@@ -101,6 +178,11 @@ export async function hydrateCourseEvidenceFigureReferences(
           .includes(normalizeTextbookText(block.content)))
         .map((block) => ({ sourceBlockId: block.id, content: block.content }))
       : [];
+    const completeSourceBlocks = options.includeAncestorIntroductions
+      ? [...new Map((item.completeSourceBlocks ?? []).map((block) => [block.sourceBlockId, block])).values(),
+        ...omittedSourceBlocks.filter((block) => !item.completeSourceBlocks
+          ?.some((existing) => existing.sourceBlockId === block.sourceBlockId))]
+      : omittedSourceBlocks;
     return {
       ...item,
       source: { ...item.source, ...(blockIds.length ? { sourceBlockIds: blockIds } : {}),
@@ -166,7 +248,7 @@ export async function hydrateCourseEvidenceFigureReferences(
     // Keep its previous evidence and leave it eligible for a later hydration.
     return blocks.length ? [[key, extractOrderedSourceSequences(blocks)] as const] : [];
   }));
-  return withFigureSequences.map((item) => {
+  const hydrated = withFigureSequences.map((item) => {
     const key = `${item.source.revisionId}:${item.source.sectionId ?? ""}`;
     if (!needsSourceSequences(item) || !sequencesByScope.has(key)) return item;
     const adoptedIds = new Set(idsByItem.get(item.id) ?? []);
@@ -183,6 +265,8 @@ export async function hydrateCourseEvidenceFigureReferences(
     return { ...item, sourceSequences, sourceSequencesResolved: true,
       sourceSequencePolicyVersion: SOURCE_SEQUENCE_POLICY_VERSION };
   });
+  return options.includeAncestorIntroductions
+    ? hydrateAncestorIntroductions(hydrated, idsByItem, blockById) : hydrated;
 }
 
 function supportStatus(point: ResourcePackageTeachingPoint, item: CourseEvidenceItem | undefined): CourseEvidenceMapping["status"] {

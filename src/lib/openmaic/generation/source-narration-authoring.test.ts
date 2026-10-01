@@ -11,6 +11,27 @@ const anchors = new Map([
 ]);
 
 describe('original-source narration authoring', () => {
+  it('retains usable authored speech and quotes with source-quality diagnostics', () => {
+    const diagnostics: Array<{ pageId?: string; message: string }> = [];
+    const authored = { pageId: 'page-1', segments: [
+      { text: '保留模型真实编写的解释和例子。', textParts: [{ sourceRef: 'unknown-source' }] },
+      { textParts: [{ sourceRef: 'source-list-1-item-2', quote: '任务需要依据学习者能力调整。' }] },
+    ] };
+    const resolved = resolveNarrationSourceParts(authored, anchors, undefined, {
+      qualityReviewMode: 'diagnostic', onDiagnostic: (message, pageId) => { diagnostics.push({ message, pageId }); },
+    }) as { segments: Array<{ text: string }> };
+    expect(resolved.segments.map((segment) => segment.text)).toEqual([
+      '保留模型真实编写的解释和例子。', '任务需要依据学习者能力调整。',
+    ]);
+    expect(diagnostics).toHaveLength(2);
+    expect(diagnostics.every((diagnostic) => diagnostic.pageId === 'page-1')).toBe(true);
+    expect(diagnostics[0].message).toContain('unknown source reference');
+    expect(diagnostics[1].message).toContain('selected quote differs');
+    expect(() => resolveNarrationSourceParts({ pageId: 'page-1', segments: [{
+      textParts: [{ sourceRef: 'unknown-source' }],
+    }] }, anchors, undefined, { qualityReviewMode: 'diagnostic' })).toThrow('unknown source reference');
+  });
+
   it('accepts a redundant text field only when it exactly equals the authoritative textParts expansion', () => {
     const authored = { pageId: 'page-1', segments: [{ text: `${source2}原有案例推理保持完整。`,
       textParts: [{ sourceRef: 'source-list-1-item-2' }, { text: '原有案例推理保持完整。' }] }] };
@@ -22,7 +43,7 @@ describe('original-source narration authoring', () => {
     expect(() => assertNarrationSourceDuties(authored, duty)).toThrow('missing adopted source references');
   });
 
-  it('still rejects conflicting redundant speech and a shortened canonical claim before granting source duties', () => {
+  it('rejects conflicting speech but retains an exact authored source excerpt for teacher review', () => {
     const duty = [{ text: source2, availableReferences: [{ pageId: 'page-1', sourceRef: 'source-list-1-item-2' }] }];
     const conflicting = { pageId: 'page-1', segments: [{ text: '任务随意难一点也可以。',
       textParts: [{ sourceRef: 'source-list-1-item-2' }] }] };
@@ -30,7 +51,8 @@ describe('original-source narration authoring', () => {
     expect(() => resolveNarrationSourceParts(conflicting, anchors)).toThrow('differs from its authoritative expansion');
     const cropped = { pageId: 'page-1', segments: [{ text: '调整项目任务的复杂程度',
       textParts: [{ sourceRef: 'source-list-1-item-2', quote: '调整项目任务的复杂程度' }] }] };
-    expect(() => assertNarrationSourceDuties(cropped, duty, undefined, anchors)).toThrow('cannot be shortened');
+    expect(() => assertNarrationSourceDuties(cropped, duty, undefined, anchors)).not.toThrow();
+    expect(resolveNarrationSourceParts(cropped, anchors)).toEqual({ pageId: 'page-1', segments: [{ text: '调整项目任务的复杂程度' }] });
   });
 
   it('compiles a first-call source quote inside the authored natural explanation without rewriting its anchors or semantic IDs', () => {
@@ -98,13 +120,13 @@ describe('original-source narration authoring', () => {
     }
   });
 
-  it('rejects cropping a canonical condition even when the remaining words occur in the source', () => {
-    expect(() => resolveNarrationSourceParts({ pageId: 'page-1', segments: [{ textParts: [{
+  it('preserves an unchanged source excerpt without a content-completeness interruption', () => {
+    expect(resolveNarrationSourceParts({ pageId: 'page-1', segments: [{ textParts: [{
       sourceRef: 'source-list-1-item-2', quote: '调整项目任务的复杂程度',
-    }] }] }, anchors)).toThrow('cannot be shortened');
+    }] }] }, anchors)).toEqual({ pageId: 'page-1', segments: [{ text: '调整项目任务的复杂程度' }] });
   });
 
-  it('compiles a verified definition as one complete claim and rejects clipping its defining conditions', () => {
+  it('compiles an authored definition or unchanged defining excerpt without rewriting the surrounding example', () => {
     const definition = '任务驱动式教学法是一种能唤起学生学习热情与探究欲望，并让学生在完成任务时习得知识与技能的教学模式。';
     const scoped = new Map([['page-1', new Map([['source-definition-1', definition]])]]);
     const parts = [{ text: '先说明这种教学法为什么有效。' }, { sourceRef: 'source-definition-1', quote: definition },
@@ -113,9 +135,9 @@ describe('original-source narration authoring', () => {
     expect(resolveNarrationSourceParts(authored, scoped)).toEqual({ pageId: 'page-1', segments: [{
       text: `先说明这种教学法为什么有效。${definition}例如，让学生比较任务方案后解释自己的选择。`,
     }] });
-    expect(() => resolveNarrationSourceParts({ pageId: 'page-1', segments: [{ textParts: [{
+    expect(resolveNarrationSourceParts({ pageId: 'page-1', segments: [{ textParts: [{
       sourceRef: 'source-definition-1', quote: '让学生在完成任务时习得知识与技能',
-    }] }] }, scoped)).toThrow('definition cannot be shortened');
+    }] }] }, scoped)).toEqual({ pageId: 'page-1', segments: [{ text: '让学生在完成任务时习得知识与技能' }] });
     const legacy = { pageId: 'page-1', segments: [{ text: '保持已经验收的自然讲稿。' }] };
     expect(resolveNarrationSourceParts(legacy, scoped)).toBe(legacy);
   });

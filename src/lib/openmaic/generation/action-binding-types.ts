@@ -46,4 +46,6 @@ export interface NarrationSegment {
 export interface NarrationModuleOutput {
   pageId: string;
   segments: NarrationSegment[];
+  /** Teacher-private quality findings; valid spoken text remains executable. */
+  diagnostics?: string[];
 }

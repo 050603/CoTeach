@@ -89,6 +89,7 @@ async function generatedMediaOwners(classroomId: string, database: PlatformDb): 
         { checkpoints: { some: {
           step: 'course-finalization',
           OR: [
+            { state: { path: ['generated', 'id'], equals: classroomId } },
             { state: { path: ['split', 'studentClassroomId'], equals: classroomId } },
             { state: { path: ['split', 'teacherClassroomId'], equals: classroomId } },
           ],

@@ -111,7 +111,7 @@ describe("durable knowledge-structure response recovery", () => {
     expect(run.saved.at(-1)).toMatchObject({ status: 'rejected', rawResponse: '' });
   });
 
-  it("revalidates a rejected saved draft without spending remaining requests", async () => {
+  it("preserves a saved source-list discrepancy for final teacher review without spending another request", async () => {
     const raw = JSON.stringify({ knowledgePoints: [{ id: "kp", name: "设计流程",
       description: "流程有两个步骤：确定目标、设计活动、评价效果。", evidenceItemIds: ["ev"] }],
     knowledgeGraph: { nodes: [], edges: [] } });
@@ -127,11 +127,16 @@ describe("durable knowledge-structure response recovery", () => {
     } };
     const run = harness({ storedCheckpoint: responseCheckpoint(raw), attemptsStarted: 2,
       responses: [correctedRaw], context });
-    await expect(run.run()).rejects.toThrow("教材完整步骤不一致");
+    const result = await run.run();
+    expect(result.generated.knowledgePoints[0]!.description).toBe("流程有两个步骤：确定目标、设计活动、评价效果。");
+    expect(result.generated.knowledgePoints[0]!.sourceSequenceReferences![0]!.orderedSteps).toHaveLength(3);
     expect(run.aiCall).not.toHaveBeenCalled();
     expect(run.getAttemptsStarted()).toBe(2);
-    expect(run.saved[0]).toMatchObject({ status: "rejected", rawResponse: raw });
-    expect(run.saved[0].responseHistory.map((entry) => [entry.attempt, entry.status])).toEqual([[2, "rejected"]]);
+    expect(result.checkpoint).toMatchObject({ status: "validated", rawResponse: raw });
+    expect(result.checkpoint?.responseHistory.map((entry) => [entry.attempt, entry.status, entry.rawResponse]))
+      .toEqual([[2, "validated", raw]]);
+    expect(run.saveCheckpoint).not.toHaveBeenCalled();
+    expect(run.setOutputPhase.mock.calls.some(([status]) => status === "correcting-output")).toBe(false);
   });
 
   it("restores old single-response checkpoints using their already persisted request count", async () => {

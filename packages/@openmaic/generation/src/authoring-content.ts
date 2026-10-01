@@ -11,6 +11,8 @@ export interface AuthoringContentItem {
 export interface AuthoringContentReference {
   contentRef?: string;
   paragraphRefs?: string[];
+  /** Native slots can style literal substrings without rewriting adopted text. */
+  emphasis?: Array<string | { text: string; color?: string; bold?: boolean }>;
 }
 
 /** A measured plain native-text rectangle; mixed rich typography is measured separately. */
@@ -61,19 +63,66 @@ function escapeHtml(text: string): string {
   return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 }
 
+
+type Emphasis = { text: string; color?: string; bold?: boolean };
+const HEX_COLOR = /^#(?:[\da-f]{3}|[\da-f]{4}|[\da-f]{6}|[\da-f]{8})$/i;
+
+/** Emphasis can style an adopted substring but cannot change its wording. */
+function takeEmphasis(slot: RecordValue, texts: readonly string[], onDiagnostic?: (detail: string) => void): Emphasis[] {
+  const value = slot.emphasis;
+  delete slot.emphasis;
+  if (value === undefined) return [];
+  const entries = Array.isArray(value) ? value.map((item) => typeof item === 'string' ? { text: item } : item) : undefined;
+  if (!entries || entries.some((item) => !record(item) || typeof item.text !== 'string' || !item.text.trim()
+    || !texts.some((text) => text.includes(item.text as string))
+    || (item.color !== undefined && (typeof item.color !== 'string' || !HEX_COLOR.test(item.color)))
+    || (item.bold !== undefined && typeof item.bold !== 'boolean'))) {
+    if (!onDiagnostic) throw new AuthoringContentError('emphasis must select literal substrings of the referenced content with safe hex colors and boolean bold');
+    onDiagnostic('Authoring content: invalid emphasis was ignored without changing the referenced text');
+    return [];
+  }
+  return [...new Map((entries as Emphasis[]).map((item) => [item.text, item])).values()]
+    .sort((a, b) => b.text.length - a.text.length);
+}
+
+function emphasizedHtml(text: string, emphasis: readonly Emphasis[]): string {
+  if (!emphasis.length) return escapeHtml(text);
+  let output = '', offset = 0;
+  while (offset < text.length) {
+    const matches = emphasis.map((item) => ({ item, index: text.indexOf(item.text, offset) }))
+      .filter((match) => match.index >= 0).sort((a, b) => a.index - b.index || b.item.text.length - a.item.text.length);
+    const next = matches[0];
+    if (!next) return output + escapeHtml(text.slice(offset));
+    const { color, bold } = next.item;
+    const word = escapeHtml(next.item.text);
+    const styled = color || bold === false
+      ? `<span style="${color ? `color:${color};` : ''}font-weight:${bold === false ? 400 : 700}">${word}</span>`
+      : `<strong>${word}</strong>`;
+    output += escapeHtml(text.slice(offset, next.index)) + styled;
+    offset = next.index + next.item.text.length;
+  }
+  return output;
+}
+
 /** Retain the author's existing enclosing typography, without retaining rewritten prose. */
-function referenceHtml(texts: string[], existing: unknown, tableCell = false): string {
-  const html = texts.map((text) => escapeHtml(text).replace(/\n/g, '<br>')).join('<br><br>');
+function referenceHtml(texts: string[], existing: unknown, tableCell = false, bodyFontSize = 24, emphasis: readonly Emphasis[] = []): string {
+  const html = texts.map((text) => emphasizedHtml(text, emphasis).replace(/\n/g, '<br>')).join('<br><br>');
   const prefix = typeof existing === 'string'
     ? existing.match(/^\s*((?:<(?:p|div|h[1-6]|span|strong|b|em|i|u)\b[^>]*>\s*)+)/i)?.[1] : undefined;
-  if (!prefix) return tableCell ? html : `<p style="font-size:24px">${html}</p>`;
+  if (!prefix) return tableCell ? html : `<p style="font-size:${bodyFontSize}px">${html}</p>`;
   const tags = [...prefix.matchAll(/<(p|div|h[1-6]|span|strong|b|em|i|u)\b[^>]*>/gi)].map((match) => match[1]);
   return `${prefix}${html}${tags.reverse().map((tag) => `</${tag}>`).join('')}`;
 }
 
 /** Bind only real display slots, before any font measurement. Never append omitted content. */
-export function resolveAuthoringContent<T>(authored: T, items: readonly AuthoringContentItem[]): T {
-  validateAuthoringContent(items);
+export function resolveAuthoringContent<T>(authored: T, items: readonly AuthoringContentItem[], typography?: { bodyFontSize: number; titleFontSize?: number }, onDiagnostic?: (detail: string) => void): T {
+  try { validateAuthoringContent(items); }
+  catch (error) {
+    if (!onDiagnostic) throw error;
+    onDiagnostic(error instanceof Error ? error.message : String(error));
+    items = items.filter((item) => record(item) && typeof item.id === 'string' && item.id.trim()
+      && typeof item.text === 'string' && item.text.trim());
+  }
   const catalog = new Map(items.map((item) => [item.id, item.text]));
   const clone = (value: unknown): unknown => Array.isArray(value) ? value.map(clone)
     : record(value) ? Object.fromEntries(Object.entries(value).map(([key, child]) => [key, clone(child)])) : value;
@@ -82,19 +131,28 @@ export function resolveAuthoringContent<T>(authored: T, items: readonly Authorin
     const hasContent = Object.hasOwn(slot, 'contentRef');
     const hasParagraphs = Object.hasOwn(slot, 'paragraphRefs');
     if (!hasContent && !hasParagraphs) return undefined;
-    if (hasContent && hasParagraphs) throw new AuthoringContentError('use contentRef or paragraphRefs, not both');
-    const refs = hasContent ? [slot.contentRef] : slot.paragraphRefs;
-    if (!Array.isArray(refs) || !refs.length || refs.some((ref) => typeof ref !== 'string' || !ref.trim())) {
-      throw new AuthoringContentError('references must contain nonempty catalog ids');
+    if (hasContent && hasParagraphs) {
+      if (!onDiagnostic) throw new AuthoringContentError('use contentRef or paragraphRefs, not both');
+      onDiagnostic('Authoring content: both reference forms were supplied; retaining all resolvable referenced text');
     }
-    const result = refs.map((ref) => {
+    const refs = hasContent && hasParagraphs ? [slot.contentRef, ...(Array.isArray(slot.paragraphRefs) ? slot.paragraphRefs : [])]
+      : hasContent ? [slot.contentRef] : slot.paragraphRefs;
+    if (!Array.isArray(refs) || !refs.length || refs.some((ref) => typeof ref !== 'string' || !ref.trim())) {
+      if (!onDiagnostic) throw new AuthoringContentError('references must contain nonempty catalog ids');
+      onDiagnostic('Authoring content: invalid references; retaining the authored text');
+    }
+    const result = (Array.isArray(refs) ? refs : []).flatMap((ref) => {
       const text = catalog.get(ref as string);
-      if (text === undefined) throw new AuthoringContentError(`unknown content reference ${String(ref)}`);
-      return text;
+      if (text === undefined) {
+        if (!onDiagnostic) throw new AuthoringContentError(`unknown content reference ${String(ref)}`);
+        onDiagnostic(`Authoring content: unknown content reference ${String(ref)}; retaining any available authored text`);
+        return [];
+      }
+      return [text];
     });
     delete slot.contentRef;
     delete slot.paragraphRefs;
-    return result;
+    return result.length ? result : undefined;
   };
   const cell = (value: unknown): unknown => {
     if (!record(value)) return value;
@@ -105,14 +163,14 @@ export function resolveAuthoringContent<T>(authored: T, items: readonly Authorin
     if (!record(value)) return;
     if (value.type === 'text') {
       const resolved = texts(value);
-      if (resolved) value.content = referenceHtml(resolved, value.content);
+      if (resolved) value.content = referenceHtml(resolved, value.content, false, typography?.bodyFontSize, takeEmphasis(value, resolved, onDiagnostic));
     } else if (value.type === 'shape' && record(value.text)) {
       const resolved = texts(value.text);
-      if (resolved) value.text.content = referenceHtml(resolved, value.text.content);
+      if (resolved) value.text.content = referenceHtml(resolved, value.text.content, false, typography?.bodyFontSize, takeEmphasis(value.text, resolved, onDiagnostic));
     } else if (value.type === 'table' && Array.isArray(value.data)) {
       for (const row of value.data) if (Array.isArray(row)) for (const tableCell of row) if (record(tableCell)) {
         const resolved = texts(tableCell);
-        if (resolved) tableCell.text = referenceHtml(resolved, tableCell.text, true);
+        if (resolved) tableCell.text = referenceHtml(resolved, tableCell.text, true, typography?.bodyFontSize, takeEmphasis(tableCell, resolved, onDiagnostic));
       }
     }
   };
@@ -136,7 +194,38 @@ export function resolveAuthoringContent<T>(authored: T, items: readonly Authorin
   };
   if (Array.isArray(data)) data.forEach(block);
   else if (record(data)) {
-    if (Array.isArray(data.components)) data.components.forEach(block);
+    if (Array.isArray(data.components)) {
+      const native: RecordValue[] = [];
+      data.components = data.components.filter((component, index) => {
+        // Rich text belongs in native elements, where the actual HTML is measured.
+        // Flow blocks and standalone plain-component compilation keep their grammar.
+        if (!record(data.layout) && record(component) && component.kind === 'textBox' && component.emphasis !== undefined) {
+          const resolved = texts(component);
+          if (resolved) {
+            const emphasis = takeEmphasis(component, resolved, onDiagnostic);
+            if (emphasis.length) {
+              const fontSize = typeof component.fontSize === 'number' && Number.isFinite(component.fontSize) && component.fontSize > 0
+                ? component.fontSize : component.role === 'title' ? typography?.titleFontSize ?? 34 : typography?.bodyFontSize ?? 24;
+              const color = typeof component.color === 'string' && HEX_COLOR.test(component.color) ? component.color : '#334155';
+              const align = component.align === 'center' || component.align === 'right' ? component.align : 'left';
+              const wrapper = `<p style="font-size:${fontSize}px;color:${color};font-weight:${component.bold ? 700 : 400};text-align:${align}">`;
+              native.push({ id: component.id ?? `adopted-rich-text-${index}`, type: 'text',
+                left: component.left ?? component.x, top: component.top ?? component.y, width: component.width,
+                height: component.height ?? fontSize * 1.5 + 20, rotate: 0,
+                content: referenceHtml(resolved, wrapper, false, fontSize, emphasis),
+                defaultFontName: 'Noto Sans SC', defaultColor: color, lineHeight: 1.5, paragraphSpace: 5,
+                vAlign: 'top', textType: component.role === 'title' ? 'title' : 'content' });
+              return false;
+            }
+            delete component.text;
+            component.paragraphs = resolved;
+          }
+        }
+        block(component);
+        return true;
+      });
+      if (native.length) data.elements = [...(Array.isArray(data.elements) ? data.elements : []), ...native];
+    }
     if (Array.isArray(data.elements)) data.elements.forEach(element);
     if (record(data.layout) && Array.isArray(data.layout.groups)) data.layout.groups.forEach(block);
     if (data.kind || data.type) block(data);
@@ -144,7 +233,12 @@ export function resolveAuthoringContent<T>(authored: T, items: readonly Authorin
   const check = (value: unknown): void => {
     if (Array.isArray(value)) value.forEach(check);
     else if (record(value)) {
-      if (Object.hasOwn(value, 'contentRef') || Object.hasOwn(value, 'paragraphRefs')) throw new AuthoringContentError('references belong in textBox, native text, table cells or labelGrid cells');
+      if (Object.hasOwn(value, 'contentRef') || Object.hasOwn(value, 'paragraphRefs')) {
+        if (!onDiagnostic) throw new AuthoringContentError('references belong in textBox, native text, table cells or labelGrid cells');
+        onDiagnostic('Authoring content: references outside supported text slots were retained only as a quality finding');
+        delete value.contentRef;
+        delete value.paragraphRefs;
+      }
       Object.values(value).forEach(check);
     }
   };

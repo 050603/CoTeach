@@ -48,7 +48,6 @@ import type { TtsScenarioId } from '@openmaic/lib/audio/tts-scenarios';
 import { splitLongSpeechActions } from '@openmaic/lib/audio/tts-utils';
 import { VOXCPM_AUTO_VOICE_ID, VOXCPM_TTS_PROVIDER_ID } from '@openmaic/lib/audio/voxcpm';
 import { throwIfAborted, withGenerationRetry } from '@openmaic/lib/generation/generation-retry';
-import { auditNarrationLanguage } from '@openmaic/lib/generation/course-language';
 import { mapWithConcurrency } from '@openmaic/lib/utils/concurrency';
 import { runWithGlobalTtsProviderSlot } from '@openmaic/lib/server/tts-provider-limiter';
 import { audioDurationSec } from '@openmaic/lib/audio/audio-duration';
@@ -56,6 +55,7 @@ import { normalizePlayableWav } from '@openmaic/lib/audio/wav-container';
 import {
   alignSpeechFile,
   SPEECH_ALIGNMENT_VERSION,
+  SpeechAlignmentError,
 } from '@openmaic/lib/server/speech-alignment';
 import { proxyFetch } from '@openmaic/lib/server/proxy-fetch';
 import {
@@ -797,24 +797,6 @@ export async function generateTTSForClassroom(
     : scenes;
 
   if (eligibleScenes.length === 0) return;
-  const narrationLanguageIssues = eligibleScenes.flatMap((scene) =>
-    auditNarrationLanguage(
-      scene.actions,
-      scene.timingPlan?.language ?? timingOptions.language,
-    ).map((issue) => ({ ...issue, sceneTitle: scene.title, sceneOrder: scene.order })),
-  );
-  if (narrationLanguageIssues.length > 0) {
-    const examples = narrationLanguageIssues
-      .slice(0, 3)
-      .map((issue) => `${issue.sceneOrder + 1}. ${issue.sceneTitle} / ${issue.actionId}`)
-      .join('；');
-    const error = new Error(
-      `检测到 ${narrationLanguageIssues.length} 段讲稿语言与中文课程不一致，已在 TTS 合成前停止：${examples}`,
-    ) as Error & { isRetryable: boolean };
-    error.name = 'ClassroomNarrationLanguageError';
-    error.isRetryable = false;
-    throw error;
-  }
   const audioDir = path.join(CLASSROOMS_DIR, classroomId, 'audio');
   await ensureDir(audioDir);
 
@@ -835,8 +817,7 @@ export async function generateTTSForClassroom(
   }
   if (!eligibleScenes.some((scene) => scene.actions?.some((action) =>
     action.type === 'speech' && action.text.trim() && !action.audioUrl))) {
-    const alignment = await alignClassroomSpeechActions({ scenes: eligibleScenes, classroomId, signal, language: timingOptions.language });
-    if (alignment.failed > 0) throw new Error(`课堂语音仍有 ${alignment.failed} 段未完成讲稿与动作对齐`);
+    await alignClassroomSpeechActions({ scenes: eligibleScenes, classroomId, signal, language: timingOptions.language, failOnTechnicalError: true });
     return;
   }
 
@@ -959,15 +940,13 @@ export async function generateTTSForClassroom(
   });
 
   const failedActionIds = speechTasks.flatMap((task, index) => outcomes[index] ? [] : [task.actionId]);
-  const alignment = await alignClassroomSpeechActions({
+  await alignClassroomSpeechActions({
     scenes: eligibleScenes,
     classroomId,
     signal,
     language: timingOptions.language,
+    failOnTechnicalError: true,
   });
-  if (alignment.failed > 0 && failedActionIds.length === 0) {
-    throw new Error(`课堂语音仍有 ${alignment.failed} 段未完成讲稿与动作对齐`);
-  }
   if (failedActionIds.length > 0) {
     const error = new Error(
       `课堂语音仍有 ${failedActionIds.length} 段未生成：${failedActionIds.join(', ')}`,
@@ -1005,6 +984,8 @@ export async function alignClassroomSpeechActions(input: {
   /** Restrict work to newly generated clips; keys are JSON `[sceneId, actionId]` tuples. */
   actionKeys?: ReadonlySet<string>;
   signal?: AbortSignal;
+  /** Keep invalid timing as a diagnostic; surface actual service/input failures. */
+  failOnTechnicalError?: boolean;
   onProgress?: (progress: SpeechAlignmentProgress) => void | Promise<void>;
 }): Promise<{ aligned: number; failed: number; total: number }> {
   const tasks = input.scenes.flatMap((scene) => (scene.actions ?? []).flatMap((action) => {
@@ -1062,6 +1043,8 @@ export async function alignClassroomSpeechActions(input: {
         actionId: task.action.id,
         status: 'failed',
       });
+      const invalidTiming = error instanceof SpeechAlignmentError && error.code === 'INVALID_SPANS';
+      if (input.failOnTechnicalError && !invalidTiming) throw error;
     }
   }
   return { aligned, failed, total: tasks.length };

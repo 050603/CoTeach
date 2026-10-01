@@ -28,12 +28,13 @@ describe("V2 generation job persistence", () => {
   });
   it.each(['prepared-outlines', 'all'] as const)('archives trusted old classroom origins before %s replacement clears output', async (checkpointPolicy) => {
     mocks.find.mockResolvedValue([{ ...row(), status: 'COMPLETED', result: { id: 'old-test' }, request: { id: 'foreign-injected' } }]);
-    mocks.checkpoint.mockResolvedValue({ state: { split: { studentClassroomId: 'old-test', teacherClassroomId: 'old-test-teacher' } } });
+    mocks.checkpoint.mockResolvedValue({ state: { generated: { id: 'old-synthesis' }, split: { studentClassroomId: 'old-test', teacherClassroomId: 'old-test-teacher' } } });
     await contentGenerationJobs.replace({
       where: { id: 'job', status: 'completed', version: 1 }, checkpointPolicy,
       data: { status: 'queued', result: null },
     });
     expect(mocks.saveCheckpoint.mock.calls.map(([args]) => args.create).filter((saved) => saved.step.startsWith('classroom-media-origin:'))).toEqual([
+      { jobId: 'job', step: 'classroom-media-origin:old-synthesis', state: { classroomId: 'old-synthesis' } },
       { jobId: 'job', step: 'classroom-media-origin:old-test', state: { classroomId: 'old-test' } },
       { jobId: 'job', step: 'classroom-media-origin:old-test-teacher', state: { classroomId: 'old-test-teacher' } },
     ]);

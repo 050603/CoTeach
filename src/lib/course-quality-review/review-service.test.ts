@@ -1,10 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Course } from '@/lib/session/types';
 import type { PersistedClassroomData } from '@/lib/openmaic/server/classroom-storage';
-const mocks = vi.hoisted(() => ({ get: vi.fn(), save: vi.fn(), read: vi.fn(), audit: vi.fn() }));
+const mocks = vi.hoisted(() => ({ get: vi.fn(), save: vi.fn(), read: vi.fn(), audit: vi.fn(), readiness: vi.fn() }));
 vi.mock('@/lib/session/server-store', () => ({ getCourse: mocks.get, updateCourse: mocks.save }));
 vi.mock('@/lib/openmaic/server/classroom-storage', () => ({ readClassroom: mocks.read, isValidClassroomId: (id: string) => /^[\w-]+$/.test(id) }));
-vi.mock('@/lib/classroom/new-system-course', () => ({ getNewSystemCourseReadiness: () => [] }));
+vi.mock('@/lib/classroom/new-system-course', () => ({ getNewSystemCourseReadiness: mocks.readiness }));
 vi.mock('@/lib/course-generation/resource-audit-server', () => ({ auditCourseGeneratedResources: mocks.audit }));
 import { assertCourseTeacherReview, confirmCourseTeacherReview, freshQualityReport, freshRenderReview, saveCourseRenderPage, startCourseRenderReview } from './review-service';
 import { computeCourseQualitySignature } from './signature';
@@ -17,8 +17,13 @@ let classroom: PersistedClassroomData;
 beforeEach(() => {
   mocks.audit.mockReset();
   mocks.audit.mockResolvedValue({ issues: [] });
+  mocks.readiness.mockReturnValue([]);
   vi.stubEnv('JWT_SECRET', 'test-course-review-secret-more-than-thirty-two-characters');
-  classroom = { id: 'classroom', revision: 1, stage: { id: 'stage' }, scenes: [], createdAt: '2026-09-12' } as unknown as PersistedClassroomData;
+  classroom = { id: 'classroom', revision: 1, stage: { id: 'stage' }, scenes: [{
+    id: 'slide', outlineId: 'slide', type: 'slide', title: '核心内容',
+    content: { type: 'slide', canvas: { elements: [{ type: 'text', content: '核心认识' }] } },
+    actions: [{ type: 'speech', text: '解释核心认识及其必要条件。' }],
+  }], createdAt: '2026-09-12' } as unknown as PersistedClassroomData;
   course = { id: 'course', name: '课程', grade: '本科一年级', hours: 2.25, aiLearningClassroomId: 'classroom', content: { qualityReviewRequired: true, knowledgePoints: [], _openmaicSceneOutlines: [] } } as unknown as Course;
   const signature = computeCourseQualitySignature(course, classroom);
   course.content.qualityReview = { schemaVersion: 1, reviewPolicyVersion: COURSE_QUALITY_REVIEW_POLICY_VERSION, runId: 'saved-run', reviewScope: { kind: 'full-course', checkedOutlineIds: [], uncheckedOutlineCount: 0 }, signature, courseId: 'course', classroomId: 'classroom', classroomRevision: 1, status: 'completed', issues: [] };
@@ -76,9 +81,43 @@ describe('teacher confirmation of an exact teaching draft', () => {
       testLesson: { sectionId: 'section-a', sectionTitle: '小节 A', sceneOutlineIds: ['page-a'], durationSeconds: 60 } };
     expect(freshQualityReport(course, signature)).toBeUndefined();
   });
-  it('retains actual required-content errors independently of optional reports', async () => {
+  it('retains required-content diagnostics without blocking confirmation or purchasing another authoring call', async () => {
     course.content.knowledgePoints = [{ id: 'required', name: '必需知识' }] as Course['content']['knowledgePoints'];
-    await expect(confirmCourseTeacherReview('course', 'teacher', computeCourseQualitySignature(course, classroom), [])).rejects.toThrow('课程体系知识节点缺少讲授页面');
+    const before = JSON.stringify(classroom);
+    await expect(confirmCourseTeacherReview('course', 'teacher', computeCourseQualitySignature(course, classroom), [])).resolves.toBeTruthy();
+    expect(course.content.qualityReview?.issues).toContainEqual(expect.objectContaining({
+      title: '课程体系知识节点缺少讲授页面', blocking: false, evidence: '必需知识',
+    }));
+    expect(JSON.stringify(classroom)).toBe(before);
+    await expect(assertCourseTeacherReview(course, 'teacher')).resolves.toBeUndefined();
+  });
+  it('keeps source-image and source-content quality diagnostics during publication and later use', async () => {
+    mocks.audit.mockResolvedValue({ issues: [
+      { id: 'media:source-image:figure', type: 'media', title: '教材原图', detail: '实际页面未展示教材图' },
+      { id: 'content:source-sequence:source', type: 'source-consistency', title: '教材条目', detail: '尚缺最后一个条目' },
+    ] });
+    const before = JSON.stringify(classroom);
+    await expect(confirmCourseTeacherReview('course', 'teacher', computeCourseQualitySignature(course, classroom), [], false, true))
+      .resolves.toBeTruthy();
+    expect(course.status).toBe('ready');
+    expect(course.content.qualityReview?.issues).toEqual(expect.arrayContaining([
+      expect.objectContaining({ evidence: '实际页面未展示教材图', blocking: false }),
+      expect.objectContaining({ evidence: '尚缺最后一个条目', blocking: false }),
+    ]));
+    expect(JSON.stringify(classroom)).toBe(before);
+    await expect(assertCourseTeacherReview(course, 'teacher')).resolves.toBeUndefined();
+  });
+  it('records actual timing differences without scaling content or blocking a teacher', async () => {
+    mocks.readiness.mockReturnValue([{ id: 'timing', label: '讲授时长', ok: false, message: '实际比规划长二十秒' }]);
+    await confirmCourseTeacherReview('course', 'teacher', computeCourseQualitySignature(course, classroom), []);
+    expect(course.content.qualityReview?.issues).toContainEqual(expect.objectContaining({
+      id: 'readiness:timing', evidence: '实际比规划长二十秒', blocking: false,
+    }));
+  });
+  it('rejects an actually empty classroom independently of quality diagnostics', async () => {
+    classroom.scenes = [];
+    await expect(confirmCourseTeacherReview('course', 'teacher', computeCourseQualitySignature(course, classroom), []))
+      .rejects.toMatchObject({ code: 'CLASSROOM_NOT_READY' });
   });
   it.each([undefined, 'pending', 'running', 'failed', 'completed'] as const)('allows teacher publication with optional report status %s and no layout report', async (status) => {
     if (status) {

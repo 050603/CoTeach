@@ -25,6 +25,8 @@ export { compileTextComponents, TextLayoutError } from './text-layout-compiler.j
 export type { TextMeasure, TextMeasureInput, TextMeasureResult, TextBoxComponent, LabelGridComponent } from './text-layout-compiler.js';
 export { AuthoringContentError, resolveAuthoringContent, assertAuthoringContentCoverage, validateAuthoringContent } from './authoring-content.js';
 export type { AuthoringContentItem, AuthoringContentReference } from './authoring-content.js';
+export { adoptChartPresentationTypography } from './chart-presentation-typography.js';
+export type { ChartPresentationTypography } from './chart-presentation-typography.js';
 export { compileDiagramComponent, isDiagramComponent } from './diagram-compiler.js';
 export type { DiagramComponent, DiagramCompilerOptions } from './diagram-compiler.js';
 export type { DiagramPlan, DiagramSequenceGroup } from './outline-types.js';

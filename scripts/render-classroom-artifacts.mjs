@@ -17,6 +17,7 @@ const root = process.cwd();
 const output = path.resolve(arg('--output') ?? path.join(path.dirname(file), 'visual-acceptance'));
 const runtime = path.join(output, 'browser');
 const baseUrl = arg('--base-url') ?? 'http://127.0.0.1:3000';
+const isolatedMediaRoot = arg('--isolated-media-root') ? path.resolve(arg('--isolated-media-root')) : undefined;
 if (!['localhost', '127.0.0.1', '[::1]'].includes(new URL(baseUrl).hostname)) throw new Error('Use an explicitly local deployment for authorized media reads');
 const require = createRequire(import.meta.url);
 const { build } = createRequire(require.resolve('tsx'))('esbuild');
@@ -73,6 +74,18 @@ await context.route('**/api/**', async (route) => {
     await route.abort(); return;
   }
   const url = new URL(request.url());
+  if (isolatedMediaRoot && url.pathname.startsWith('/api/openmaic/classroom-media/')) {
+    const relative = decodeURIComponent(url.pathname.slice('/api/openmaic/classroom-media/'.length));
+    const asset = path.resolve(isolatedMediaRoot, relative);
+    if (!asset.startsWith(isolatedMediaRoot + path.sep) || !/\.(?:png|jpe?g|webp|svg|wav|mp3|ogg)$/iu.test(asset)) {
+      await route.abort(); return;
+    }
+    try {
+      await route.fulfill({ status: 200, body: await readFile(asset),
+        contentType: /\.svg$/iu.test(asset) ? 'image/svg+xml' : /\.webp$/iu.test(asset) ? 'image/webp' : /\.jpe?g$/iu.test(asset) ? 'image/jpeg' : /\.png$/iu.test(asset) ? 'image/png' : 'application/octet-stream' });
+    } catch { await route.abort(); }
+    return;
+  }
   const response = await context.request.get(baseUrl + url.pathname + url.search);
   await route.fulfill({ response });
 });
@@ -130,4 +143,3 @@ try {
       + '<pre>' + escape(JSON.stringify({ orphanLines: report.orphanLines, issues: report.issues.map((issue) => ({ title: issue.title, evidence: issue.evidence })), errors: report.errors }, null, 2)) + '</pre></section>').join(''));
   console.log(JSON.stringify({ output, slides: summary.slides, orphanElements: summary.orphanElements, missingImages: summary.missingImages, issues: summary.issues }));
 } finally { await browser.close(); await new Promise((resolve) => server.close(resolve)); }
-

@@ -7,8 +7,10 @@ import type { Scene } from '../types/stage';
 import type { SlideSpatialBudget } from '../generation/slide-spatial-types';
 import type { CourseEvidenceSnapshot } from '@/lib/textbook/course-evidence-types';
 import type { FigureSequenceContract } from '@/lib/textbook/course-visual-binding';
+import { DEFAULT_PBL_COURSE_CONFIG } from '@/lib/pbl-course-config';
 import * as sourceGrounding from '../generation/source-grounding';
 import { restoreSourceContentCheckpoint, type SourceContentRecoveryCheckpoint } from '@/lib/course-generation/source-content-acceptance';
+import { hasCompleteGenerationOutlineCoverage, resolveGenerationOutlineSelection } from '@/lib/course-generation/generation-scope';
 
 const mocks = vi.hoisted(() => ({
   ai: vi.fn(),
@@ -102,10 +104,14 @@ vi.mock('../generation/teaching-narration', async (original) => ({
 import { closeSpatialMeasurementBrowser } from '../generation/slide-spatial-measurement';
 afterAll(async () => { await closeSpatialMeasurementBrowser(); });
 
-import { generateClassroom } from './classroom-generation';
+import { generateClassroom, type GenerateClassroomOptions } from './classroom-generation';
+import type { CourseGenerationAiCallContext } from './course-generation-ai-call';
+import type { AICallFn } from '../generation/pipeline-types';
+import { restoreAuthoringResponse, type AuthoringResponseCheckpoint } from '@/lib/course-generation/authoring-checkpoints';
 import { fingerprintGenerationValue, fingerprintSceneOutline, restoreSceneCheckpoint, restoreSceneStageCheckpoint, type PageCheckpointSnapshot, type SceneStageCheckpointSnapshot } from '@/lib/course-generation/page-checkpoints';
 import { TEACHING_ENHANCEMENT_VERSION } from '../generation/teaching-enhancement';
 import { COURSE_GENERATION_POLICY_VERSION } from '../generation/course-generation-policy';
+import { COURSE_FIRST_PASS_CONTRACT_VERSION } from '@/lib/course-generation/first-pass-policy';
 
 const teachingPlan = {
   purpose: '理解证据与结论的关系', priorKnowledge: '学生知道资料可被引用',
@@ -417,7 +423,7 @@ describe('classroom first-pass orchestration and checkpoint integration', () => 
     },
   );
 
-  it('stops on invalid saved source narration without rewriting bodies, speech or another section', async () => {
+  it('reuses the saved first draft without a source-content rejection or rewriting any page', async () => {
     const { page, sourceOptions } = sourceFixture();
     const other = { ...capacityPage('other', 'other-section'), order: 1 };
     const store = capacityStageStore();
@@ -426,16 +432,23 @@ describe('classroom first-pass orchestration and checkpoint integration', () => 
     await generateClassroom(input, { preparedOutlines: [page, other], ...store.callbacks });
     const original = structuredClone([...store.stages]);
     mocks.ai.mockClear();
-    await expect(generateClassroom(input, { preparedOutlines: [page, other], ...store.callbacks, ...sourceOptions }))
-      .rejects.toThrow(/已保存讲稿未通过来源验收/);
+    const result = await generateClassroom(input, { preparedOutlines: [page, other], ...store.callbacks, ...sourceOptions });
+    expect(result.scenes).toHaveLength(2);
     expect(mocks.ai).not.toHaveBeenCalled();
     expect(mocks.insertionInput).not.toHaveBeenCalled();
-    expect([...store.stages]).toEqual(original);
+    // Adopting optional original-source context migrates only the cache hash.
+    // The full bodies, narration, actions and authenticated page/model identities remain identical.
+    const stableStages = (values: Array<[string, SceneStageCheckpointSnapshot]>) => values.map(([id, checkpoint]) => {
+      const { inputFingerprint: _migratedContext, ...unchanged } = checkpoint;
+      return [id, unchanged];
+    });
+    expect(stableStages([...store.stages])).toEqual(stableStages(original));
   });
 
-  it('persists a failed first narration and revalidates it on resume without another author call', async () => {
+  it('persists and resumes the complete first narration without a source completeness gate or another author call', async () => {
     const { page, sourceOptions } = sourceFixture();
     const store = capacityStageStore();
+    const complete = completedPageStore();
     const raw = new Map<string, string>();
     const rawCallbacks = {
       onStageAuthoringResponse: (record: { outline: SceneOutline; stage: string; text: string }) => { raw.set(`${record.outline.id}:${record.stage}`, record.text); },
@@ -443,17 +456,114 @@ describe('classroom first-pass orchestration and checkpoint integration', () => 
     };
     mocks.ai.mockImplementation(async (system: string) => system.includes('# Slide Content Generator')
       ? JSON.stringify(authoredContent) : JSON.stringify(narration));
-    await expect(generateClassroom(input, { preparedOutlines: [page], ...store.callbacks, ...rawCallbacks, ...sourceOptions }))
-      .rejects.toThrow(/讲稿首稿未通过来源验收/);
+    const first = await generateClassroom(input, { preparedOutlines: [page], ...store.callbacks, ...complete.callbacks, ...rawCallbacks, ...sourceOptions });
     expect(mocks.ai).toHaveBeenCalledTimes(2);
     expect(raw.has(`${page.id}:narration`)).toBe(true);
-    expect(store.stages.has(`${page.id}:narration`)).toBe(false);
-    const body = structuredClone(store.stages.get(`${page.id}:content`));
+    expect(store.stages.has(`${page.id}:narration`)).toBe(true);
+    const stages = structuredClone([...store.stages]);
     mocks.ai.mockClear();
-    await expect(generateClassroom(input, { preparedOutlines: [page], ...store.callbacks, ...rawCallbacks, ...sourceOptions }))
-      .rejects.toThrow(/讲稿首稿未通过来源验收/);
+    const resumed = await generateClassroom(input, { preparedOutlines: [page], ...store.callbacks, ...complete.callbacks, ...rawCallbacks, ...sourceOptions });
     expect(mocks.ai).not.toHaveBeenCalled();
-    expect(store.stages.get(`${page.id}:content`)).toEqual(body);
+    expect([...store.stages]).toEqual(stages);
+    expect(resumed.scenes[0].content).toEqual(first.scenes[0].content);
+    expect(resumed.scenes[0].actions).toEqual(first.scenes[0].actions);
+  });
+
+  it.each([false, true])('reuses a completed middle-section trial after promotion with a new spoken bridge (missing narration stage=%s)', async (missingStage) => {
+    const { page: sourcePage, sourceOptions } = sourceFixture();
+    const previous = { ...capacityPage('previous-page', 'previous-section'), order: 0 };
+    const page = { ...sourcePage, order: 1, sourcePageIds: [sourcePage.id], sectionPlanVersion: 'accepted-trial-split' };
+    const sibling = { ...page, id: 'trial-sibling', order: 2 };
+    const quiz: SceneOutline = { id: 'trial-check', type: 'quiz', title: '试生成小测', description: '检查证据判断',
+      keyPoints: ['证据判断'], order: 3, lectureSectionId: page.lectureSectionId, knowledgePointIds: ['evidence'],
+      generationPurpose: 'knowledge-teaching', quizConfig: { questionCount: 2, difficulty: 'medium', questionTypes: ['single'] } };
+    const following = { ...capacityPage('following-page', 'following-section'), order: 4 };
+    const full = [previous, { ...sourcePage, order: 1, targetDurationSec: 62, estimatedDuration: 62,
+      plannedTiming: { role: 'teaching' as const, narrationSec: 62, learnerActivitySec: 0, transitionSec: 0 } }, quiz, following];
+    const store = capacityStageStore();
+    const complete = completedPageStore();
+    const raw = new Map<string, AuthoringResponseCheckpoint>();
+    const attempts = new Map<string, number>();
+    const callbacks: Pick<GenerateClassroomOptions, 'onStageAuthoringResponse' | 'loadStageAuthoringResponse'
+      | 'onSceneStageAttempt' | 'loadSceneStageAttemptCount'> = {
+      onStageAuthoringResponse: (record) => { raw.set(`${record.outline.id}:${record.stage}`, {
+        schemaVersion: 1, pageKey: record.outline.id, stage: record.stage,
+        outlineFingerprint: fingerprintSceneOutline(record.outline), modelFingerprint: record.modelFingerprint,
+        inputFingerprint: record.inputFingerprint, source: record.source, text: record.text, complete: record.complete,
+        systemCharacters: record.system.length, promptCharacters: record.prompt.length,
+      }); },
+      loadStageAuthoringResponse: (outline, stage, modelFingerprint, inputFingerprint) => restoreAuthoringResponse({
+        outline, stage, modelFingerprint, inputFingerprint, checkpoint: raw.get(`${outline.id}:${stage}`),
+      }),
+      onSceneStageAttempt: (outline, stage, count) => { attempts.set(`${outline.id}:${stage}`, count); },
+      loadSceneStageAttemptCount: (outline, stage) => attempts.get(`${outline.id}:${stage}`) ?? 0,
+    };
+    mocks.callContext.mockImplementation((call: AICallFn, context: CourseGenerationAiCallContext) => async (...args: Parameters<AICallFn>) => {
+      if (context.attemptsStarted) throw new Error('this authoring request has already started; reuse its saved draft');
+      await context.onAttemptStarting?.({ attempt: 0, totalAttempt: 1, queuedAt: 0, slotAcquiredAt: 0, queueMs: 0 });
+      return call(...args);
+    });
+    mocks.ai.mockImplementation(async (system: string) => system.includes('# Slide Content Generator')
+      ? JSON.stringify(authoredContent) : system.includes('# Quiz Narration Generator') ? JSON.stringify({
+        questions: [{ id: 'q1', type: 'single', question: '哪一种来源能够支持事实判断？',
+          options: [{ value: 'a', label: '独立证据' }, { value: 'b', label: '同源转载' },
+            { value: 'c', label: '表达流畅' }, { value: 'd', label: '重复名称' }], answer: 'a',
+          knowledgePointIds: ['evidence'], analysis: '独立来源能够支持事实判断。' }],
+        phaseNarration: [{ type: 'text', phase: 'intro', content: '先独立判断证据，再核对理由。' },
+          { type: 'text', phase: 'review-guidance', content: '核对解析中的判断依据。' },
+          { type: 'text', phase: 'handoff', content: '接下来继续学习新内容。' }],
+      }) : JSON.stringify(narration));
+    const trial = await generateClassroom({ ...input, sceneOutlines: full }, {
+      preparedOutlines: [previous, page, sibling, quiz, following], generationOutlineIds: [page.id, quiz.id],
+      ...store.callbacks, ...complete.callbacks, ...callbacks, ...sourceOptions,
+    });
+    const savedStages = [page, sibling].map((page) => structuredClone(store.stages.get(`${page.id}:narration`)!));
+    const historicalFingerprint = fingerprintGenerationValue('immutable accepted trial context');
+    if (missingStage) {
+      // Earlier accepted trials may lack their original global authoring context.
+      // The runner audits this finite hash against the immutable request and stages.
+      for (const current of [page, sibling]) store.stages.get(`${current.id}:narration`)!.inputFingerprint = historicalFingerprint;
+      raw.get(`${page.id}:narration`)!.inputFingerprint = fingerprintGenerationValue({
+        inputFingerprint: historicalFingerprint, contract: COURSE_FIRST_PASS_CONTRACT_VERSION, protocol: 'source-catalog-v1',
+      });
+    }
+    const savedRaw = structuredClone(raw.get(`${page.id}:narration`)!);
+    expect(attempts.get(`${page.id}:narration`)).toBe(1);
+    if (missingStage) store.stages.delete(`${sibling.id}:narration`);
+    mocks.ai.mockClear();
+    mocks.narrationInput.mockClear();
+    const onStageAuthoringValidated = vi.fn();
+    expect(trial.assetContext.outlines.find((page) => page.id === quiz.id)?.quizConfig?.questionCount).toBe(1);
+    const promoted = [previous, ...trial.assetContext.outlines.map((page, index) => ({
+      ...(page.type === 'quiz' ? quiz : page), order: index + 10 })), following];
+    const result = await generateClassroom({ ...input, sceneOutlines: promoted }, {
+      preparedOutlines: promoted, ...store.callbacks, ...complete.callbacks, ...callbacks, ...sourceOptions, onStageAuthoringValidated,
+      completedTestLesson: { target: { sectionId: page.lectureSectionId!, sectionTitle: '试生成小节',
+        sceneOutlineIds: [page.id, quiz.id], durationSeconds: 62 }, outlines: trial.assetContext.outlines,
+        progression: trial.assetContext.narrationProgression },
+      ...(missingStage ? { sourceNarrationBaseline: { scenes: trial.scenes, outlines: trial.assetContext.outlines,
+        narrationInputFingerprints: { [page.lectureSectionId!]: [historicalFingerprint] } } } : {}),
+    });
+    expect(result.scenes).toHaveLength(5);
+    // Only the previously ungenerated sections call the model. Adding the next
+    // actual opening must also preserve the completed trial's quiz and phases.
+    expect(mocks.ai).toHaveBeenCalledTimes(4);
+    const trialQuiz = trial.scenes.find((scene) => scene.outlineId === quiz.id)!;
+    expect(result.scenes.find((scene) => scene.outlineId === quiz.id)?.content).toEqual(trialQuiz.content);
+    expect(result.scenes.find((scene) => scene.outlineId === quiz.id)?.actions).toEqual(trialQuiz.actions);
+    expect(mocks.narrationInput.mock.calls[0][0].sectionId).toBe(previous.lectureSectionId);
+    if (missingStage) expect(mocks.narrationInput.mock.calls[1][0].previousSectionActualNarration).toEqual(['短讲稿。']);
+    for (const [index, current] of [page, sibling].entries()) {
+      expect(store.stages.get(`${current.id}:narration`)?.payload).toEqual(savedStages[index].payload);
+      expect(store.stages.get(`${current.id}:narration`)?.inputFingerprint).not.toBe(savedStages[index].inputFingerprint);
+      expect(result.scenes.find((scene) => scene.outlineId === current.id)?.actions)
+        .toEqual(trial.scenes.find((scene) => scene.outlineId === current.id)?.actions);
+    }
+    expect(raw.get(`${page.id}:narration`)).toEqual(savedRaw);
+    expect(attempts.get(`${page.id}:narration`)).toBe(1);
+    if (missingStage) expect(onStageAuthoringValidated).toHaveBeenCalledWith(expect.objectContaining({
+      outline: expect.objectContaining({ id: page.id }), inputFingerprint: savedRaw.inputFingerprint, accepted: true,
+    }));
   });
 
   it('stops profile generation on auxiliary persistence failure without silently using defaults', async () => {
@@ -470,23 +580,45 @@ describe('classroom first-pass orchestration and checkpoint integration', () => 
     mocks.ai.mockResolvedValue('{"agents":[]}');
     const onAuxiliaryAuthoringResponse = vi.fn();
     await expect(generateClassroom({ ...input, agentMode: 'generate' }, { preparedOutlines: [outline], onAuxiliaryAuthoringResponse }))
-      .rejects.toThrow('Expected at least 2 agents');
+      .rejects.toThrow('no usable actors');
     expect(mocks.ai).toHaveBeenCalledOnce();
     expect(onAuxiliaryAuthoringResponse).toHaveBeenCalledOnce();
     expect(mocks.persist).not.toHaveBeenCalled();
   });
 
-  it('restores accepted raw agent profiles before authoring any pages', async () => {
+  it.each([
+    [{ name: 'Teacher', role: 'teacher', persona: '解释概念' }, { name: 'Student', role: 'student', persona: '提出问题' }],
+    [{ name: 'Teacher', role: 'teacher', persona: '独自讲授原概念' }],
+    [{ name: 'Guide', role: 'assistant', persona: '按原教学方式引导' }, { name: 'Student', role: 'student', persona: '提出问题' }],
+    [{ name: 'Primary', role: 'teacher', persona: '解释原概念' }, { name: 'Other', role: 'teacher', persona: '保留原解释风格' }],
+  ].map((authoredAgents) => ({ authoredAgents })))('restores usable raw agent profiles and normalizes only roles before page authoring $authoredAgents', async ({ authoredAgents }) => {
     mocks.ai.mockResolvedValueOnce(JSON.stringify(authoredContent)).mockResolvedValueOnce(JSON.stringify(narration));
     const onAuxiliaryAuthoringResponse = vi.fn();
-    await generateClassroom({ ...input, agentMode: 'generate' }, { preparedOutlines: [outline], onAuxiliaryAuthoringResponse,
+    const result = await generateClassroom({ ...input, agentMode: 'generate' }, { preparedOutlines: [outline], onAuxiliaryAuthoringResponse,
       loadAuxiliaryAuthoringState: (identity) => ({ ...identity, attemptsStarted: 1,
-        rawResponse: JSON.stringify({ agents: [{ name: 'Teacher', role: 'teacher', persona: '解释概念' },
-          { name: 'Student', role: 'student', persona: '提出问题' }] }) }),
+        rawResponse: JSON.stringify({ agents: authoredAgents }) }),
     });
+    expect(result.stage.generatedAgentConfigs?.map(({ name, persona }) => ({ name, persona })))
+      .toEqual(authoredAgents.map(({ name, persona }) => ({ name, persona })));
+    expect(result.stage.generatedAgentConfigs?.filter((agent) => agent.role === 'teacher')).toHaveLength(1);
+    expect(result.scenes).toHaveLength(1);
     expect(mocks.ai).toHaveBeenCalledTimes(2);
     expect(mocks.ai.mock.calls.some(([system]) => String(system).includes('Generate agent profiles'))).toBe(false);
     expect(onAuxiliaryAuthoringResponse).not.toHaveBeenCalled();
+  });
+
+  it('records an orphan activity link while preserving the executable confirmed page', async () => {
+    mocks.ai.mockResolvedValueOnce(JSON.stringify(authoredContent)).mockResolvedValueOnce(JSON.stringify(narration));
+    const page = { ...outline, parentActivityId: 'missing-activity' };
+    const result = await generateClassroom({ ...input,
+      pblProfile: { ...DEFAULT_PBL_COURSE_CONFIG, generationTemplate: 'pbl-six-stage' },
+      pblActivityCatalog: [{ activityId: 'known-activity', stageKey: 'ai-learning', title: '已有活动',
+        durationMin: 1, knowledgePointIds: ['evidence'] }],
+    }, { preparedOutlines: [page] });
+    expect(result.scenes).toHaveLength(1);
+    expect(result.assetContext.outlines[0].parentActivityId).toBe('missing-activity');
+    expect(result.qualityReport.warnings).toEqual([expect.stringContaining('未关联有效的一级活动')]);
+    expect(mocks.ai).toHaveBeenCalledTimes(2);
   });
 
   it.each(['{"elements":[', JSON.stringify(authoredContent)])('preserves truncated raw text and never accepts it or buys another response: %s', async (rawResponse) => {
@@ -557,7 +689,7 @@ describe('classroom first-pass orchestration and checkpoint integration', () => 
     expect(onStageAuthoringValidated.mock.calls[0][0]).toMatchObject({ stage: 'content', accepted: true });
   });
 
-  it('does not revive an old pending source-repair budget into a new model call', async () => {
+  it('does not revive a source-repair budget or run source-content review when restoring first drafts', async () => {
     const { page, sourceOptions } = sourceFixture();
     const store = capacityStageStore();
     const recovery = sourceCheckpointStore();
@@ -565,11 +697,12 @@ describe('classroom first-pass orchestration and checkpoint integration', () => 
       ? JSON.stringify(authoredContent) : JSON.stringify(narration));
     await generateClassroom(input, { preparedOutlines: [page], ...store.callbacks });
     mocks.ai.mockClear();
-    for (let attempt = 0; attempt < 2; attempt += 1) await expect(generateClassroom(input,
-      { preparedOutlines: [page], ...store.callbacks, ...sourceOptions, ...recovery.callbacks }))
-      .rejects.toThrow(/已保存讲稿未通过来源验收/);
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const result = await generateClassroom(input, { preparedOutlines: [page], ...store.callbacks, ...sourceOptions, ...recovery.callbacks });
+      expect(result.scenes).toHaveLength(1);
+    }
     expect(mocks.ai).not.toHaveBeenCalled();
-    expect(recovery.checkpoints.get(page.lectureSectionId!)?.status).toBe('infeasible');
+    expect(recovery.checkpoints.size).toBe(0);
   });
 
   it('rejects a malformed content response after one call while preserving its raw draft', async () => {
@@ -586,11 +719,12 @@ describe('classroom first-pass orchestration and checkpoint integration', () => 
     expect(mocks.persist).not.toHaveBeenCalled();
   });
 
-  it('persists a failed selected placement unchanged and replays its failure with zero extra authoring calls', async () => {
+  it('keeps a usable placement fallback with its diagnostic and resumes without extra authoring calls', async () => {
     const page = capacityPage('invalid-native-placement');
     const raw = JSON.stringify({ layoutCandidateId: 'native-text-v1-unknown', elements: [],
       components: [{ kind: 'textBox', placementRef: 'adopted-content-1' }] });
     const saved = new Map<string, string>();
+    const stages = capacityStageStore();
     const onStageAuthoringValidated = vi.fn();
     const callbacks = {
       onStageAuthoringResponse: (record: { outline: SceneOutline; stage: string; text: string }) => {
@@ -598,24 +732,33 @@ describe('classroom first-pass orchestration and checkpoint integration', () => 
       },
       loadStageAuthoringResponse: (outline: SceneOutline, stage: string) => saved.get(`${outline.id}:${stage}`) ?? null,
     };
-    mocks.ai.mockResolvedValue(raw);
-    await expect(generateClassroom(input, { preparedOutlines: [page], ...callbacks, onStageAuthoringValidated }))
-      .rejects.toThrow(/Native text placement/);
-    expect(mocks.ai).toHaveBeenCalledOnce();
+    mocks.ai.mockImplementation(async (system: string) => system.includes('# Slide Content Generator')
+      ? raw : JSON.stringify(narration));
+    const result = await generateClassroom(input, { preparedOutlines: [page], ...callbacks, ...stages.callbacks, onStageAuthoringValidated });
+    expect(result.scenes).toHaveLength(1);
+    expect(result.qualityReport.warnings).toEqual(expect.arrayContaining([expect.stringContaining('Native text placement')]));
+    expect(mocks.ai).toHaveBeenCalledTimes(2);
     expect(saved.get(`${page.id}:content`)).toBe(raw);
-    expect(onStageAuthoringValidated).toHaveBeenCalledWith(expect.objectContaining({ stage: 'content', accepted: false }));
+    expect(onStageAuthoringValidated).toHaveBeenCalledWith(expect.objectContaining({ stage: 'content', accepted: true }));
     mocks.ai.mockClear();
-    await expect(generateClassroom(input, { preparedOutlines: [page], ...callbacks }))
-      .rejects.toThrow(/Native text placement/);
+    const resumed = await generateClassroom(input, { preparedOutlines: [page], ...callbacks, ...stages.callbacks });
+    expect(resumed.scenes[0].content.type).toBe('slide');
+    expect(result.scenes[0].content.type).toBe('slide');
+    if (resumed.scenes[0].content.type === 'slide' && result.scenes[0].content.type === 'slide') {
+      expect(resumed.scenes[0].content.canvas.elements).toEqual(result.scenes[0].content.canvas.elements);
+    }
+    expect(resumed.scenes[0].actions).toEqual(result.scenes[0].actions);
     expect(mocks.ai).not.toHaveBeenCalled();
-    expect(mocks.persist).not.toHaveBeenCalled();
+    expect(mocks.persist).toHaveBeenCalledTimes(2);
   });
 
-  it('stops on an incorrect source count without insertion or replacement calls', async () => {
+  it('keeps an inaccurate first-draft source count for final teacher review without insertion or replacement calls', async () => {
     const { page, sourceOptions } = sourceFixture();
+    const text = '这里只有两个步骤。';
     mocks.ai.mockImplementation(async (system: string) => system.includes('# Slide Content Generator')
-      ? JSON.stringify(authoredContent) : JSON.stringify([{ type: 'text', content: '这里只有两个步骤。' }]));
-    await expect(generateClassroom(input, { preparedOutlines: [page], ...sourceOptions })).rejects.toThrow(/来源验收/);
+      ? JSON.stringify(authoredContent) : JSON.stringify([{ type: 'text', content: text }]));
+    const result = await generateClassroom(input, { preparedOutlines: [page], ...sourceOptions });
+    expect(result.scenes[0].actions?.find((action) => action.type === 'speech')).toMatchObject({ text });
     expect(mocks.ai).toHaveBeenCalledTimes(2);
     expect(mocks.insertionInput).not.toHaveBeenCalled();
   });
@@ -646,14 +789,72 @@ describe('classroom first-pass orchestration and checkpoint integration', () => 
     expect(mocks.ai).toHaveBeenCalledOnce();
   });
 
-  it('stops at preflight before any page request when a section cannot fit', async () => {
+  it('continues normal page generation after an infeasible capacity replanning attempt', async () => {
     const page = capacityPage('preflight-overflow');
     page.keyPoints = Array.from({ length: 40 }, (_, index) => `必须保留的条件${index}：依据真实资料完整解释不同学习任务中的观察与推理。`);
     page.teachingBrief = { ...page.teachingBrief!, teachingPlan: { ...page.teachingBrief!.teachingPlan!, presentationContent: page.keyPoints } };
     mocks.replan.mockResolvedValue({ status: 'infeasible', reason: 'No complete measured layout', assessments: [] });
-    await expect(generateClassroom(input, { preparedOutlines: [page] })).rejects.toThrow(/首稿容量预检/);
-    expect(mocks.ai).not.toHaveBeenCalled();
+    mocks.ai.mockImplementation(async (system: string) => system.includes('# Slide Content Generator')
+      ? JSON.stringify(authoredContent) : JSON.stringify(narration));
+    const result = await generateClassroom(input, { preparedOutlines: [page] });
+    expect(result.scenes).toHaveLength(1);
+    expect(result.assetContext.outlines[0].keyPoints).toEqual(page.keyPoints);
+    expect(result.qualityReport.warnings).toEqual(expect.arrayContaining([expect.stringContaining('容量')]));
+    expect(mocks.ai).toHaveBeenCalledTimes(2);
+    expect(mocks.replan).toHaveBeenCalledOnce();
+  }, 15_000);
+
+  it('preserves the teacher-locked page plan and generates its body despite a capacity diagnosis', async () => {
+    const page = capacityPage('teacher-locked-overflow');
+    page.keyPoints = Array.from({ length: 40 }, (_, index) => `必须保留的条件${index}：依据真实资料完整解释不同学习任务中的观察与推理。`);
+    page.teachingBrief = { ...page.teachingBrief!, teachingPlan: {
+      ...page.teachingBrief!.teachingPlan!, presentationContent: page.keyPoints,
+    } };
+    mocks.ai.mockImplementation(async (system: string) => system.includes('# Slide Content Generator')
+      ? JSON.stringify(authoredContent) : JSON.stringify(narration));
+    const result = await generateClassroom(input, { preparedOutlines: [page], lockedOutlineIds: [page.id] });
+    expect(result.scenes).toHaveLength(1);
+    expect(result.assetContext.outlines[0].id).toBe(page.id);
+    expect(result.assetContext.outlines[0].keyPoints).toEqual(page.keyPoints);
+    expect(mocks.ai).toHaveBeenCalledTimes(2);
     expect(mocks.replan).not.toHaveBeenCalled();
+  }, 15_000);
+
+  it('allocates unstarted confirmed pages in the first pass and preserves completed bodies before authoring', async () => {
+    const complete = capacityPage('completed-body');
+    const pending = { ...capacityPage('capacity-pending'), order: 1 };
+    pending.keyPoints = Array.from({ length: 40 }, (_, index) => `必须保留的条件${index}：依据真实资料完整解释不同学习任务中的观察与推理。`);
+    pending.teachingBrief = { ...pending.teachingBrief!, teachingPlan: {
+      ...pending.teachingBrief!.teachingPlan!, presentationContent: pending.keyPoints,
+    } };
+    let retained: SceneOutline | undefined;
+    mocks.replan.mockImplementation(async (pages: SceneOutline[], context: { lockedOutlineIds: string[] }) => {
+      expect(context.lockedOutlineIds).toEqual(['completed-body']);
+      retained = pages[0];
+      const source = pages[1]!;
+      const split = Array.from({ length: 8 }, (_, index) => {
+        const keyPoints = source.keyPoints.slice(index * 5, (index + 1) * 5);
+        return { ...source, id: `capacity-pending-${index}`, order: index + 1, keyPoints,
+          targetDurationSec: index === 7 ? 3 : 4, estimatedDuration: index === 7 ? 3 : 4,
+          plannedTiming: { ...source.plannedTiming!, narrationSec: index === 7 ? 3 : 4 },
+          sourcePageIds: [source.id], teachingBrief: { ...source.teachingBrief!, teachingPlan: {
+            ...source.teachingBrief!.teachingPlan!, presentationContent: keyPoints,
+          } } };
+      });
+      return { status: 'replanned', outlines: [pages[0], ...split], assessments: [] };
+    });
+    const prepared = vi.fn((pages: SceneOutline[]) => {
+      expect(pages[0]).toEqual(retained);
+      expect(pages.slice(1).flatMap((page) => page.keyPoints)).toEqual(pending.keyPoints);
+      throw new Error('plan captured before page authoring');
+    });
+    await expect(generateClassroom(input, { preparedOutlines: [complete, pending],
+      hasSceneContentCheckpoint: (page) => page.id === complete.id,
+      onOutlinesPrepared: prepared,
+    })).rejects.toThrow('plan captured before page authoring');
+    expect(mocks.replan).toHaveBeenCalledOnce();
+    expect(prepared).toHaveBeenCalledOnce();
+    expect(mocks.ai).not.toHaveBeenCalled();
   });
 
   it('does not execute legacy capacity recovery after an authored compiler failure', async () => {
@@ -824,10 +1025,45 @@ describe('classroom first-pass orchestration and checkpoint integration', () => 
     expect(mocks.ai).not.toHaveBeenCalled();
   });
 
-  it('requires adopted teaching design before authoring a missing knowledge page (1)', async () => {
-    const page: SceneOutline = { ...outline, id: 'missing-design-0', generationPurpose: 'knowledge-teaching', lectureSectionId: 'missing' };
-    await expect(generateClassroom(input, { preparedOutlines: [page] })).rejects.toThrow(/缺少已确认的完整教学设计/);
+  it('generates and resumes every adopted source-page sibling in the test lesson', async () => {
+    const first: SceneOutline = { ...outline, id: 'source-page', spatialParentId: undefined,
+      lectureSectionId: 'selected-section', sourcePageIds: ['source-page'], sectionPlanVersion: 'plan-v1' };
+    const process: SceneOutline = { ...first, id: 'source-page--capacity-2', title: '完整流程', order: 1 };
+    const other: SceneOutline = { ...first, id: 'other-page', sourcePageIds: ['other-page'],
+      lectureSectionId: 'other-section', order: 2 };
+    const prepared = [first, process, other];
+    const savedScene = (page: SceneOutline, stageId: string): Scene => ({
+      id: `completed-${page.id}`, stageId, outlineId: page.id, type: 'slide',
+      title: page.title, order: page.order,
+      content: { type: 'slide', canvas: { id: `canvas-${page.id}`, viewportSize: 1000,
+        viewportRatio: 0.5625, elements: content.elements } },
+      actions: [{ id: `speech-${page.id}`, type: 'speech', text: '已保存的完整讲授。' }],
+      createdAt: 1, updatedAt: 1,
+    } as unknown as Scene);
+    const selected = resolveGenerationOutlineSelection(prepared, ['source-page'])!;
+    const loadSceneCheckpoint = vi.fn((page: SceneOutline, _index: number, stageId: string) => savedScene(page, stageId));
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const result = await generateClassroom(input, { preparedOutlines: prepared,
+        generationOutlineIds: ['source-page'], loadSceneCheckpoint });
+      expect(result.assetContext.outlines.map((page) => page.id)).toEqual([first.id, process.id]);
+      expect(result.scenes.map((scene) => scene.outlineId)).toEqual([first.id, process.id]);
+      expect(hasCompleteGenerationOutlineCoverage(selected, result.assetContext.outlines)).toBe(true);
+    }
+    expect(hasCompleteGenerationOutlineCoverage(selected, [first])).toBe(false);
+    expect(hasCompleteGenerationOutlineCoverage(selected, [{ ...process, spatialParentId: first.id }])).toBe(false);
+    expect(hasCompleteGenerationOutlineCoverage(selected, [first, { ...process, sectionPlanVersion: 'old-plan' }])).toBe(false);
+    expect(resolveGenerationOutlineSelection([first, { ...process, sourcePageIds: ['source-page', 'other-page'] }], ['source-page'])).toBeNull();
+    expect(loadSceneCheckpoint.mock.calls.map(([page]) => page.id)).toEqual([first.id, process.id, first.id, process.id]);
     expect(mocks.ai).not.toHaveBeenCalled();
+  });
+
+  it('authors legacy knowledge page 1 from its existing outline without a missing-design quality gate', async () => {
+    const page: SceneOutline = { ...outline, id: 'missing-design-1', generationPurpose: 'knowledge-teaching', lectureSectionId: 'missing' };
+    mocks.ai.mockImplementation(async (system: string) => system.includes('# Slide Content Generator')
+      ? JSON.stringify(authoredContent) : JSON.stringify(narration));
+    const result = await generateClassroom(input, { preparedOutlines: [page] });
+    expect(result.scenes).toHaveLength(1);
+    expect(mocks.ai).toHaveBeenCalledTimes(2);
     expect(mocks.prepare).not.toHaveBeenCalled();
   });
 
@@ -1143,21 +1379,33 @@ describe('classroom first-pass orchestration and checkpoint integration', () => 
     ]));
   });
 
-  it('requires adopted teaching design before authoring a missing knowledge page (2)', async () => {
-    const page: SceneOutline = { ...outline, id: 'missing-design-1', generationPurpose: 'knowledge-teaching', lectureSectionId: 'missing' };
-    await expect(generateClassroom(input, { preparedOutlines: [page] })).rejects.toThrow(/缺少已确认的完整教学设计/);
-    expect(mocks.ai).not.toHaveBeenCalled();
-    expect(mocks.prepare).not.toHaveBeenCalled();
-  });
-
-  it('requires adopted teaching design before authoring a missing knowledge page (3)', async () => {
+  it('authors legacy knowledge page 2 from its existing outline without a missing-design quality gate', async () => {
     const page: SceneOutline = { ...outline, id: 'missing-design-2', generationPurpose: 'knowledge-teaching', lectureSectionId: 'missing' };
-    await expect(generateClassroom(input, { preparedOutlines: [page] })).rejects.toThrow(/缺少已确认的完整教学设计/);
-    expect(mocks.ai).not.toHaveBeenCalled();
+    mocks.ai.mockImplementation(async (system: string) => system.includes('# Slide Content Generator')
+      ? JSON.stringify(authoredContent) : JSON.stringify(narration));
+    const result = await generateClassroom(input, { preparedOutlines: [page] });
+    expect(result.scenes).toHaveLength(1);
+    expect(mocks.ai).toHaveBeenCalledTimes(2);
     expect(mocks.prepare).not.toHaveBeenCalled();
   });
 
-  it('preserves the initial playable speech without a style review pass', async () => {
+  it('authors legacy knowledge page 3 from its existing outline without a missing-design quality gate', async () => {
+    const page: SceneOutline = { ...outline, id: 'missing-design-3', generationPurpose: 'knowledge-teaching', lectureSectionId: 'missing' };
+    mocks.ai.mockImplementation(async (system: string) => system.includes('# Slide Content Generator')
+      ? JSON.stringify(authoredContent) : JSON.stringify(narration));
+    const result = await generateClassroom(input, { preparedOutlines: [page] });
+    expect(result.scenes).toHaveLength(1);
+    expect(mocks.ai).toHaveBeenCalledTimes(2);
+    expect(mocks.prepare).not.toHaveBeenCalled();
+  });
+
+  it('preserves playable first drafts and records rendered and compiled quality problems', async () => {
+    mocks.layout.mockResolvedValue({ status: 'checked', issues: ['正文越界'], findings: [{
+      id: 'page:overflow', title: '正文越界', evidence: '正文延伸到画布外', elementId: 'native-evidence',
+    }] });
+    mocks.compiledContinuation.mockImplementation((generated: GeneratedSlideContent) => ({ ...generated,
+      qualityDiagnostics: ['一个展示引用未完整呈现'],
+    }));
     const originalText = '同学们好，欢迎来到今天的课堂。这一页的核心观点是核验信息。';
     mocks.ai.mockResolvedValueOnce(JSON.stringify(authoredContent)).mockResolvedValueOnce(JSON.stringify([
       { type: 'text', content: originalText },
@@ -1174,9 +1422,11 @@ describe('classroom first-pass orchestration and checkpoint integration', () => 
       expect.objectContaining({ type: 'speech', text: expect.stringContaining(originalText) }),
     ]));
     expect(result.scenes[0]!.actions?.find((action) => action.type === 'speech')).toMatchObject({
-      type: 'speech', text: expect.stringMatching(/感谢大家的认真参与，同学们再见。$/),
+      type: 'speech', text: originalText,
     });
-    expect(result.qualityReport.warnings).toEqual([]);
+    expect(result.qualityReport.warnings).toEqual(expect.arrayContaining([
+      expect.stringContaining('正文越界'), expect.stringContaining('一个展示引用未完整呈现'),
+    ]));
     expect(mocks.persist).toHaveBeenCalledOnce();
   });
 
@@ -1336,29 +1586,53 @@ describe('classroom first-pass orchestration and checkpoint integration', () => 
     expect(mocks.prepare).not.toHaveBeenCalled();
   });
 
-  it('preserves a collision draft and stops without an automatic layout rewrite', async () => {
-    mocks.ai.mockResolvedValue(JSON.stringify(authoredContent));
+  it('preserves a collision draft with diagnostics and completes without an automatic layout rewrite', async () => {
+    mocks.ai.mockImplementation(async (system: string) => system.includes('# Slide Content Generator')
+      ? JSON.stringify(authoredContent) : JSON.stringify(narration));
     mocks.layout.mockResolvedValue({ status: 'checked', findings: [{ id: 'body:collision-text', title: '文字重叠', evidence: '同一行相互覆盖' }] });
     const onStageAuthoringResponse = vi.fn();
     const onSceneStageCompleted = vi.fn();
-    await expect(generateClassroom(input, { preparedOutlines: [outline], onStageAuthoringResponse, onSceneStageCompleted }))
-      .rejects.toThrow(/文字重叠/);
-    expect(mocks.ai).toHaveBeenCalledOnce();
-    expect(onStageAuthoringResponse).toHaveBeenCalledOnce();
-    expect(onSceneStageCompleted).not.toHaveBeenCalled();
+    const result = await generateClassroom(input, { preparedOutlines: [outline], onStageAuthoringResponse, onSceneStageCompleted });
+    expect(result.scenes).toHaveLength(1);
+    expect(result.qualityReport.warnings).toEqual([expect.stringContaining('文字重叠')]);
+    expect(mocks.ai).toHaveBeenCalledTimes(2);
+    expect(onStageAuthoringResponse).toHaveBeenCalledTimes(2);
+    expect(onSceneStageCompleted.mock.calls.some(([, stage]) => stage === 'content')).toBe(true);
   });
 
-  it('rejects an authored continuation instead of silently changing the confirmed page plan', async () => {
-    mocks.ai.mockResolvedValue(JSON.stringify(authoredContent));
-    mocks.compiledContinuation.mockImplementation((generated: GeneratedSlideContent) => ({ ...generated, continuationPages: [generated] }));
+  it('saves every first-response continuation before one section narration call while conserving time and supporting resume', async () => {
+    const page = capacityPage('compiled-parent');
+    const store = capacityStageStore();
+    const complete = completedPageStore();
+    const marker = '续页完整教学条件与解释';
+    mocks.ai.mockImplementation(async (system: string) => system.includes('# Slide Content Generator')
+      ? JSON.stringify(authoredContent) : JSON.stringify(narration));
+    mocks.compiledContinuation.mockImplementation((generated: GeneratedSlideContent, current: SceneOutline) =>
+      current.id === page.id ? { ...generated, paginationVersion: 'balanced-v1', teachingText: ['首遍证据'], continuationPages: [{
+        ...generated, paginationVersion: 'balanced-v1', teachingText: [marker], elements: [{
+          id: 'continuation-evidence', type: 'text', left: 60, top: 140, width: 880, height: 100,
+          content: `<p style="font-size:24px">${marker}</p>`, rotate: 0,
+        }],
+      }] } : generated);
     const onOutlinesPrepared = vi.fn();
-    await expect(generateClassroom(input, { preparedOutlines: [outline], onOutlinesPrepared })).rejects.toThrow(/不自动拆页/);
-    expect(mocks.ai).toHaveBeenCalledOnce();
-    expect(onOutlinesPrepared).toHaveBeenCalledOnce();
+    const result = await generateClassroom(input, { preparedOutlines: [page], onOutlinesPrepared, ...store.callbacks, ...complete.callbacks });
+    expect(result.scenes).toHaveLength(2);
+    expect(JSON.stringify(result.scenes[1].content)).toContain(marker);
+    expect(result.assetContext.outlines.reduce((sum, current) => sum + current.targetDurationSec!, 0)).toBe(page.targetDurationSec);
+    expect(onOutlinesPrepared).toHaveBeenCalledTimes(2);
+    expect(mocks.narrationInput).toHaveBeenCalledOnce();
+    expect(mocks.narrationInput.mock.calls[0][0].pages.map((part: { outline: SceneOutline }) => part.outline.id))
+      .toEqual([page.id, `${page.id}--continuation-2`]);
+    expect(store.stages.has(`${page.id}--continuation-2:content`)).toBe(true);
+    expect(mocks.ai).toHaveBeenCalledTimes(2);
+    mocks.ai.mockClear();
+    const resumed = await generateClassroom(input, { preparedOutlines: result.assetContext.outlines, ...store.callbacks, ...complete.callbacks });
+    expect(resumed.scenes.map((scene) => scene.content)).toEqual(result.scenes.map((scene) => scene.content));
+    expect(mocks.ai).not.toHaveBeenCalled();
     expect(mocks.replan).not.toHaveBeenCalled();
   });
 
-  it('stops at the first off-canvas native draft without pagination', async () => {
+  it('keeps an off-canvas native draft with diagnostics and completes without reauthoring', async () => {
     mocks.layout.mockResolvedValueOnce({ status: 'checked', issues: ['画布溢出'],
       findings: [{ id: `${outline.id}:overflow:bottom-text`, title: '文字超出画布',
         evidence: '文本框排到了页外', elementId: 'bottom-text' }] });
@@ -1367,8 +1641,9 @@ describe('classroom first-pass orchestration and checkpoint integration', () => 
         evidence: '重排后坐标仍在页外', elementId: 'bottom-text' }] });
     mocks.ai.mockImplementation(async (system: string) => system.includes('# Slide Content Generator')
       ? JSON.stringify(authoredContent) : JSON.stringify(narration));
-    await expect(generateClassroom(input, { preparedOutlines: [outline] }))
-      .rejects.toThrow(/文字超出画布/);
+    const result = await generateClassroom(input, { preparedOutlines: [outline] });
+    expect(result.scenes).toHaveLength(1);
+    expect(result.qualityReport.warnings).toEqual([expect.stringContaining('文字超出画布')]);
     const calls = mocks.ai.mock.calls.filter(([system]) => system.includes('# Slide Content Generator'));
     expect(calls).toHaveLength(1);
     expect(calls.every(([system]) => !system.includes('The compiler chooses balanced page breaks'))).toBe(true);

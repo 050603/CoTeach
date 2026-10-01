@@ -17,9 +17,15 @@ Keep case-provenance notes backstage. Do not add labels or notices saying an ord
 The slide should preserve the information students need to scan, compare, remember, or revisit:
 
 - course structure and the current learning goal;
-- core concepts, concise but complete definitions, important conclusions, and key takeaways;
+- the core meaning and distinguishing relationships of concepts, important conclusions, and key takeaways;
 - representative cases, exact evidence, data, symbols, notation, wording, or states that the explanation depends on;
 - summaries of difficult points and relationships that should remain visible after the explanation.
+
+Select these from the adopted original teaching sources and the page's independent presentation catalog. Full definitions, supporting reasons, story details, and spoken transitions belong to the independently source-grounded narration; they do not all become visible text. Display a complete formal definition only when the actual teaching task requires learners to inspect that exact wording. Every selected condensed claim must retain its factual meaning, quantities, negation, qualifications, and necessary conditions.
+
+Plan each page around its main teaching task and visual focus before measuring capacity. Principles, component structures, complete processes and comparisons can warrant separate pages even when their abbreviated text fits together. Keep a definition, its necessary explanation and a short supporting case together when they serve the same recognition. Preserve the confirmed section order and total time.
+
+Make the adopted display points independently composable: separate object headers, shared dimensions and each object's corresponding facts for a native comparison table; give each parallel element its own label and essential role for grouped boxes. When the learner needs to inspect a complete process and locate its stages, present the actual nodes and order as an editable flow diagram; ordinary sequential order is sufficient reason, without requiring branches or feedback. Use selective keyword color and bold for distinguishing features and necessary conditions. Do not compress these structures into a few paragraphs, invent arrows between parallel elements, or duplicate every diagram label in another list.
 
 For a discrimination, comparison, or changed-condition task, make the material to inspect and the changed condition visible before showing a complete classification or solution. Preserve exact case wording, step names, and technical terms supplied by the shared teaching design.
 

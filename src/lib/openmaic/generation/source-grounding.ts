@@ -1,7 +1,8 @@
 import type { SceneOutline } from '@/lib/openmaic/types/generation';
 import type { KnowledgePoint } from '@/lib/session/types';
-import type { CourseEvidenceSnapshot } from '@/lib/textbook/course-evidence-types';
+import type { CourseEvidenceSnapshot, CourseEvidenceSource } from '@/lib/textbook/course-evidence-types';
 import type { FigureSequenceContract } from '@/lib/textbook/course-visual-binding';
+import { usesSourceSequence } from '@/lib/textbook/source-sequence-use';
 
 export type SourceGroundingKnowledgePoint = Pick<KnowledgePoint, 'id' | 'evidenceItemIds' | 'sourceId' | 'sourceKnowledgePointIds'>;
 
@@ -20,8 +21,9 @@ function originalDefinitionSentence(quote: string): string | undefined {
   // Recognize an explicit source definition, not a historical attribution or
   // recommendation. A contextual "在…中，" does not change its exact wording.
   const definition = sentence.match(/^(?:在[^，,。！？；;：:\n]+中[，,]\s*)?([^，,。！？；;：:\n]{1,80}?)[，,]?\s*(是一种|是指|指的是|被定义为|即是)\s*(?=[^。！？\s])/u);
-  if (!definition || (definition[2] === '即是' && !definition[1]!.startsWith('所谓'))
-    || /\d{4}\s*年|指出|认为|提出|建议/u.test(definition[1]!)) return undefined;
+  const namedMethodClaim = /^[^，,。！？；;：:\n]{1,80}[，,]\s*又称[^。！？]+[，,]\s*它(?:强调|主张)[^。！？]{8,}/u.test(sentence);
+  if ((!definition && !namedMethodClaim) || (definition?.[2] === '即是' && !definition[1]!.startsWith('所谓'))
+    || /\d{4}\s*年|指出|认为|提出|建议/u.test(definition?.[1] ?? sentence.split(/[，,]/u)[0]!)) return undefined;
   return sentence;
 }
 
@@ -48,8 +50,11 @@ export function pageOriginalTeachingSources(outline: SceneOutline, input: {
   const primaryRevisionId = input.sourceEvidence?.selections.find((selection) => selection.primary)?.revisionId;
   const originalSources = (input.sourceEvidence?.items ?? []).filter((item) => evidenceIds.has(item.id))
     .map((item) => {
-      const passages = [...(item.completeSourceBlocks ?? []).map((block) => ({
+      const passages: Array<{ sourceBlockId?: string; text: string; source?: CourseEvidenceSource }> = [
+        ...(item.completeSourceBlocks ?? []).filter((block) => !block.source
+        || block.source.revisionId === item.source.revisionId).map((block) => ({
         sourceBlockId: block.sourceBlockId, text: block.content,
+        ...(block.source ? { source: block.source } : {}),
       })),
       ...(item.source.quote?.trim() ? [{ sourceBlockId: item.source.sourceBlockId, text: item.source.quote }] : []),
       ...(item.kind === 'source-block' && item.content.trim()
@@ -67,8 +72,7 @@ export function pageOriginalTeachingSources(outline: SceneOutline, input: {
   const originalText = originalSources.flatMap((source) => source.passages.map((passage) => passage.text)).join('\n');
   const originalQuotes = [...new Set((outline.teachingBrief?.evidence ?? []).map((item) => item.quote.trim())
     .filter((quote) => Boolean(quote) && (!input.sourceEvidence || originalText.includes(quote))))];
-  const definitionSources = originalSources.some((source) => source.primary && source.passages.length)
-    ? originalSources.filter((source) => source.primary) : originalSources;
+  const definitionSources = originalSources;
   const sourceDefinitions = [...new Map(originalQuotes.flatMap((quote) => {
     const sentence = originalDefinitionSentence(quote);
     if (!sentence) return [];
@@ -86,9 +90,11 @@ export function pageOriginalTeachingSources(outline: SceneOutline, input: {
     ]);
   const sameLabel = (value: string) => value.normalize('NFKC').replace(/[^\p{L}\p{N}]/gu, '');
   const requiredSourceLists = (input.sourceSequenceContracts ?? []).filter((contract) => contract.required
+    && usesSourceSequence(outline, contract)
     && contract.knowledgePointIds.some((id) => knowledgeIds.has(id)))
     .map((contract) => ({ id: contract.resourceId, semantics: contract.sequenceSemantics ?? 'ordered-steps',
-      steps: (contract.orderedSteps ?? []).map((step) => {
+      steps: (contract.orderedSteps ?? []).filter((step) => !contract.requiredStepLabels
+        || contract.requiredStepLabels.includes(step.label)).map((step) => {
         // A source heading alone is not its explanation. Keep the actual
         // adopted list and item identity when attaching the source mechanism;
         // a similarly named item in another list cannot supply that meaning.
@@ -141,7 +147,12 @@ export function buildAuthoringSourceCatalog(sourcesByPage: ReadonlyMap<string, R
     originalSourceRefs: page.originalSources.map((source) => {
       const { passages, originalSequences, ...metadata } = source;
       const projected = { ...metadata,
-        passages: passages.map(({ text, ...passage }) => ({ ...passage, textRef: intern(text) })),
+        passages: passages.map(({ text, source: passageSource, ...passage }) => {
+          const { quote, ...sourceLocation } = passageSource ?? {};
+          return { ...passage, textRef: intern(text), ...(passageSource ? {
+            source: { ...sourceLocation, ...(quote ? { quoteRef: intern(quote) } : {}) },
+          } : {}) };
+        }),
         originalSequences: originalSequences.map((sequence) => ({ steps: sequence.steps.map((step) => ({
           labelRef: intern(step.label), ...(step.explanation ? { explanationRef: intern(step.explanation) } : {}),
         })) })),

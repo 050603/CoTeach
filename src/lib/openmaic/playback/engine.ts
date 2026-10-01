@@ -1147,6 +1147,7 @@ export class PlaybackEngine {
     switch (action.type) {
       case 'speech': {
         const speechAction = action as AlignedSpeechAction;
+        const speechActionIndex = this.actionIndex - 1;
         this.clearSpeechCueSchedule();
         if (this.activeEffectRange && !this.activeEffectRange.speechIds.has(speechAction.id)) {
           this.actionEngine.clearEffects();
@@ -1314,6 +1315,8 @@ export class PlaybackEngine {
               if (this.scenes[this.sceneIndex]?.ttsPolicy === 'target-duration') {
                 const error = new Error(`课堂语音资源缺失：${speechAction.id}`);
                 log.error(error.message);
+                this.actionIndex = speechActionIndex;
+                this.pendingSpeechStartRatio = speechStartRatio;
                 this.setMode('idle');
                 this.actionEngine.clearEffects();
                 this.activeEffectRange = null;
@@ -1343,6 +1346,9 @@ export class PlaybackEngine {
             );
             if (browserNativeEnabled) playSpeechFallback();
             else {
+              // Keep the failed cue so the next Play retries its narration.
+              this.actionIndex = speechActionIndex;
+              this.pendingSpeechStartRatio = speechStartRatio;
               this.setMode('idle');
               this.actionEngine.clearEffects();
               this.activeEffectRange = null;

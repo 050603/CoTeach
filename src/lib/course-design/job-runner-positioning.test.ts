@@ -117,7 +117,7 @@ describe("quick positioning generation", () => {
       .toMatchObject({ candidate, preserveAcceptedPagePlans: true });
   }, 15_000);
 
-  it("rechecks completed blueprints and preserves an incomplete executable draft for bounded repair", async () => {
+  it("rechecks completed blueprints and keeps a usable draft with source diagnostics", async () => {
     const { restoreTeachingBlueprintRepairSource } = await import("./job-runner");
     const { generateTeachingBlueprint, teachingBlueprintContentFingerprint } = await import("./teaching-blueprint");
     const labels = ["分析问题", "建立模型", "形成结论"];
@@ -159,9 +159,11 @@ describe("quick positioning generation", () => {
     incomplete.sections[0]!.units[0]!.explanationNodes![0]!.content = `探究过程先${labels.slice(0, 2).join("再")}，证据决定判断的依据。`;
     incomplete.sections[0]!.pages[0]!.keyPoints = labels.slice(0, 2);
     const repairedSource = restore({ ...checkpoint, blueprint: incomplete });
-    expect(repairedSource?.candidate).toBe(incomplete);
-    expect(repairedSource?.preserveAcceptedPagePlans).toBe(true);
-    expect(repairedSource?.issues.join("；")).toContain("形成结论");
+    expect(repairedSource).toBeUndefined();
+    const { revalidateStoredTeachingBlueprint } = await import('./teaching-blueprint');
+    const checked = revalidateStoredTeachingBlueprint(incomplete, input, { qualityMode: 'diagnostic' });
+    expect(checked.blueprint).toBeDefined();
+    expect(checked.issues.join('；')).toContain('形成结论');
     expect(incomplete.sections[0]!.units[0]!.explanation).toContain("形成结论");
     expect(restore({ ...checkpoint, blueprint: incomplete }, "changed-model")).toBeUndefined();
     expect(restoreTeachingBlueprintRepairSource({ ...checkpoint, blueprint: incomplete,
@@ -662,7 +664,7 @@ describe("quick positioning generation", () => {
     expect(requirement).not.toContain("制作成果");
   });
 
-  it("saves a first draft missing its target grade and stops after one model call", async () => {
+  it("saves a first draft missing its target grade and continues after one model call", async () => {
     const rawResponse = JSON.stringify({ name: "计算机视觉", subject: "人工智能", grade: "", hours: 2 });
     callLLM.mockResolvedValueOnce(rawResponse);
     const { inferCourseSeed } = await import("./job-runner");
@@ -679,7 +681,7 @@ describe("quick positioning generation", () => {
       { courseId: "course-cv", teacherBrief: "讲解图像分类、物体检测与计算机视觉工作流程" },
       new AbortController().signal,
       { onResponse },
-    )).rejects.toThrow("课程定位首稿缺少学段");
+    )).resolves.toMatchObject({ grade: '', name: '计算机视觉' });
 
     expect(onResponse).toHaveBeenCalledExactlyOnceWith(rawResponse);
     expect(callLLM).toHaveBeenCalledOnce();
@@ -693,11 +695,13 @@ describe("quick positioning generation", () => {
   ])("revalidates saved course positioning with $name without a model request", async ({ rawResponse, issue }) => {
     const { inferCourseSeed } = await import("./job-runner");
     const onResponse = vi.fn(async () => {});
-    await expect(inferCourseSeed(
+    const restored = inferCourseSeed(
       { name: "计算机视觉", subject: "人工智能", grade: "", hours: 2 } as Course,
       { courseId: "course-cv", teacherBrief: "讲解图像分类" }, new AbortController().signal,
       { initialResponse: rawResponse, onResponse },
-    )).rejects.toThrow(issue);
+    );
+    if (issue === 'JSON') await expect(restored).rejects.toThrow(issue);
+    else await expect(restored).resolves.toMatchObject({ grade: '' });
     expect(onResponse).toHaveBeenCalledExactlyOnceWith(rawResponse);
     expect(callLLM).not.toHaveBeenCalled();
   }, 15_000);

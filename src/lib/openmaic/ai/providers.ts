@@ -56,6 +56,7 @@ import {
 import { createLogger } from '@openmaic/lib/logger';
 import { findModelById, getCanonicalModelId } from './model-aliases';
 import { normalizeAzureBaseUrl } from './azure';
+import { adaptLegacyLanguageModelFileData } from './language-model-compatibility';
 // NOTE: Do NOT import thinking-context.ts here — it uses node:async_hooks
 // which is server-only, and this file is also used on the client via
 // settings.ts. The thinking context is read from globalThis instead
@@ -1936,7 +1937,7 @@ export function getModel(config: ModelConfig): ModelWithInfo {
       // handles reasoning itself, so it is excluded.
       if (config.providerId !== 'openai') {
         model = wrapLanguageModel({
-          model,
+          model: adaptLegacyLanguageModelFileData(model),
           middleware:
             config.providerId === 'kimi' && config.modelId === 'kimi-k3'
               ? [
@@ -2021,6 +2022,7 @@ export function getModel(config: ModelConfig): ModelWithInfo {
   // Look up model info from the provider registry
   const modelInfo = findModelById(config.providerId, provider?.models, config.modelId) || null;
 
+  model = adaptLegacyLanguageModelFileData(model);
   return { model, modelInfo };
 }
 

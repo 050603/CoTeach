@@ -43,7 +43,7 @@ it("uses confirmed class readiness in planning and invalidates cached plans when
   expect(prompt.system).toContain("必须在一次 JSON 输出中完整结束");
   expect(prompt.system).toContain("JSON 字符串内的英文双引号必须转义");
   expect(prompt.system).toContain("概念辨析、因果机制、数学推导、操作技能、历史材料和综合应用");
-  expect(prompt.system).toContain("introducesNodeIds、deepensNodeIds、referencesNodeIds");
+  expect(prompt.system).toContain("从实际落页正文派生 unit.explanationNodes、page.unitIds、introducesNodeIds 和 referencesNodeIds");
   expect(prompt.system).toContain("不得把后页才出现的术语、案例、问题或任务伪装成上一页已经讲过");
   expect(prompt.system).toContain("entryPoint 写出实际开场对象");
   expect(prompt.system).toContain("Instructional Slide Title Contract");
@@ -69,7 +69,6 @@ it("uses confirmed class readiness in planning and invalidates cached plans when
   expect(prompt.user).toContain('"topology":"sequence|cycle|branch"');
   expect(prompt.system).toContain("branch 必须显式提供全部 edges");
   expect(prompt.system).toContain("不得把互斥结果或并列方法串成所有学习者必须依次完成的步骤");
-  expect(prompt.user).toContain('"aspectRatio":"image 可选 16:9|4:3|1:1|9:16"');
   expect(prompt.system).toContain("构造案例、类比和示意数据");
   expect(prompt.system).toContain("教材案例采用双通道设计");
   expect(prompt.system).toContain("学生内容字段中直接写成连贯案例");
@@ -85,6 +84,7 @@ it("uses confirmed class readiness in planning and invalidates cached plans when
   expect(prompt.system).not.toContain("抽象概念、因果或步骤怎样用可编辑关系图表达");
   const outputExample = JSON.parse(prompt.user.split("返回结构：\n")[1]!.split("\n\n按需字段示例")[0]!);
   expect(outputExample.sections[0].pages[0].visualRelationship).not.toHaveProperty("diagram");
+  expect(outputExample.sections[0].pages[0].caseObservation.aspectRatio).toBe("image 可选 16:9|4:3|1:1|9:16");
   expect(prompt.user).toContain("仅在已决定 diagram 或含图示的 mixed 最能帮助理解时加入 visualRelationship");
   expect(prompt.system).toContain("具有完整、可比较数值并需要看趋势");
   expect(prompt.system).toContain("不得考未讲内容");
@@ -95,7 +95,7 @@ it("uses confirmed class readiness in planning and invalidates cached plans when
   expect(prompt.user).toContain('"sharedContext"');
   expect(prompt.user).toContain('"learningTask"');
   expect(prompt.system).toContain('type=slide 的概念首次讲解页用其规范名称作正式 PPT 标题，如‘项目式学习’');
-  expect(prompt.user).toContain('"title":"slide 页用知识对象的正式标题，首次定义概念时用规范名称如项目式学习；interactive 页用具体任务名称"');
+  expect(outputExample.sections[0].pages[0].title).toBe("slide 页用知识对象的正式标题，首次定义概念时用规范名称如项目式学习；interactive 页用具体任务名称");
   expect(prompt.user).not.toContain('"title":"学生可见标题"');
   expect(prompt.user).toContain('"taskConnection"');
   expect(prompt.user).toContain("可选最终任务情境");
@@ -115,10 +115,11 @@ it("uses confirmed class readiness in planning and invalidates cached plans when
   expect(prompt.system).toContain("一个知识点可以跨多页");
   expect(prompt.system).toContain("知识点、讲授单元和 PPT 页面不是一一对应关系");
   expect(prompt.system).toContain("每个 explanationNode 用 knowledgePointIds 声明");
-  expect(prompt.system).toContain("explanationNodes 必须写在所属 unit 内");
+  expect(prompt.system).toContain("explanationNodes 必须写在实际讲授的 page 内");
   expect(prompt.user).toContain("机器结构验收合同");
-  expect(prompt.user).toContain('"knowledgePointIds":["该节点实际解释的本单元知识点ID"]');
-  expect(prompt.system).toContain("知识结论+完整案例+练习");
+  expect(outputExample.sections[0].pages[0].explanationNodes[0].knowledgePointIds).toEqual(["该节点实际解释的本单元知识点ID"]);
+  expect(prompt.system).toContain("辅助案例优先嵌入相关知识页");
+  expect(prompt.system).toContain("完整故事、原因与条件由该页实际拥有的 example 节点支持讲稿");
   expect(prompt.user).toContain("输入时间无法承载必需解释");
   expect(prompt.user).toContain("只为本次 AI 知识讲授的必要承接、新知识解释、推理、例子、操作、短测和正式收束估时");
   expect(prompt.system).not.toContain("relative stability");
@@ -167,9 +168,9 @@ it("starts AI teaching with new knowledge after a teacher-led launch", async () 
   const repeatedLaunch = modelBlueprint();
   (repeatedLaunch.sections[0]!.units[0]!.explanationNodes[0]! as { kind: string }).kind = "example";
   const onValidation = vi.fn();
-  await expect(generateTeachingBlueprint(scoped, async () => JSON.stringify(repeatedLaunch), {
+  await expectBlueprintQualityIssue(generateTeachingBlueprint(scoped, async () => JSON.stringify(repeatedLaunch), {
     onValidation, retrySleep: async () => undefined,
-  })).rejects.toThrow("AI 知识讲授第一页必须建立新概念");
+  }), "AI 知识讲授第一页必须建立新概念");
   expect(onValidation.mock.calls[0]?.[0].issues).toContain(
     "AI 知识讲授第一页必须建立新概念、关系、机制或适用条件，不能只重复前一阶段教师已完成的导入或案例观察",
   );
@@ -632,7 +633,8 @@ describe("teaching blueprint compiler", () => {
     const outline = teachingBlueprintToOutlines(blueprint, "使用简体中文")[0]!;
     expect(outline.keyPoints).toEqual(outline.teachingBrief?.teachingPlan?.presentationContent);
     expect(outline.keyPoints).toContain("测试信息进入训练会破坏独立评估");
-    expect(outline.teachingBrief?.teachingPlan?.visibleContent.some((point) => point.includes("训练集提供模型学习规律所需的信息"))).toBe(true);
+    expect(outline.teachingBrief?.teachingPlan?.visibleContent).toEqual(outline.keyPoints);
+    expect(outline.teachingBrief?.explanation).toContain("训练集提供模型学习规律所需的信息");
     expect(outline.teachingBrief?.pageTask).toBeUndefined();
     expect(blueprint.sections[0]?.pages[0]?.learningTask).toBeUndefined();
   });
@@ -677,7 +679,8 @@ describe("teaching blueprint compiler", () => {
     expect(outline.teachingBrief?.designVersion).toBe(TEACHING_BLUEPRINT_COMPILED_BRIEF_VERSION);
     expect(hasCurrentTeachingBrief(outline)).toBe(true);
     expect(outline.teachingBrief?.teachingPlan?.newContent).toContain("训练集提供模型学习规律所需的信息");
-    expect(outline.teachingBrief?.teachingPlan?.visibleContent).toContain(
+    expect(outline.teachingBrief?.teachingPlan?.visibleContent).toEqual(outline.keyPoints);
+    expect(outline.teachingBrief?.explanation).toContain(
       "训练集提供模型学习规律所需的信息，测试集在训练结束后独立检查这些规律能否用于新对象，划分规则必须服务于这种独立性。",
     );
     expect(blueprint.sections[0]?.units[0]?.explanationNodes?.every((node) => (
@@ -1108,6 +1111,8 @@ describe("teaching blueprint compiler", () => {
     expect(blueprint.sections[0]?.pages[0]?.resourceNeeds?.[0]?.required).toBe(true);
     expect(outline.visualIntent?.resourceRefs?.[0]?.required).toBe(true);
     expect(outline.mediaGenerations?.[0]?.observationContext).toContain("四条腿和花斑");
+    expect(outline.visualIntent?.resourceRefs?.[0]?.observationGoal).toBe(page.caseObservation.observableDifference);
+    expect(outline.visualIntent?.resourceRefs?.[0]?.reason).toBe("比较想象动物和真实动物");
   });
 
   it.each([
@@ -1133,6 +1138,8 @@ describe("teaching blueprint compiler", () => {
     expect(outline.mediaGenerations?.[0]?.prompt).toContain(subject);
     expect(outline.mediaGenerations?.[0]?.prompt).toContain(difference);
     expect(outline.visualIntent?.resourceRefs?.[0]?.required).toBe(true);
+    expect(outline.visualIntent?.resourceRefs?.[0]?.observationGoal).toBe(difference);
+    expect(outline.visualIntent?.resourceRefs?.[0]?.reason).toBe("观察形态差异是本页判断依据");
   });
 
   it("keeps a no-image observation decision free of decorative legacy requests", async () => {
@@ -1172,7 +1179,7 @@ describe("teaching blueprint compiler", () => {
     expect(outline.visualIntent?.diagram).toBeUndefined();
   });
 
-  it.each(["text", "table", "chart", "illustration"])("stops without automatically repairing an explicit %s selection with an attached diagram only at the visual relationship", async (preferredForm) => {
+  it.each(["text", "table", "chart", "illustration"])("records diagnostics without automatically repairing an explicit %s selection with an attached diagram only at the visual relationship", async (preferredForm) => {
     const candidate = compactModelBlueprint();
     const relationship = {
       kind: "process", description: "处理后复查，根据结果返回改进。", readingOrder: ["处理", "复查"],
@@ -1192,7 +1199,7 @@ describe("teaching blueprint compiler", () => {
       }));
     const audits = vi.fn();
     const firstPassValidation = vi.fn();
-    await expect(generateTeachingBlueprint(input(), ai, { ...({ onValidation: audits }), onValidation: firstPassValidation })).rejects.toThrow();
+    await expectBlueprintQualityIssue(generateTeachingBlueprint(input(), ai, { ...({ onValidation: audits }), onValidation: firstPassValidation }));
     expect(ai).toHaveBeenCalledTimes(1);
     expect(firstPassValidation).toHaveBeenCalledOnce();
     expect(firstPassValidation.mock.calls[0]![0].issues.length).toBeGreaterThan(0);
@@ -1221,7 +1228,7 @@ describe("teaching blueprint compiler", () => {
       }));
     const audits = vi.fn();
     const firstPassValidation = vi.fn();
-    await expect(generateTeachingBlueprint(input(), ai, { ...({ onValidation: audits }), onValidation: firstPassValidation })).rejects.toThrow();
+    await expectBlueprintQualityIssue(generateTeachingBlueprint(input(), ai, { ...({ onValidation: audits }), onValidation: firstPassValidation }));
     expect(ai).toHaveBeenCalledTimes(1);
     expect(firstPassValidation).toHaveBeenCalledOnce();
     expect(firstPassValidation.mock.calls[0]![0].issues.length).toBeGreaterThan(0);
@@ -1422,9 +1429,9 @@ describe("teaching blueprint compiler", () => {
       edits: [{ path: "sections.0.pages.0.visualRelationship", value: correction }],
     }));
     const firstPassValidation = vi.fn();
-    await expect(generateTeachingBlueprint(input(), ai, { ...({
+    await expectBlueprintQualityIssue(generateTeachingBlueprint(input(), ai, { ...({
       repairFrom: { candidate, issues: invalid.issues },
-    }), onValidation: firstPassValidation })).rejects.toThrow();
+    }), onValidation: firstPassValidation }));
     expect(ai).toHaveBeenCalledTimes(0);
     expect(firstPassValidation).toHaveBeenCalledOnce();
     expect(firstPassValidation.mock.calls[0]![0].issues.length).toBeGreaterThan(0);
@@ -1448,10 +1455,10 @@ describe("teaching blueprint compiler", () => {
       },
     };
     const validation = vi.fn();
-    await expect(generateTeachingBlueprint(input(), async () => JSON.stringify(candidate), {
+    await expectBlueprintQualityIssue(generateTeachingBlueprint(input(), async () => JSON.stringify(candidate), {
       onValidation: validation,
       retrySleep: async () => undefined,
-    })).rejects.toThrow("教学蓝图缺少可用结构");
+    }), "教学蓝图缺少可用结构");
     expect(validation.mock.calls[0]?.[0].issues).toContain("第 1 节第 1 页整体说明不能重复作为流程节点");
   });
 
@@ -1471,10 +1478,10 @@ describe("teaching blueprint compiler", () => {
       },
     };
     const validation = vi.fn();
-    await expect(generateTeachingBlueprint(input(), async () => JSON.stringify(candidate), {
+    await expectBlueprintQualityIssue(generateTeachingBlueprint(input(), async () => JSON.stringify(candidate), {
       onValidation: validation,
       retrySleep: async () => undefined,
-    })).rejects.toThrow("教学蓝图缺少可用结构");
+    }), "教学蓝图缺少可用结构");
     expect(validation.mock.calls[0]?.[0].issues.join("；")).toContain("图示节点、连接或说明无法在单页排下");
     expect(validation.mock.calls[0]?.[0].details).toEqual([
       expect.objectContaining({ code: "diagram-capacity", sectionIndex: 0, pageIndex: 0 }),
@@ -1491,10 +1498,10 @@ describe("teaching blueprint compiler", () => {
     const ai = vi.fn(async () => JSON.stringify(candidate));
     const validation = vi.fn();
 
-    await expect(generateTeachingBlueprint(input(), ai, {
+    await expectBlueprintQualityIssue(generateTeachingBlueprint(input(), ai, {
       onValidation: validation,
       retrySleep: async () => undefined,
-    })).rejects.toThrow("教学蓝图缺少可用结构");
+    }), "教学蓝图缺少可用结构");
     expect(ai).toHaveBeenCalledTimes(1);
     expect(validation.mock.calls[0]?.[0].issues).toContain("第 1 节第 1 页第 1 项图片需求缺少观察目的或可执行的生成描述");
   });
@@ -1548,8 +1555,7 @@ describe("teaching blueprint compiler", () => {
     unit.misconceptions = ["澄清常见误区。"];
     const ai = vi.fn(async () => JSON.stringify(candidate));
 
-    await expect(generateTeachingBlueprint(input(), ai, { retrySleep: async () => undefined }))
-      .rejects.toThrow("教学蓝图缺少可用结构");
+    await expectBlueprintQualityIssue(generateTeachingBlueprint(input(), ai, { retrySleep: async () => undefined }), "教学蓝图缺少可用结构");
     expect(ai).toHaveBeenCalledTimes(1);
   });
 
@@ -1568,10 +1574,10 @@ describe("teaching blueprint compiler", () => {
     const ai = vi.fn(async () => JSON.stringify(candidate));
     const onValidation = vi.fn();
 
-    await expect(generateTeachingBlueprint(input(), ai, {
+    await expectBlueprintQualityIssue(generateTeachingBlueprint(input(), ai, {
       onValidation,
       retrySleep: async () => undefined,
-    })).rejects.toThrow("教学蓝图缺少可用结构");
+    }), "教学蓝图缺少可用结构");
     expect(onValidation.mock.calls.at(-1)?.[0].issues.join("；"))
       .toContain("只挂载但未由解释节点承担的知识点：kp-split、kp-leak");
   });
@@ -1588,8 +1594,7 @@ describe("teaching blueprint compiler", () => {
     const ai = vi.fn(async () => JSON.stringify(candidate));
     const onValidation = vi.fn();
 
-    await expect(generateTeachingBlueprint(coreInput, ai, { onValidation, retrySleep: async () => undefined }))
-      .rejects.toThrow("教学蓝图缺少可用结构");
+    await expectBlueprintQualityIssue(generateTeachingBlueprint(coreInput, ai, { onValidation, retrySleep: async () => undefined }), "教学蓝图缺少可用结构");
     expect(onValidation.mock.calls.at(-1)?.[0].issues.join("；")).toContain("核心概念“训练集”缺少");
     expect(ai).toHaveBeenCalledTimes(1);
   });
@@ -1626,9 +1631,9 @@ describe("teaching blueprint compiler", () => {
       }));
 
     const firstPassValidation = vi.fn();
-    await expect(generateTeachingBlueprint(repairInput, ai, { ...({
+    await expectBlueprintQualityIssue(generateTeachingBlueprint(repairInput, ai, { ...({
       retrySleep: async () => undefined,
-    }), onValidation: firstPassValidation })).rejects.toThrow();
+    }), onValidation: firstPassValidation }));
     expect(ai).toHaveBeenCalledTimes(1);
     expect(firstPassValidation).toHaveBeenCalledOnce();
     expect(firstPassValidation.mock.calls[0]![0].issues.length).toBeGreaterThan(0);
@@ -1722,12 +1727,12 @@ describe("teaching blueprint compiler", () => {
     const ai = vi.fn().mockResolvedValue(JSON.stringify(compactModelBlueprint()));
 
     const firstPassValidation = vi.fn();
-    await expect(generateTeachingBlueprint(input(), ai, { ...({
+    await expectBlueprintQualityIssue(generateTeachingBlueprint(input(), ai, { ...({
       repairFrom: {
         response: JSON.stringify(incompatible),
         issues: ["第 1 节解释节点未分配给页面"],
       },
-    }), onValidation: firstPassValidation })).rejects.toThrow();
+    }), onValidation: firstPassValidation }));
     expect(ai).toHaveBeenCalledTimes(0);
     expect(firstPassValidation).toHaveBeenCalledOnce();
     expect(firstPassValidation.mock.calls[0]![0].issues.length).toBeGreaterThan(0);
@@ -1755,16 +1760,16 @@ describe("teaching blueprint compiler", () => {
       }));
 
     const firstPassValidation = vi.fn();
-    await expect(generateTeachingBlueprint(repairInput, ai, { ...({
+    await expectBlueprintQualityIssue(generateTeachingBlueprint(repairInput, ai, { ...({
       retrySleep: async () => undefined,
-    }), onValidation: firstPassValidation })).rejects.toThrow();
+    }), onValidation: firstPassValidation }));
     expect(ai).toHaveBeenCalledTimes(1);
     expect(firstPassValidation).toHaveBeenCalledOnce();
     expect(firstPassValidation.mock.calls[0]![0].issues.length).toBeGreaterThan(0);
     expect(firstPassValidation.mock.calls[0]![0].repairAttempts).toBe(0);
   });
 
-  it("validates a persisted invalid blueprint without a model call", async () => {
+  it("keeps a usable persisted blueprint with diagnostics and no model call", async () => {
     const repairInput = input();
     repairInput.knowledgePoints = repairInput.knowledgePoints.map((point) => point.id === "kp-train"
       ? { ...point, teachingRole: "core-concept" as const }
@@ -1780,10 +1785,10 @@ describe("teaching blueprint compiler", () => {
     }));
 
     const firstPassValidation = vi.fn();
-    await expect(generateTeachingBlueprint(repairInput, ai, { ...({
+    await expectBlueprintQualityIssue(generateTeachingBlueprint(repairInput, ai, { ...({
       repairFrom: { response: JSON.stringify(invalid), issues: [issue] },
       retrySleep: async () => undefined,
-    }), onValidation: firstPassValidation })).rejects.toThrow();
+    }), onValidation: firstPassValidation }));
     expect(ai).toHaveBeenCalledTimes(0);
     expect(firstPassValidation).toHaveBeenCalledOnce();
     expect(firstPassValidation.mock.calls[0]![0].issues.length).toBeGreaterThan(0);
@@ -1801,10 +1806,10 @@ describe("teaching blueprint compiler", () => {
       .mockResolvedValueOnce(JSON.stringify({ sections: [] }))
       .mockResolvedValueOnce("{broken-json");
     const firstPassValidation = vi.fn();
-    await expect(generateTeachingBlueprint(scoped, ai, { ...({
+    await expectBlueprintQualityIssue(generateTeachingBlueprint(scoped, ai, { ...({
       repairFrom: { candidate: draft, issues: ["saved issue"] },
       onValidation: (validation) => { audits.push(validation); },
-    }), onValidation: firstPassValidation })).rejects.toThrow();
+    }), onValidation: firstPassValidation }));
     expect(ai).toHaveBeenCalledTimes(0);
     expect(firstPassValidation).toHaveBeenCalledOnce();
     expect(firstPassValidation.mock.calls[0]![0].issues.length).toBeGreaterThan(0);
@@ -1833,9 +1838,9 @@ describe("teaching blueprint compiler", () => {
         edits: [{ path: "sections.0.units.0.explanationNodes", value: corrected.sections[0]!.units[0]!.explanationNodes }],
       }));
     const firstPassValidation = vi.fn();
-    await expect(generateTeachingBlueprint(scoped, ai, { ...({
+    await expectBlueprintQualityIssue(generateTeachingBlueprint(scoped, ai, { ...({
       onValidation: (validation) => { audits.push(validation); },
-    }), onValidation: firstPassValidation })).rejects.toThrow();
+    }), onValidation: firstPassValidation }));
     expect(ai).toHaveBeenCalledTimes(1);
     expect(firstPassValidation).toHaveBeenCalledOnce();
     expect(firstPassValidation.mock.calls[0]![0].issues.length).toBeGreaterThan(0);
@@ -1900,8 +1905,8 @@ describe("teaching blueprint compiler", () => {
     expect(repair.fixedConstraints.sourceSequences).toEqual(scoped.sourceSequences);
     expect(repair.fixedConstraints.textbookFigures).toEqual(scoped.textbookFigures);
     expect(repair.fixedConstraints.acceptanceContract.textbookSequenceCoverage.sequences).toEqual([
-      expect.objectContaining({ resourceId: "source-figure:roles", scope: "single-page", requiredItems: ["独立划分", "拟合参数", "检验新样本"] }),
-      expect.objectContaining({ resourceId: "source-sequence:roles", scope: "knowledge-point", requiredItems: ["独立划分", "拟合参数", "检验新样本"] }),
+      expect.objectContaining({ resourceId: "source-figure:roles", scope: "single-page", requiredItemCount: 3, requiredItems: ["独立划分", "拟合参数", "检验新样本"] }),
+      expect.objectContaining({ resourceId: "source-sequence:roles", scope: "knowledge-point", requiredItemCount: 3, requiredItems: ["独立划分", "拟合参数", "检验新样本"] }),
     ]);
     expect(repair.fixedConstraints.knowledgePoints[0]).toMatchObject({
       sourceKnowledgePointIds: ["source-role"], evidenceItemIds: ["evidence-roles"],
@@ -1913,7 +1918,7 @@ describe("teaching blueprint compiler", () => {
     expect(repair.current).toEqual(current);
   });
 
-  it("stops without automatically repairing source facts in owned nodes when complete unit prose and a keypoint-only patch do not survive compilation", async () => {
+  it("records diagnostics without automatically repairing source facts in owned nodes when complete unit prose and a keypoint-only patch do not survive compilation", async () => {
     const { labels, complete, scoped, draft } = embodiedSourceRecoveryFixture();
     const unit = draft.sections[0]!.units[0]!;
     const before = validateTeachingBlueprintDraft(draft, scoped);
@@ -1933,17 +1938,17 @@ describe("teaching blueprint compiler", () => {
         edits: [{ path: "sections.0.units.0.explanationNodes", value: repairedNodes }],
       }));
     const firstPassValidation = vi.fn();
-    await expect(generateTeachingBlueprint(scoped, ai, { ...({
+    await expectBlueprintQualityIssue(generateTeachingBlueprint(scoped, ai, { ...({
       repairFrom: { candidate: draft, issues: before.issues },
       onValidation: (validation) => { audits.push(validation); },
-    }), onValidation: firstPassValidation })).rejects.toThrow();
+    }), onValidation: firstPassValidation }));
     expect(ai).toHaveBeenCalledTimes(0);
     expect(firstPassValidation).toHaveBeenCalledOnce();
     expect(firstPassValidation.mock.calls[0]![0].issues.length).toBeGreaterThan(0);
     expect(firstPassValidation.mock.calls[0]![0].repairAttempts).toBe(0);
   });
 
-  it("reports all missing source facts without automatic recovery", async () => {
+  it("records missing source facts and keeps the usable draft without another call", async () => {
     const { labels, complete, scoped, draft } = embodiedSourceRecoveryFixture();
     const before = validateTeachingBlueprintDraft(draft, scoped);
     expect(before.issues).toHaveLength(1);
@@ -1966,10 +1971,10 @@ describe("teaching blueprint compiler", () => {
           value: partial.sections[0]!.units[0]!.explanationNodes.map((node) => ({ ...node, content: complete })) }],
       }));
     const firstPassValidation = vi.fn();
-    await expect(generateTeachingBlueprint(scoped, ai, { ...({
+    await expectBlueprintQualityIssue(generateTeachingBlueprint(scoped, ai, { ...({
       repairFrom: { candidate: draft, issues: before.issues },
       onValidation: (validation) => { audits.push(validation); },
-    }), onValidation: firstPassValidation })).rejects.toThrow();
+    }), onValidation: firstPassValidation }));
     expect(ai).toHaveBeenCalledTimes(0);
     expect(firstPassValidation).toHaveBeenCalledOnce();
     expect(firstPassValidation.mock.calls[0]![0].issues.length).toBeGreaterThan(0);
@@ -2003,10 +2008,10 @@ describe("teaching blueprint compiler", () => {
           edits: [{ path: "sections.0.units.0.explanationNodes", value: nodes.map((node) => ({ ...node, content: complete })) }],
         }));
       const firstPassValidation = vi.fn();
-    await expect(generateTeachingBlueprint(scoped, ai, { ...({
+    await expectBlueprintQualityIssue(generateTeachingBlueprint(scoped, ai, { ...({
         repairFrom: { candidate: draft, issues: before.issues },
         onValidation: (validation) => { audits.push(validation); },
-      }), onValidation: firstPassValidation })).rejects.toThrow();
+      }), onValidation: firstPassValidation }));
     expect(ai).toHaveBeenCalledTimes(0);
     expect(firstPassValidation).toHaveBeenCalledOnce();
     expect(firstPassValidation.mock.calls[0]![0].issues.length).toBeGreaterThan(0);
@@ -2291,7 +2296,7 @@ describe("teaching blueprint compiler", () => {
     expect(stored).toEqual(original);
   });
 
-  it("stops without automatically repairing the executed accepted brief while complete old nodes and raw keypoints cannot satisfy its source gate", async () => {
+  it("records diagnostics without automatically repairing the executed accepted brief while complete old nodes and raw keypoints cannot satisfy its source gate", async () => {
     const { scoped, stored, labels, complete } = acceptedEmbodiedPlanFixture({ adoptedComplete: false, nodeComplete: true });
     const before = revalidateStoredTeachingBlueprint(stored, scoped);
     expect(before.blueprint).toBeUndefined();
@@ -2306,9 +2311,9 @@ describe("teaching blueprint compiler", () => {
       ],
     }));
     const firstPassValidation = vi.fn();
-    await expect(generateTeachingBlueprint(scoped, ai, { ...({
+    await expectBlueprintQualityIssue(generateTeachingBlueprint(scoped, ai, { ...({
       repairFrom: { candidate: stored, issues: before.issues, preserveAcceptedPagePlans: true },
-    }), onValidation: firstPassValidation })).rejects.toThrow();
+    }), onValidation: firstPassValidation }));
     expect(ai).toHaveBeenCalledTimes(0);
     expect(firstPassValidation).toHaveBeenCalledOnce();
     expect(firstPassValidation.mock.calls[0]![0].issues.length).toBeGreaterThan(0);
@@ -2326,7 +2331,7 @@ describe("teaching blueprint compiler", () => {
           .map((node) => ({ ...node, content: complete })) }],
       }));
     const firstPassValidation = vi.fn();
-    await expect(generateTeachingBlueprint(scoped, ai, { ...({}), onValidation: firstPassValidation })).rejects.toThrow();
+    await expectBlueprintQualityIssue(generateTeachingBlueprint(scoped, ai, { ...({}), onValidation: firstPassValidation }));
     expect(ai).toHaveBeenCalledTimes(1);
     expect(firstPassValidation).toHaveBeenCalledOnce();
     expect(firstPassValidation.mock.calls[0]![0].issues.length).toBeGreaterThan(0);
@@ -2355,10 +2360,10 @@ describe("teaching blueprint compiler", () => {
       ],
     }));
     const firstPassValidation = vi.fn();
-    await expect(generateTeachingBlueprint(scoped, ai, { ...({
+    await expectBlueprintQualityIssue(generateTeachingBlueprint(scoped, ai, { ...({
       repairFrom: { candidate: stored, issues: before.issues, preserveAcceptedPagePlans: true },
       onValidation: (validation) => { audits.push(validation); },
-    }), onValidation: firstPassValidation })).rejects.toThrow();
+    }), onValidation: firstPassValidation }));
     expect(ai).toHaveBeenCalledTimes(0);
     expect(firstPassValidation).toHaveBeenCalledOnce();
     expect(firstPassValidation.mock.calls[0]![0].issues.length).toBeGreaterThan(0);
@@ -2375,14 +2380,12 @@ describe("teaching blueprint compiler", () => {
 
     const future = modelBlueprint();
     Object.assign(future.sections[0]!.units[0]!.explanationNodes[0]!, { prerequisiteNodeIds: ["split-concept"] });
-    await expect(generateTeachingBlueprint(base, async () => JSON.stringify(future)))
-      .rejects.toThrow("尚未讲授的先备解释节点");
+    await expectBlueprintQualityIssue(generateTeachingBlueprint(base, async () => JSON.stringify(future)), "尚未讲授的先备解释节点");
 
     const referenceOnly = structuredClone(candidate);
     referenceOnly.sections[0]!.pages[0]!.introducesNodeIds = [];
     referenceOnly.sections[0]!.pages[0]!.referencesNodeIds = ["roles-concept"];
-    await expect(generateTeachingBlueprint(base, async () => JSON.stringify(referenceOnly)))
-      .rejects.toThrow("尚未建立其先备解释");
+    await expectBlueprintQualityIssue(generateTeachingBlueprint(base, async () => JSON.stringify(referenceOnly)), "尚未建立其先备解释");
   });
 
   it("covers a shared requirement once per source topic and requires a real difficulty strategy", async () => {
@@ -2402,15 +2405,13 @@ describe("teaching blueprint compiler", () => {
       teachingApproach: "对比同一难度数据是否参与参数学习", understandingEvidence: "能依据用途区分训练与测试",
     }] });
     const findings = vi.fn();
-    await expect(generateTeachingBlueprint(base, async () => JSON.stringify(candidate), { onValidation: findings }))
-      .rejects.toThrow("source-b");
+    await expectBlueprintQualityIssue(generateTeachingBlueprint(base, async () => JSON.stringify(candidate), { onValidation: findings }), "source-b");
     expect(findings.mock.calls[0]?.[0].details).toEqual(expect.arrayContaining([
       expect.objectContaining({ code: "teaching-requirement", requirementId: "difficulty-two-topics" }),
     ]));
 
     Object.assign(candidate.sections[1]!.units[0]!, { requirementIds: ["difficulty-two-topics"] });
-    await expect(generateTeachingBlueprint(base, async () => JSON.stringify(candidate)))
-      .rejects.toThrow("未给教学难点写出具体障碍");
+    await expectBlueprintQualityIssue(generateTeachingBlueprint(base, async () => JSON.stringify(candidate)), "未给教学难点写出具体障碍");
     Object.assign(candidate.sections[1]!.units[0]!, { difficultyStrategies: [{
       requirementId: "difficulty-two-topics", learnerObstacle: "只记随机划分规则",
       teachingApproach: "沿同一植物的连拍照片追踪数据跨集合的过程", understandingEvidence: "能指出信息泄漏路径",
@@ -2475,12 +2476,12 @@ describe("teaching blueprint compiler", () => {
       ...base.teachingOrder, knowledgePointIds: ["kp-split", "kp-leak", "kp-train", "kp-test"],
     } };
     const onValidation = vi.fn();
-    await expect(generateTeachingBlueprint(reversed, async () => JSON.stringify(candidate), {
+    await expectBlueprintQualityIssue(generateTeachingBlueprint(reversed, async () => JSON.stringify(candidate), {
       onValidation, retrySleep: async () => undefined,
-    })).rejects.toThrow("教材教学顺序倒置");
+    }), "教材教学顺序倒置");
     expect(onValidation.mock.calls.flatMap(([result]) => result.issues).join("；"))
       .toContain("教材教学顺序倒置");
-    expect(buildTeachingBlueprintPrompt(base).user).toContain("主教材教学顺序与局部调整");
+    expect(buildTeachingBlueprintPrompt(base).user).toContain("已确认课程教学路径");
   });
 
   it("rejects a prerequisite that is only taught in a later section", async () => {
@@ -2488,8 +2489,7 @@ describe("teaching blueprint compiler", () => {
     base.knowledgePoints = base.knowledgePoints.map((point) => point.id === "kp-train"
       ? { ...point, parentKnowledgePointIds: ["kp-split"] } : point);
     const ai = vi.fn(async () => JSON.stringify(modelBlueprint()));
-    await expect(generateTeachingBlueprint(base, ai, { retrySleep: async () => undefined }))
-      .rejects.toThrow("尚未建立上位概念“数据划分”");
+    await expectBlueprintQualityIssue(generateTeachingBlueprint(base, ai, { retrySleep: async () => undefined }), "尚未建立上位概念“数据划分”");
   });
 
   it("does not count a reference-only earlier page as teaching a prerequisite", async () => {
@@ -2500,8 +2500,7 @@ describe("teaching blueprint compiler", () => {
     candidate.sections[0]!.pages[0]!.introducesNodeIds = [];
     candidate.sections[0]!.pages[0]!.referencesNodeIds = ["roles-concept"];
     const ai = vi.fn(async () => JSON.stringify(candidate));
-    await expect(generateTeachingBlueprint(base, ai, { retrySleep: async () => undefined }))
-      .rejects.toThrow("尚未建立上位概念“训练集”");
+    await expectBlueprintQualityIssue(generateTeachingBlueprint(base, ai, { retrySleep: async () => undefined }), "尚未建立上位概念“训练集”");
   });
 
   it("accepts a prerequisite first taught on the same page", async () => {
@@ -2520,7 +2519,7 @@ describe("teaching blueprint compiler", () => {
     await expect(generateTeachingBlueprint(input(), ai, {
       onValidation,
       retrySleep: async () => undefined,
-    })).rejects.toThrow("教学蓝图缺少可用结构");
+    })).rejects.toThrow();
     expect(ai).toHaveBeenCalledTimes(1);
     expect(onValidation).toHaveBeenLastCalledWith(expect.objectContaining({
       issues: ["没有返回 sections"],
@@ -2668,9 +2667,187 @@ it("compiles the single authored node body into compatibility fields and the exe
   expect(outline.teachingBrief?.teachingPlan?.reasoningSteps).toContain(unit.workedExample);
   expect(outline.teachingBrief?.teachingPlan?.presentationContent).toEqual(legacy.sections[0]!.pages[0]!.keyPoints);
   const prompt = buildTeachingBlueprintPrompt(input());
+  expect(prompt.system).toContain('完整讲授的 explanationNodes 不是逐项上屏目录');
+  expect(prompt.system).toContain('role 不能只是给完整解释段落换一个名字');
+  expect(prompt.system).toContain('所选展示命题仍须准确');
   const example = JSON.parse(prompt.user.split("返回结构：\n")[1]!.split("\n\n按需字段示例")[0]!);
-  expect(example.authoringContract).toBe("blueprint-v1");
+  expect(example.authoringContract).toBe("blueprint-v5");
+  expect(example.sections[0].pages[0]).toHaveProperty("presentationItems");
+  expect(example.sections[0].pages[0]).not.toHaveProperty("keyPointRefs");
+  expect(example.sections[0].pages[0]).not.toHaveProperty("keyPoints");
   expect(example.sections[0].units[0]).not.toHaveProperty("explanation");
+});
+
+it("requires independently authored page fields at their executable ownership location on the first request", async () => {
+  const candidate = compactModelBlueprint();
+  const prompt = buildTeachingBlueprintPrompt(input());
+  const exampleText = prompt.user.split("返回结构：\n")[1]!.split("\n\n按需字段示例")[0]!;
+  const example = JSON.parse(exampleText);
+  const examplePage = example.sections[0].pages[0];
+  expect(exampleText).toMatch(/\n\s+"taskConnection": \{/u);
+  expect(Object.keys(examplePage.taskConnection)).toEqual(["mode", "rationale"]);
+  for (const field of ["entryPoint", "caseObservation", "visualRelationship"]) {
+    expect(examplePage).toHaveProperty(field);
+    expect(examplePage.taskConnection).not.toHaveProperty(field);
+  }
+  const ai = vi.fn().mockResolvedValue(JSON.stringify(candidate));
+  await generateTeachingBlueprint(input(), ai);
+  expect(ai).toHaveBeenCalledOnce();
+  expect(ai.mock.calls[0]![0]).toContain("taskConnection、entryPoint、caseObservation、visualRelationship 都是 page 的同级字段");
+  expect(ai.mock.calls[0]![0]).toContain("区别特征不能成为否定另一机制作用的理由");
+  expect(ai.mock.calls[0]![0]).toContain("A是否发生决定B是否发生");
+  expect(ai.mock.calls[0]![1]).toContain('"invalidConversions":["A是否发生决定B是否发生","A才可能B","没有A便不能B"]');
+  const malformed = structuredClone(candidate);
+  const page = malformed.sections[0]!.pages[0] as unknown as Record<string, unknown>;
+  const taskConnection = page.taskConnection as Record<string, unknown>;
+  for (const field of ["entryPoint", "caseObservation", "visualRelationship"]) {
+    taskConnection[field] = page[field];
+    delete page[field];
+  }
+  expect(validateTeachingBlueprintDraft(malformed, input()).issues.join("；")).toContain("缺少独立的案例观察与配图判定");
+});
+
+it("keeps source item names consistent between first-pass explanations and their native sequence diagram", async () => {
+  const labels = ["确认记录的实际用途", "核对证据的原始来源", "检查对象的完整标注"];
+  const base = compactModelBlueprint();
+  const unit = base.sections[0]!.units[0]!;
+  const node = { id: "source-process", kind: "mechanism", content: `流程依次为${labels.join("、")}，每步依据已核对的记录。`,
+    knowledgePointIds: unit.knowledgePointIds, prerequisiteNodeIds: [unit.explanationNodes[0]!.id], provenance: "course-source" };
+  const page = { ...base.sections[0]!.pages[0], introducesNodeIds: [...base.sections[0]!.pages[0]!.introducesNodeIds, node.id],
+    visualRelationship: { kind: "sequence", description: "证据记录核对流程", preferredForm: "diagram", rationale: "保留各检查责任及先后关系。",
+      diagram: { topology: "sequence", nodes: labels.map((label, index) => ({ id: `s${index}`, label })),
+        edges: [{ from: "s0", to: "s1" }, { from: "s1", to: "s2" }], annotation: "逐项检查后再给出结论。" } } };
+  const candidate = { authoringContract: "blueprint-v1", sections: [{ ...base.sections[0],
+    units: [{ ...unit, explanationNodes: [...unit.explanationNodes, node] }], pages: [page] }] };
+  const scoped: TeachingBlueprintInput = { ...input(), sourceSequences: [{ resourceId: "source-sequence:evidence-check",
+    required: true, knowledgePointIds: ["kp-train"], scope: "knowledge-point", sequenceSemantics: "ordered-steps",
+    orderedSteps: labels.map((label, index) => ({ label, sourceBlockId: `record-${index}` })) }] };
+  const ai = vi.fn().mockResolvedValue(JSON.stringify(candidate));
+  const blueprint = await generateTeachingBlueprint(scoped, ai);
+  expect(ai).toHaveBeenCalledOnce();
+  expect(ai.mock.calls[0]![0]).toContain("引用教材 orderedSteps 的节点 label 必须保留对应条目的原始名称");
+  expect(ai.mock.calls[0]![0]).toContain("所选条目进入页面实际拥有的解释节点");
+  expect(ai.mock.calls[0]![0]).toContain("PPT 可准确精炼、解释可自然转述");
+  const outlines = teachingBlueprintToOutlines(blueprint, "使用简体中文");
+  expect(outlines[0]!.visualIntent?.diagram?.nodes.map((item) => item.label)).toEqual(labels);
+  expect(() => assertSourceSequencesInOutlines(outlines, scoped.sourceSequences!)).not.toThrow();
+  const shortened = structuredClone(candidate);
+  shortened.sections[0]!.pages[0]!.visualRelationship.diagram.nodes[1]!.label = "核对来源";
+  expect(validateTeachingBlueprintDraft(shortened, scoped).issues.join("；")).toContain("辅助顺序图未完整保留教材的 3 个步骤");
+});
+
+it("authors one complete source list across separate units without presenting a page subset as its total", async () => {
+  const labels = ["明确评估对象", "分离训练与检验", "保持数据来源独立", "冻结选择规则", "检查近重复记录"];
+  const base = compactModelBlueprint();
+  const section = base.sections[0]!;
+  const originalUnit = section.units[0]!;
+  const firstIds = ["kp-train", "kp-test", "kp-split"];
+  const firstUnit = { ...originalUnit, knowledgePointIds: firstIds, explanationNodes: [
+    { ...originalUnit.explanationNodes[0]!, knowledgePointIds: firstIds,
+      content: `${originalUnit.explanationNodes[0]!.content}本清单共有五条原则，本页讲前四条原则：${labels.slice(0, 4).join("、")}。` },
+    { ...originalUnit.explanationNodes[0]!, id: "independent-evaluation-reasoning", kind: "mechanism",
+      knowledgePointIds: firstIds, prerequisiteNodeIds: [originalUnit.explanationNodes[0]!.id],
+      content: originalUnit.mechanism },
+  ] };
+  const secondUnit = { ...originalUnit, id: "duplicate-records", knowledgePointIds: ["kp-leak"], explanationNodes: [
+    { ...originalUnit.explanationNodes[0]!, id: "duplicate-record-concept", knowledgePointIds: ["kp-leak"],
+      content: `第五条原则是${labels[4]}。数据泄漏是测试对象或其近重复记录参与训练，使评估结果混入已见信息的影响。` },
+    { ...originalUnit.explanationNodes[0]!, id: "duplicate-record-reasoning", kind: "mechanism",
+      knowledgePointIds: ["kp-leak"], prerequisiteNodeIds: ["duplicate-record-concept"],
+      content: "同一株植物的连续拍摄记录若跨越两个数据集合，模型就可能利用已经见过的线索，所以必须先识别近重复记录再划分数据。" },
+  ] };
+  const firstPage = { ...section.pages[0]!, knowledgePointIds: firstIds,
+    introducesNodeIds: firstUnit.explanationNodes.map((node) => node.id),
+    description: "本清单共有五条原则，本页先讲前四条原则，下一页继续第五条。", keyPoints: labels.slice(0, 4) };
+  const secondPage = { ...section.pages[0]!, id: "duplicate-record-page", title: "近重复记录与数据泄漏",
+    knowledgePointIds: ["kp-leak"], unitIds: [secondUnit.id],
+    introducesNodeIds: secondUnit.explanationNodes.map((node) => node.id),
+    description: "继续展开同一清单第五条原则，并说明近重复记录为何破坏独立性。", keyPoints: [labels[4]!] };
+  const candidate = { authoringContract: "blueprint-v1", sections: [{ ...section,
+    units: [firstUnit, secondUnit], pages: [firstPage, secondPage] }] };
+  const scoped: TeachingBlueprintInput = { ...input(), sourceSequences: [{
+    resourceId: "source-sequence:independent-evaluation", required: true,
+    knowledgePointIds: ["kp-train", "kp-leak"], scope: "knowledge-point", sequenceSemantics: "enumerated-items",
+    orderedSteps: labels.map((label, index) => ({ label, sourceBlockId: `evaluation-principle-${index}` })),
+  }] };
+  const ai = vi.fn().mockResolvedValue(JSON.stringify(candidate));
+  const blueprint = await generateTeachingBlueprint(scoped, ai);
+  expect(ai).toHaveBeenCalledOnce();
+  expect(ai.mock.calls[0]![1]).toContain('"requiredItemCount":5');
+  expect(ai.mock.calls[0]![1]).toContain('"knowledgePointIds":["kp-train","kp-leak"]');
+  const outlines = teachingBlueprintToOutlines(blueprint, "使用简体中文");
+  expect(outlines).toHaveLength(3); // Two teaching pages and the existing section quiz.
+  expect(() => assertSourceSequencesInOutlines(outlines, scoped.sourceSequences!)).not.toThrow();
+  expect(revalidateStoredTeachingBlueprint(blueprint, scoped).issues).toEqual([]);
+  const falseTotal = structuredClone(candidate);
+  falseTotal.sections[0]!.pages[0]!.description = "本清单共有四条原则。";
+  expect(validateTeachingBlueprintDraft(falseTotal, scoped).issues.join("；")).toContain("写成 4 条，教材正文清单为 5 条");
+  const missingLast = structuredClone(candidate);
+  missingLast.sections[0]!.units[1]!.explanationNodes[0]!.content = "数据泄漏是测试对象参与训练，使评估结果混入已见信息的影响。";
+  missingLast.sections[0]!.pages[1]!.keyPoints = ["数据泄漏影响独立性"];
+  expect(validateTeachingBlueprintDraft(missingLast, scoped).issues.join("；")).toContain(`遗漏教材条目：${labels[4]}`);
+});
+
+it("keeps the complete adopted source sequence in a long authored node and its executed lecture", async () => {
+  const labels = ["确认用途", "检查来源", "核对标注", "处理缺失", "记录变更", "复核结果"];
+  const sourceDetail = "每项记录都要保留原始对象、采集条件和检查依据，区分观察事实与后续判断；遇到证据不足时说明缺口，不能用未经核对的推测代替原始事实。".repeat(90);
+  const complete = `${labels[0]}：${sourceDetail}${labels.slice(1).map((label) => `${label}：保留该环节的具体依据及必要条件。`).join("")}`;
+  expect(complete.length).toBeGreaterThan(4_000);
+  expect(complete.indexOf(labels.at(-1)!)).toBeGreaterThan(4_000);
+  const base = compactModelBlueprint();
+  const unit = base.sections[0]!.units[0]!;
+  const nodes = [...unit.explanationNodes, {
+    id: "complete-source-process", kind: "mechanism", content: complete,
+    knowledgePointIds: unit.knowledgePointIds, prerequisiteNodeIds: [unit.explanationNodes[0]!.id],
+    provenance: "course-source",
+  }];
+  const authoredUnit: Record<string, unknown> = { ...unit, explanationNodes: nodes,
+    evidenceQuotes: [complete.slice(0, 120)] };
+  for (const field of ["explanation", "mechanism", "workedExample", "conditions", "misconceptions"]) delete authoredUnit[field];
+  const candidate = { authoringContract: "blueprint-v1", sections: [{ ...base.sections[0], units: [authoredUnit],
+    pages: [{ ...base.sections[0]!.pages[0], introducesNodeIds: nodes.map((node) => node.id) }],
+  }] };
+  const original = structuredClone(candidate);
+  const scoped: TeachingBlueprintInput = { ...input(), sourceContext: complete,
+    sourceSequences: [{ resourceId: "source-sequence:data-review", required: true,
+      knowledgePointIds: ["kp-train"], scope: "knowledge-point", sequenceSemantics: "ordered-steps",
+      orderedSteps: labels.map((label, index) => ({ label, sourceBlockId: `data-review-${index}` })),
+    }],
+  };
+  const ai = vi.fn().mockResolvedValue(JSON.stringify(candidate));
+  const blueprint = await generateTeachingBlueprint(scoped, ai);
+  expect(ai).toHaveBeenCalledOnce();
+  expect(candidate).toEqual(original);
+  expect(blueprint.sections[0]!.units[0]!.explanationNodes?.[1]?.content).toBe(complete);
+  const outlines = teachingBlueprintToOutlines(blueprint, "使用简体中文");
+  expect(outlines[0]!.teachingBrief?.explanation).toContain(complete);
+  expect(outlines[0]!.teachingBrief?.teachingPlan?.reasoningSteps).toContain(complete);
+  expect(outlines[0]!.teachingBrief?.teachingPlan?.narrationFocus).toContain(complete);
+  expect(outlines[0]!.teachingBrief?.teachingPlan?.presentationContent).toEqual(base.sections[0]!.pages[0]!.keyPoints);
+  expect(() => assertSourceSequencesInOutlines(outlines, scoped.sourceSequences!)).not.toThrow();
+  expect(revalidateStoredTeachingBlueprint(blueprint, scoped).blueprint?.sections).toEqual(blueprint.sections);
+
+  const incomplete = structuredClone(candidate);
+  incomplete.sections[0]!.units[0]!.explanationNodes = nodes.map((node) => node.id === "complete-source-process"
+    ? { ...node, content: complete.slice(0, complete.indexOf(labels.at(-1)!)) } : node);
+  expect(validateTeachingBlueprintDraft(incomplete, scoped).issues.join("；")).toContain("遗漏教材步骤：复核结果");
+});
+
+it("preserves complete legacy teaching prose while keeping its page summaries bounded", async () => {
+  const candidate = compactModelBlueprint();
+  const unit = candidate.sections[0]!.units[0]!;
+  const detail = "数据用途、检查依据和适用条件应分别说明，评价结论只能建立在已经核对的事实之上。".repeat(120);
+  unit.explanation += detail;
+  unit.mechanism += `${detail}最终测试必须在冻结模型和参数后进行。`;
+  unit.workedExample += `${detail}测试照片不能参与训练或调参。`;
+  unit.conditions = Array.from({ length: 12 }, (_, index) => `${detail}第${index + 1}项条件必须单独核对。`);
+  unit.misconceptions = [`${detail}不能把已经见过的数据当作独立的新数据。`];
+  const page = candidate.sections[0]!.pages[0]!;
+  page.description += detail;
+  const blueprint = await generateTeachingBlueprint(input(), async () => JSON.stringify(candidate));
+  expect(blueprint.sections[0]!.units[0]).toMatchObject({ explanation: unit.explanation, mechanism: unit.mechanism,
+    workedExample: unit.workedExample, conditions: unit.conditions, misconceptions: unit.misconceptions });
+  expect(blueprint.sections[0]!.pages[0]!.description).toHaveLength(1_600);
 });
 
 
@@ -2682,3 +2859,48 @@ it("does not turn an incomplete saved recovery envelope into a new authoring req
   expect(ai).not.toHaveBeenCalled();
   expect(onValidation).toHaveBeenCalledWith(expect.objectContaining({ repairAttempts: 0, responseCharacters: 0 }));
 });
+
+it("keeps a first draft with content gaps intact for final teacher review in one authoring call", async () => {
+  const { scoped, draft } = embodiedSourceRecoveryFixture();
+  const unit = draft.sections[0]!.units[0]!;
+  unit.learningOutcome = "";
+  Object.assign(unit.explanationNodes[0]!, { prerequisiteNodeIds: [unit.explanationNodes[0]!.id] });
+  const raw = JSON.stringify(draft);
+  const author = vi.fn(async () => raw);
+  const onValidation = vi.fn();
+  const blueprint = await generateTeachingBlueprint({ ...scoped, contentReviewMode: "teacher-final" }, author, { onValidation });
+  expect(author).toHaveBeenCalledOnce();
+  expect(blueprint.sections[0]!.units[0]!.explanationNodes![0]!.content).toBe(unit.explanationNodes[0]!.content);
+  expect(blueprint.sections[0]!.units[0]!.learningOutcome).toBe("");
+  expect(blueprint.sections[0]!.units[0]!.explanationNodes![0]!.prerequisiteNodeIds)
+    .toEqual([blueprint.sections[0]!.units[0]!.explanationNodes![0]!.id]);
+  expect(onValidation).toHaveBeenCalledWith(expect.objectContaining({ issues: [], repairAttempts: 0 }));
+  expect(blueprint.sections[0]!.pages[0]!.sourceSequenceUses).toEqual([]);
+  expect(validateTeachingBlueprintDraft(draft, scoped).issues.length).toBeGreaterThan(0);
+  expect(JSON.stringify(draft)).toBe(raw);
+});
+
+it.each(["not JSON", JSON.stringify({ sections: [] })])("keeps unreadable or empty technical output as a single-call failure", async (raw) => {
+  const author = vi.fn(async () => raw);
+  await expect(generateTeachingBlueprint({ ...input(), contentReviewMode: "teacher-final" }, author)).rejects.toThrow();
+  expect(author).toHaveBeenCalledOnce();
+});
+
+it("checks executable page timing without automatically reviewing quiz pedagogy", async () => {
+  const blueprint = await generateTeachingBlueprint({ ...input(), contentReviewMode: "teacher-final" },
+    async () => JSON.stringify(modelBlueprint()));
+  const outlines = teachingBlueprintToOutlines(blueprint, "使用简体中文");
+  const quiz = outlines.find((page) => page.type === "quiz")!;
+  quiz.quizConfig = { ...quiz.quizConfig!, questionCount: 1, questionTypes: ["short_answer"] };
+  expect(validateTeachingBlueprintBudget(blueprint, outlines, { reviewContent: false })).toEqual([]);
+  expect(validateTeachingBlueprintBudget(blueprint, outlines).length).toBeGreaterThan(0);
+  quiz.targetDurationSec = (quiz.targetDurationSec ?? 0) + 1;
+  expect(validateTeachingBlueprintBudget(blueprint, outlines, { reviewContent: false }).join("；")).toContain("不守恒");
+});
+
+async function expectBlueprintQualityIssue(result: ReturnType<typeof generateTeachingBlueprint>, issue?: string | RegExp) {
+  const blueprint = await result;
+  expect(blueprint.qualityDiagnostics?.length).toBeGreaterThan(0);
+  if (issue && issue !== '教学蓝图缺少可用结构') expect(blueprint.qualityDiagnostics!.join('；')).toMatch(issue);
+  return blueprint;
+}

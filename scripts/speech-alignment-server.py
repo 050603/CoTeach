@@ -71,7 +71,8 @@ def map_tokens_to_source(text: str, tokens: Iterable[dict[str, Any]], duration_m
     """Map the aligner's punctuation-free tokens back to exact source offsets."""
     units = _searchable_units(text)
     unit_cursor = 0
-    previous_start_ms = 0
+    previous_end_ms = 0
+    previous_source_end = 0
     spans: list[dict[str, Any]] = []
 
     for raw in tokens:
@@ -103,12 +104,17 @@ def map_tokens_to_source(text: str, tokens: Iterable[dict[str, Any]], duration_m
         unit_cursor = match_index + len(key_characters)
         start_ms = round(float(start_seconds) * 1000)
         end_ms = round(float(end_seconds) * 1000)
-        if (start_ms < previous_start_ms or end_ms < start_ms or start_ms < 0
+        if source_start < previous_source_end:
+            raise InvalidAlignment("INVALID_SOURCE_RANGES")
+        if (start_ms < previous_end_ms or end_ms < start_ms or start_ms < 0
                 or end_ms > duration_ms + 1_000):
             raise InvalidAlignment("INVALID_TIMESTAMPS")
-        previous_start_ms = start_ms
+        previous_end_ms = end_ms
+        previous_source_end = source_end
         spans.append({
-            "text": token_text,
+            # Model tokens omit punctuation and may normalize spelling. The
+            # client binds timing to the exact original UTF-16 source range.
+            "text": text[source_start:source_end],
             "startChar": utf16_offset(text, source_start),
             "endChar": utf16_offset(text, source_end),
             "startMs": start_ms,

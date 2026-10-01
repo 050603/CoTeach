@@ -60,6 +60,7 @@ import { clientUUID } from "@/lib/uuid";
 import { DEFAULT_EVALUATION_FLOWS } from "./types";
 import { getStagesForSystemMode } from "@/lib/system-mode";
 import { getNewSystemCourseReadiness } from "@/lib/classroom/new-system-course";
+import { isAdvisoryCourseReadinessCheck } from "@/lib/course-quality-review/teacher-review";
 import { normalizePblCourseConfig } from "@/lib/pbl-course-config";
 import {
   DEFAULT_NEW_COURSE_HOURS,
@@ -1685,7 +1686,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       publishCourse(id) {
         const course = state.courses.find((item) => item.id === id);
         const blocker = course
-          ? getNewSystemCourseReadiness(course).find((check) => !check.ok)
+          ? getNewSystemCourseReadiness(course).find((check) => !check.ok && !isAdvisoryCourseReadinessCheck(check.id))
           : undefined;
         if (!course || blocker) {
           throw new Error(blocker?.message ?? "课程不存在，无法发布。");
@@ -1695,7 +1696,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       startTeaching(id, classConfig) {
         const course = state.courses.find((item) => item.id === id);
         const blockers = course
-          ? getNewSystemCourseReadiness(course).filter((check) => !check.ok)
+          ? getNewSystemCourseReadiness(course).filter((check) => !check.ok && !isAdvisoryCourseReadinessCheck(check.id))
           : [];
         if (!course || blockers.length > 0) {
           throw new Error(

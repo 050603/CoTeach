@@ -17,6 +17,14 @@ function visibleButtonLabels(html: string): string[] {
     .filter(Boolean);
 }
 
+/** Playback protocol validation, independent of teaching-content review. */
+export function findInteractiveRuntimeContractIssues(html: string): string[] {
+  const reasons: string[] = [];
+  if (!COMPLETION_PATTERN.test(html)) reasons.push('missing activity completion signal');
+  if (!RESET_PATTERN.test(html)) reasons.push('missing activity reset signal');
+  return reasons;
+}
+
 /**
  * Reject only high-confidence low-agency widgets. The outline planner decides
  * whether an interaction belongs in the lesson; this audit checks that a

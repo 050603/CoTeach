@@ -3,6 +3,7 @@ import path from "node:path";
 import type { Scene } from "@openmaic/lib/types/stage";
 import { audioDurationSec } from "@openmaic/lib/audio/audio-duration";
 import { CLASSROOMS_DIR, isValidClassroomId } from "@openmaic/lib/server/classroom-storage";
+import { classroomAudioStoragePath } from "./classroom-asset-recovery";
 
 const AUDIO_FILENAME = /^[a-zA-Z0-9_.:-]+\.(?:wav|mp3|ogg|opus|aac|m4a|flac|webm)$/i;
 
@@ -13,26 +14,24 @@ export async function remeasureClassroomSpeech(
   readAudio: (filename: string) => Promise<Uint8Array> = readFile,
 ): Promise<Scene[]> {
   if (!isValidClassroomId(classroomId)) throw new Error("课堂资源 ID 无效");
-  const prefix = `/api/openmaic/classroom-media/${classroomId}/audio/`;
   const measured = new Map<string, Promise<{ exists: boolean; seconds?: number }>>();
 
-  function filenameFor(audioUrl?: string): string | undefined {
+  function audioPathFor(audioUrl?: string): string | undefined {
     if (!audioUrl) return undefined;
     let pathname: string;
     try { pathname = new URL(audioUrl, "http://localhost").pathname; }
     catch { return undefined; }
-    if (!pathname.startsWith(prefix)) return undefined;
-    const filename = pathname.slice(prefix.length);
-    return AUDIO_FILENAME.test(filename) ? filename : undefined;
+    const audioPath = classroomAudioStoragePath(CLASSROOMS_DIR, pathname);
+    return audioPath && AUDIO_FILENAME.test(path.basename(audioPath)) ? audioPath : undefined;
   }
 
-  async function durationFor(filename: string): Promise<{ exists: boolean; seconds?: number }> {
-    const existing = measured.get(filename);
+  async function durationFor(audioPath: string): Promise<{ exists: boolean; seconds?: number }> {
+    const existing = measured.get(audioPath);
     if (existing) return existing;
-    const measurement = readAudio(path.join(CLASSROOMS_DIR, classroomId, "audio", filename))
-      .then((bytes) => ({ exists: true, seconds: audioDurationSec(bytes, path.extname(filename).slice(1)) }))
+    const measurement = readAudio(audioPath)
+      .then((bytes) => ({ exists: true, seconds: audioDurationSec(bytes, path.extname(audioPath).slice(1)) }))
       .catch(() => ({ exists: false }));
-    measured.set(filename, measurement);
+    measured.set(audioPath, measurement);
     return measurement;
   }
 
@@ -41,10 +40,10 @@ export async function remeasureClassroomSpeech(
     const actions = await Promise.all((scene.actions ?? []).map(async (action) => {
       if (action.type !== "speech" || !action.text.trim()) return action;
       if (action.audioInvalidated) return { ...action, audioDurationSec: undefined };
-      const filename = filenameFor(action.audioUrl);
-      if (!filename) return { ...action, audioDurationSec: undefined };
-      const measurement = await durationFor(filename);
-      const extension = path.extname(filename).slice(1).toLowerCase();
+      const audioPath = audioPathFor(action.audioUrl);
+      if (!audioPath) return { ...action, audioDurationSec: undefined };
+      const measurement = await durationFor(audioPath);
+      const extension = path.extname(audioPath).slice(1).toLowerCase();
       // The existing duration was recorded from bytes when an uploaded format
       // cannot be decoded by the local WAV/MP3 duration reader.
       const fallbackSec = extension !== "wav" && extension !== "mp3"

@@ -13,9 +13,9 @@ const mocks = vi.hoisted(() => {
   class SavedCourseDesignFirstDraftResumeError extends Error {
     constructor(readonly code: string, message: string, readonly status = 409) { super(message); }
   }
-  return { find: vi.fn(), packageJob: vi.fn(), create: vi.fn(), update: vi.fn(), replace: vi.fn(), resolve: vi.fn(), references: vi.fn(), promote: vi.fn(), resume: vi.fn(), savedResume: vi.fn(), checkpoints: vi.fn(), TestLessonPromotionError, TestLessonSelectionError, SavedCourseDesignFirstDraftResumeError };
+  return { find: vi.fn(), packageJob: vi.fn(), create: vi.fn(), update: vi.fn(), replace: vi.fn(), resolve: vi.fn(), references: vi.fn(), promote: vi.fn(), resume: vi.fn(), savedResume: vi.fn(), checkpoints: vi.fn(), authorize: vi.fn(), course: vi.fn(), recover: vi.fn(), TestLessonPromotionError, TestLessonSelectionError, SavedCourseDesignFirstDraftResumeError };
 });
-vi.mock("@/lib/platform/template-access", () => ({ authorizeTemplateRequest: vi.fn().mockResolvedValue("teacher-1") }));
+vi.mock("@/lib/platform/template-access", () => ({ authorizeTemplateRequest: mocks.authorize }));
 vi.mock("@/lib/platform/pbl-template-repository", () => ({ loadPblTemplateCourse: vi.fn().mockResolvedValue({ id: "course-1" }) }));
 vi.mock("@/lib/course-generation/job-storage", () => ({ designGenerationJobs: { findUnique: mocks.find, create: mocks.create, update: mocks.update, replace: mocks.replace }, resourcePackageJobs: { findUnique: mocks.packageJob } }));
 vi.mock("@/lib/course-generation/capability", () => ({ isBackgroundCourseGenerationEnabled: () => true }));
@@ -30,7 +30,7 @@ vi.mock("@/lib/course-design/job-runner", () => ({
   promoteTestLessonToFullCourse: mocks.promote,
   resumeCourseDesignAfterOutlineReview: mocks.resume,
   runCourseDesignJob: vi.fn(),
-  resumeRecoverableCourseDesignJob: vi.fn(),
+  resumeRecoverableCourseDesignJob: mocks.recover,
   TestLessonPromotionError: mocks.TestLessonPromotionError,
   TestLessonSelectionError: mocks.TestLessonSelectionError,
 }));
@@ -38,7 +38,7 @@ vi.mock("@/lib/course-design/saved-first-draft-resume", () => ({
   resumeSavedCourseDesignFirstDraft: mocks.savedResume,
   SavedCourseDesignFirstDraftResumeError: mocks.SavedCourseDesignFirstDraftResumeError,
 }));
-vi.mock("@/lib/session/server-store", () => ({ getCourse: vi.fn() }));
+vi.mock("@/lib/session/server-store", () => ({ getCourse: mocks.course }));
 vi.mock("@/lib/course-design/generation-references", () => ({ GenerationReferenceError: class extends Error {}, resolveGenerationReferenceMaterials: mocks.references }));
 vi.mock("@/lib/resource-package/server", () => ({ ResourcePackageError: class extends Error {}, resolveConfirmedResourcePackage: mocks.resolve }));
 vi.mock("@openmaic/lib/server/classroom-media-readiness", () => ({ assertRequestedClassroomMediaProviders: vi.fn(), classroomMediaConfigurationErrorResponse: vi.fn() }));
@@ -59,8 +59,125 @@ function storedJob(request: unknown, status = "completed") {
   return { id: "job-1", courseId: "course-1", status, step: "completed", progress: 100, request, trace: [], updatedAt: new Date("2026-09-12T00:00:00Z") };
 }
 
+describe("saved course design details", () => {
+  const outlinePreview = [{ id: "slide-1", title: "模型评估", type: "slide", lectureSectionId: "section-1" }];
+  const blueprintPreview = { schemaVersion: 2, sections: [{ id: "section-1", title: "模型评估", pages: outlinePreview }] };
+  const content = {
+    knowledgePoints: [{ id: "knowledge-1", title: "模型评估" }],
+    knowledgeScopePlan: { sections: [{ id: "section-1" }] },
+    courseEvidence: { revisionId: "evidence-1" },
+    _openmaicSceneOutlines: outlinePreview,
+    teachingBlueprint: blueprintPreview,
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.authorize.mockResolvedValue("teacher-1");
+    mocks.find.mockResolvedValue(null);
+    mocks.recover.mockResolvedValue(null);
+    mocks.course.mockResolvedValue({ id: "course-1", content });
+  });
+
+  it.each(["queued", "running", "completed", "failed", "cancelling", "cancelled", null])(
+    "keeps saved page outlines and blueprints available outside the review window (%s)",
+    async (status) => {
+      const job = status ? storedJob({ courseId: "course-1" }, status) : null;
+      mocks.find.mockResolvedValue(job);
+      mocks.recover.mockResolvedValue(job);
+
+      const response = await GET(new NextRequest("http://localhost/api/courses/course-1/design-generation"), context);
+
+      expect(response.status).toBe(200);
+      const body = await response.json();
+      expect(body).toMatchObject({ knowledgePreview: null, outlinePreview, blueprintPreview });
+      expect(body.job?.status ?? null).toBe(status);
+      expect(mocks.course).toHaveBeenCalledWith("course-1");
+      if (status === "failed") {
+        expect(mocks.recover).toHaveBeenCalledWith("course-1");
+      } else {
+        expect(mocks.recover).not.toHaveBeenCalled();
+      }
+    },
+  );
+
+  it.each(["review_available", "paused"])("preserves knowledge review previews during the confirmation window (%s)", async (status) => {
+    mocks.find.mockResolvedValue(storedJob({ courseId: "course-1" }, status));
+
+    const response = await GET(new NextRequest("http://localhost/api/courses/course-1/design-generation"), context);
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      knowledgePreview: {
+        knowledgePoints: content.knowledgePoints,
+        knowledgeGraph: { nodes: [], edges: [] },
+        knowledgeScopePlan: content.knowledgeScopePlan,
+        courseEvidence: content.courseEvidence,
+      },
+      outlinePreview,
+      blueprintPreview,
+    });
+  });
+
+  it("returns saved details alongside the job resumed by the existing recovery flow", async () => {
+    mocks.find.mockResolvedValue(storedJob({ courseId: "course-1" }, "failed"));
+    mocks.recover.mockResolvedValue(storedJob({ courseId: "course-1" }, "queued"));
+
+    const response = await GET(new NextRequest("http://localhost/api/courses/course-1/design-generation"), context);
+
+    expect(await response.json()).toMatchObject({
+      job: { status: "queued" },
+      knowledgePreview: null,
+      outlinePreview,
+      blueprintPreview,
+    });
+    expect(mocks.recover).toHaveBeenCalledWith("course-1");
+  });
+
+  it("returns empty previews before any course design has been saved", async () => {
+    mocks.course.mockResolvedValue(undefined);
+
+    const response = await GET(new NextRequest("http://localhost/api/courses/course-1/design-generation"), context);
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      job: null,
+      knowledgePreview: null,
+      outlinePreview: [],
+      blueprintPreview: null,
+    });
+  });
+
+  it("keeps legacy page outlines available when no teaching blueprint was saved", async () => {
+    mocks.course.mockResolvedValue({ id: "course-1", content: { _openmaicSceneOutlines: outlinePreview } });
+
+    const response = await GET(new NextRequest("http://localhost/api/courses/course-1/design-generation"), context);
+
+    expect(await response.json()).toMatchObject({ outlinePreview, blueprintPreview: null });
+  });
+
+  it.each([401, 403, 404])("rejects unauthorized access before reading jobs or saved details (%s)", async (status) => {
+    mocks.authorize.mockResolvedValue(Response.json({ error: "ACCESS_DENIED" }, { status }));
+
+    const response = await GET(new NextRequest("http://localhost/api/courses/course-1/design-generation"), context);
+
+    expect(response.status).toBe(status);
+    expect(await response.json()).toEqual({ error: "ACCESS_DENIED" });
+    expect(mocks.find).not.toHaveBeenCalled();
+    expect(mocks.course).not.toHaveBeenCalled();
+    expect(mocks.recover).not.toHaveBeenCalled();
+  });
+});
+
 describe("resource-package design generation admission", () => {
-  beforeEach(() => { vi.clearAllMocks(); mocks.find.mockResolvedValue(null); mocks.packageJob.mockResolvedValue(null); mocks.references.mockResolvedValue([]); mocks.checkpoints.mockResolvedValue({}); });
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.authorize.mockResolvedValue("teacher-1");
+    mocks.course.mockResolvedValue(undefined);
+    mocks.find.mockResolvedValue(null);
+    mocks.packageJob.mockResolvedValue(null);
+    mocks.references.mockResolvedValue([]);
+    mocks.checkpoints.mockResolvedValue({});
+  });
 
   it("continues a saved first draft without replacing the task or creating an authoring request", async () => {
     mocks.savedResume.mockResolvedValue({

@@ -9,7 +9,7 @@ import {
   sourceNarrationBaselineInputFingerprints,
   type PersistedCourseGenerationRequest,
 } from './job-runner';
-import { SOURCE_CONTENT_RECOVERY_POLICY, SourceContentRecoveryError, type SourceContentRecoveryCheckpoint } from './source-content-acceptance';
+import { SOURCE_CONTENT_RECOVERY_POLICY, type SourceContentRecoveryCheckpoint } from './source-content-acceptance';
 
 const modelFingerprint = 'original-resolved-model-and-budget';
 const sourceContextFingerprint = 'actual-adopted-passages-quotes-knowledge-and-lists';
@@ -61,61 +61,70 @@ function fixture(options: { sameSection?: boolean; sameNarrationFingerprint?: bo
 }
 
 describe('immutable source narration baseline recovery', () => {
-  it('persists the original failed finalization and stops without source insertion', async () => {
-    const { finalization, stages } = fixture();
-    const persist = vi.fn(async (baseline) => JSON.parse(JSON.stringify(baseline)));
+  it('restores original narration and media despite source-content differences without an intermediate baseline capture', async () => {
+    const { finalization, stages, baseline } = fixture();
+    const persist = vi.fn(async () => baseline);
     const generate = vi.fn();
     const before = JSON.stringify({ finalization, stages });
-    await expect(restoreOrGenerateFinalizedClassroom({ checkpoint: finalization, request, preparedOutlines: outlines,
-      stageCheckpoints: stages, sourceContextFingerprint, sourceSequenceContracts: [contract], onSourceNarrationBaseline: persist, generate }))
-      .rejects.toBeInstanceOf(SourceContentRecoveryError);
-    expect(persist).toHaveBeenCalledOnce();
-    const saved = persist.mock.calls[0]![0];
-    expect(saved.finalization.generated.scenes[0].actions[0].text).toBe(explanation);
-    expect(saved.finalization.generated.scenes[1].actions[0].text).toContain('操作、观察和推理');
+    const result = await restoreOrGenerateFinalizedClassroom({ checkpoint: finalization, request, preparedOutlines: outlines,
+      stageCheckpoints: stages, sourceContextFingerprint, sourceSequenceContracts: [contract], onSourceNarrationBaseline: persist, generate });
+    expect(result.restoredFinalization).toBe(finalization);
+    expect(result.generated).toBe(finalization.generated);
+    expect(result.generated.scenes[0]!.actions![0]).toMatchObject({ text: explanation, audioUrl: '/original-reflection.wav' });
+    expect(result.generated.scenes[1]!.actions![0]).toMatchObject({ text: '这个案例的操作、观察和推理已验收。', audioUrl: '/original-other.wav' });
+    expect(persist).not.toHaveBeenCalled();
     expect(generate).not.toHaveBeenCalled();
     expect(JSON.stringify({ finalization, stages })).toBe(before);
   });
 
-  it('does not invoke the model after baseline persistence fails or returns a mismatched existing original', async () => {
+  it('does not invoke removed content-baseline callbacks, even if they would fail or return a mismatched draft', async () => {
     const { finalization, stages, baseline } = fixture();
     const generate = vi.fn();
-    await expect(restoreOrGenerateFinalizedClassroom({ checkpoint: finalization, request, preparedOutlines: outlines,
+    const failedCapture = vi.fn(async () => { throw new Error('checkpoint write failed'); });
+    const mismatchedCapture = vi.fn(() => ({ ...baseline, requestFingerprint: 'different-request' }));
+    const first = await restoreOrGenerateFinalizedClassroom({ checkpoint: finalization, request, preparedOutlines: outlines,
       stageCheckpoints: stages, sourceContextFingerprint, sourceSequenceContracts: [contract], generate,
-      onSourceNarrationBaseline: async () => { throw new Error('checkpoint write failed'); } })).rejects.toThrow('checkpoint write failed');
-    await expect(restoreOrGenerateFinalizedClassroom({ checkpoint: finalization, request, preparedOutlines: outlines,
+      onSourceNarrationBaseline: failedCapture });
+    const second = await restoreOrGenerateFinalizedClassroom({ checkpoint: finalization, request, preparedOutlines: outlines,
       stageCheckpoints: stages, sourceContextFingerprint, sourceSequenceContracts: [contract], generate,
-      onSourceNarrationBaseline: () => ({ ...baseline, requestFingerprint: 'different-request' }) }))
-      .rejects.toThrow('原讲稿基线身份不匹配');
+      onSourceNarrationBaseline: mismatchedCapture });
+    expect(first.generated).toBe(finalization.generated);
+    expect(second.generated).toBe(finalization.generated);
+    expect(failedCapture).not.toHaveBeenCalled();
+    expect(mismatchedCapture).not.toHaveBeenCalled();
     expect(generate).not.toHaveBeenCalled();
   });
 
-  it('stops with an existing original without replacing it with later shortened narration', async () => {
+  it('keeps the existing finalization without replacing it with later shortened narration', async () => {
     const { finalization, stages, baseline } = fixture();
     const revised = stages.map((stage) => stage.stage === 'narration' ? { ...stage,
       payload: { teachingNarration: { pageId: stage.pageKey, segments: [{ id: `${stage.pageKey}:speech-1`, text: '后来缩写的稿子' }] } } } : stage);
     const generate = vi.fn();
     const persist = vi.fn();
     const original = JSON.stringify(baseline);
-    await expect(restoreOrGenerateFinalizedClassroom({ checkpoint: finalization, request, preparedOutlines: outlines,
+    const result = await restoreOrGenerateFinalizedClassroom({ checkpoint: finalization, request, preparedOutlines: outlines,
       sourceNarrationBaseline: baseline, stageCheckpoints: revised, sourceContextFingerprint, sourceSequenceContracts: [contract],
-      onSourceNarrationBaseline: persist, generate })).rejects.toBeInstanceOf(SourceContentRecoveryError);
+      onSourceNarrationBaseline: persist, generate });
+    expect(result.generated).toBe(finalization.generated);
+    expect(result.generated.scenes[0]!.actions![0]).toMatchObject({ text: explanation, audioUrl: '/original-reflection.wav' });
     expect(persist).not.toHaveBeenCalled();
     expect(generate).not.toHaveBeenCalled();
     expect(JSON.stringify(baseline)).toBe(original);
   });
 
-  it('stops without a new model call on every resume after preserving the failed original', async () => {
+  it('resumes the same full original on every attempt without a new model call or content baseline rewrite', async () => {
     const { finalization, stages, baseline } = fixture();
     const generate = vi.fn();
     const persist = vi.fn(async () => baseline);
     const args = { checkpoint: finalization, request, preparedOutlines: outlines,
       stageCheckpoints: stages, sourceContextFingerprint, sourceSequenceContracts: [contract],
       onSourceNarrationBaseline: persist, generate };
-    await expect(restoreOrGenerateFinalizedClassroom(args)).rejects.toBeInstanceOf(SourceContentRecoveryError);
-    await expect(restoreOrGenerateFinalizedClassroom({ ...args, sourceNarrationBaseline: baseline }))
-      .rejects.toBeInstanceOf(SourceContentRecoveryError);
-    expect(persist).toHaveBeenCalledOnce();
+    const first = await restoreOrGenerateFinalizedClassroom(args);
+    const second = await restoreOrGenerateFinalizedClassroom({ ...args, sourceNarrationBaseline: baseline });
+    expect(first.generated).toBe(finalization.generated);
+    expect(second.generated).toBe(first.generated);
+    expect(second.generated.scenes[0]!.actions![0]).toMatchObject({ text: explanation, audioUrl: '/original-reflection.wav' });
+    expect(persist).not.toHaveBeenCalled();
     expect(generate).not.toHaveBeenCalled();
   });
 
@@ -147,8 +156,11 @@ describe('immutable source narration baseline recovery', () => {
     expect(restoreSourceNarrationBaselineCheckpoint(baseline, { ...request, generationModelString: 'new-model' }, outlines, sourceContextFingerprint)).toBeNull();
     expect(restoreSourceNarrationBaselineCheckpoint(baseline, request, [{ ...outline, keyPoints: ['新归属'] }, other], sourceContextFingerprint)).toBeNull();
     expect(restoreSourceNarrationBaselineCheckpoint(baseline, request, [outline], sourceContextFingerprint)).toBeNull();
+    expect(restoreSourceNarrationBaselineCheckpoint(baseline, request,
+      [{ ...outline, targetDurationSec: 121 }, other], sourceContextFingerprint)).toBeNull();
     expect(restoreSourceNarrationBaselineCheckpoint({ ...baseline, modelFingerprint: 'new-budget' }, request, outlines, sourceContextFingerprint)).toBeNull();
     expect(restoreSourceNarrationBaselineCheckpoint({ ...baseline, narrationStages: baseline.narrationStages.slice(1) }, request, outlines, sourceContextFingerprint)).toBeNull();
+    expect(restoreSourceNarrationBaselineCheckpoint({ ...baseline, bodyStages: baseline.bodyStages.slice(1) }, request, outlines, sourceContextFingerprint)).toBeNull();
     expect(restoreSourceNarrationBaselineCheckpoint(baseline, request, outlines, 'changed-original-source')).toBeNull();
     const changedSpeech = structuredClone(baseline);
     const action = changedSpeech.finalization.generated.scenes[0]!.actions![0]!;
@@ -156,9 +168,10 @@ describe('immutable source narration baseline recovery', () => {
     expect(restoreSourceNarrationBaselineCheckpoint(changedSpeech, request, outlines, sourceContextFingerprint)).toBeNull();
   });
 
-  it('provides only one audited old context for a complete source-valid section', () => {
+  it('reuses one complete matching old context per section without excluding source-content differences', () => {
     const { baseline } = fixture();
     expect(sourceNarrationBaselineInputFingerprints(baseline, [contract])).toEqual({
+      'reflection-section': ['reflection:original-narration-context'],
       'other-section': ['other:original-narration-context'],
     });
     const shared = fixture({ sameSection: true, sameNarrationFingerprint: true, completeSource: true });
@@ -167,6 +180,18 @@ describe('immutable source narration baseline recovery', () => {
     });
     const inconsistent = fixture({ sameSection: true, completeSource: true });
     expect(sourceNarrationBaselineInputFingerprints(inconsistent.baseline, [contract])).toEqual({});
+  });
+
+  it('still excludes incomplete scene or narration context bindings from section fingerprint reuse', () => {
+    const { baseline } = fixture({ sameSection: true, sameNarrationFingerprint: true });
+    expect(sourceNarrationBaselineInputFingerprints(baseline, [contract])).toEqual({
+      'reflection-section': ['reflection-section:original-narration-context'],
+    });
+    const missingScene = structuredClone(baseline);
+    missingScene.finalization.generated.scenes = missingScene.finalization.generated.scenes.slice(1);
+    expect(sourceNarrationBaselineInputFingerprints(missingScene, [contract])).toEqual({});
+    const missingNarration = { ...baseline, narrationStages: baseline.narrationStages.slice(1) };
+    expect(sourceNarrationBaselineInputFingerprints(missingNarration, [contract])).toEqual({});
   });
 });
 

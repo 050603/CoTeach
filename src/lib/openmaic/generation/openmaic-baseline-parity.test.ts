@@ -56,6 +56,17 @@ describe('current OpenMAIC generation baseline parity', () => {
     expect(generated).toBeNull();
   });
 
+  it('keeps a first-draft interaction with a valid playback protocol without an agency-content rejection', async () => {
+    const html = `<html><body><button>下一步</button><script>
+      function finish() { window.__maicActivity.complete(); }
+      function resetAll() { window.__maicActivity.reset(); }
+    </script></body></html>`;
+    const author = vi.fn().mockResolvedValue(html);
+    const generated = await generateSceneContent(interactiveOutline(), author);
+    expect(generated).toMatchObject({ html: expect.stringContaining('<button>下一步</button>') });
+    expect(author).toHaveBeenCalledOnce();
+  });
+
   it('audits a legacy interaction through the deterministic simulation fallback', async () => {
     const generated = await generateSceneContent(interactiveOutline({
       widgetType: undefined,

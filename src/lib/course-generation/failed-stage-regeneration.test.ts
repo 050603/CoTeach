@@ -3,7 +3,8 @@ import type { SceneOutline, GeneratedSlideContent } from '@/lib/openmaic/types/g
 import type { FigureSequenceContract } from '@/lib/textbook/course-visual-binding';
 import type { Scene } from '@/lib/openmaic/types/stage';
 import { fingerprintSceneOutline, type SceneStageCheckpointSnapshot } from './page-checkpoints';
-import { planFailedStageRegeneration } from './failed-stage-regeneration';
+import { planFailedStageRegeneration, explicitFailedStageRequestIdentity } from './failed-stage-regeneration';
+import { serializeCourseGenerationFailure } from './failure-policy';
 const clause = '在协作学习中注意小组分工的合理安排';
 const secondClause = '注意对学生自主完成项目的过程进行监督和调整';
 const fullSource = `${clause}。${secondClause}。`;
@@ -30,6 +31,30 @@ function fixture(text = fullSource) {
 }
 const request = { sceneOutlines: outlines };
 describe('explicit failed-stage regeneration plan', () => {
+  it('preserves accepted first-pass teaching even when historical source-content diagnoses remain', () => {
+    const saved = fixture('教师将在终稿判断的原始说明。');
+    const failed = { ...stage(other, 'actions'), attemptsStarted: 1, status: 'response' };
+    const before = JSON.stringify(saved);
+    const result = planFailedStageRegeneration({ request, sourceContracts: [contract], reviewContent: false,
+      saved: { ...saved, stageAttempts: [failed] } });
+    expect(result.needsExplicitSourceEdit).toBe(false);
+    expect(result.issues).toEqual([]);
+    expect(result.resetSteps).toEqual([
+      'authoring-acceptance:p3:actions', 'authoring-response:p3:actions', 'stage-attempt:p3:actions',
+    ]);
+    expect(JSON.stringify(saved)).toBe(before);
+  });
+  it('permits measured unstarted-page replanning only for the exact explicit capacity retry', () => {
+    const failure = serializeCourseGenerationFailure(Object.assign(new Error('完整内容不能容纳'), {
+      code: 'TEACHING_PAGE_PREFLIGHT_FAILED', isRetryable: false,
+    }));
+    expect(explicitFailedStageRequestIdentity(failure, 'retry-1')).toEqual({
+      authoringRequestId: 'retry-1', capacityReplanRequestId: 'retry-1',
+    });
+    for (const error of [null, 'TEACHING_PAGE_PREFLIGHT_FAILED', serializeCourseGenerationFailure(new Error('讲稿无效'))]) {
+      expect(explicitFailedStageRequestIdentity(error, 'retry-2')).toEqual({ authoringRequestId: 'retry-2' });
+    }
+  });
   it('resets only spent unaccepted authoring, preserving accepted bodies and media', () => {
     const accepted = stage();
     const failed = { ...stage(sibling, 'narration'), attemptsStarted: 1, status: 'response' };

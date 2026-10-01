@@ -581,7 +581,7 @@ describe("final course resource audit", () => {
     }));
   });
 
-  it('checks the evidence-linked page when a declaration and image were moved to the wrong page', async () => {
+  it('checks the actual selected image page rather than redefining it from the first knowledge-point match', async () => {
     const figureId = 'figure-32';
     const resourceId = `textbook_fig_${createHash('sha256').update(figureId).digest('hex').slice(0, 12)}`;
     textbookFigureFindMany.mockImplementation(async ({ include }: { include?: unknown }) => include
@@ -609,12 +609,10 @@ describe("final course resource audit", () => {
       { id: 'scene-right', outlineId: 'right', type: 'slide', order: 1,
         content: { type: 'slide', canvas: { elements: [] } }, actions: [] },
     ] } as unknown as PersistedClassroomData;
+    await saveReadableTestImage('asset-32');
     const { auditCourseGeneratedResources } = await import('./resource-audit-server');
-    const audit = await auditCourseGeneratedResources(course.id, { course, classroom });
-    expect(audit.issues).toContainEqual(expect.objectContaining({
-      id: `media:source-image:right:${resourceId}`,
-      detail: '指定的教材原图未进入对应课堂页面',
-    }));
+    const audit = await auditCourseGeneratedResources(course.id, { course, classroom }, { reviewContent: false });
+    expect(audit.issues.filter((issue) => issue.type === 'media')).toEqual([]);
   });
 
   it('rejects five-step course content independently of the stored image requirement', async () => {
@@ -685,6 +683,103 @@ describe("final course resource audit", () => {
         expect.stringMatching(/:blueprint$/), expect.stringMatching(/:outline$/),
         expect.stringMatching(/:classroom$/),
       ]));
+  });
+
+  it('skips all source-content inspection during automatic resource checks but retains it for an explicit review', async () => {
+    const fixture = sequenceAuditFixture([{ id: 'source', labels: ['确定问题', '收集证据', '形成结论'] }]);
+    const speech = fixture.classroom.scenes[0]!.actions?.[0];
+    if (speech?.type === 'speech') speech.text = '流程有两个步骤：确定问题、收集证据、形成结论';
+    const checks = await import('@/lib/textbook/course-visual-binding');
+    const blueprintCheck = vi.spyOn(checks, 'findBlueprintFigureSequenceIssues');
+    const knowledgeCheck = vi.spyOn(checks, 'findKnowledgeSourceSequenceIssues');
+    const sequenceCheck = vi.spyOn(checks, 'inspectFigureSequence');
+    try {
+      const { auditCourseGeneratedResources } = await import('./resource-audit-server');
+      const automatic = await auditCourseGeneratedResources(fixture.course.id, fixture, { reviewContent: false });
+      expect(blueprintCheck).not.toHaveBeenCalled();
+      expect(knowledgeCheck).not.toHaveBeenCalled();
+      expect(sequenceCheck).not.toHaveBeenCalled();
+      expect(automatic.issues.filter((issue) => issue.type === 'source-consistency')).toEqual([]);
+      expect(automatic.issues.some((issue) => issue.type === 'tts')).toBe(true);
+
+      const manual = await auditCourseGeneratedResources(fixture.course.id, fixture);
+      expect(blueprintCheck).toHaveBeenCalled();
+      expect(knowledgeCheck).toHaveBeenCalled();
+      expect(sequenceCheck).toHaveBeenCalled();
+      expect(manual.issues).toContainEqual(expect.objectContaining({
+        type: 'source-consistency', detail: expect.stringContaining('写成 2 个环节'),
+      }));
+    } finally {
+      blueprintCheck.mockRestore();
+      knowledgeCheck.mockRestore();
+      sequenceCheck.mockRestore();
+    }
+  });
+
+  it('keeps unselected textbook figures as references in an explicit authoring plan', async () => {
+    const fixture = sequenceAuditFixture([{ id: 'reference', figureId: 'figure-shared', labels: ['分析目标', '收集证据'] }]);
+    fixture.course.content.teachingBlueprint!.sections[0]!.pages[0]!.sourceSequenceUses = [];
+    const { auditCourseGeneratedResources } = await import('./resource-audit-server');
+    const automatic = await auditCourseGeneratedResources(fixture.course.id, fixture, { reviewContent: false });
+    expect(automatic.issues.filter((issue) => issue.type === 'media' || issue.type === 'source-consistency')).toEqual([]);
+    expect(fileAssetFindFirst).not.toHaveBeenCalled();
+  });
+
+  it.each(['need', 'reference', 'observation', 'suggestion'] as const)(
+    'checks a later page’s actual %s selection and still detects a missing selected image', async (selection) => {
+      const fixture = sequenceAuditFixture([
+        { id: 'overview', figureId: 'figure-shared', labels: ['分析目标', '收集证据'] },
+        { id: 'chosen', labels: ['规划活动', '评价结果'] },
+      ]);
+      const resourceId = `textbook_fig_${createHash('sha256').update('figure-shared').digest('hex').slice(0, 12)}`;
+      fixture.course.content.teachingBlueprint!.sections[0]!.pages[0]!.sourceSequenceUses = [];
+      const chosen = fixture.course.content._openmaicSceneOutlines![1]!;
+      if (selection === 'need') chosen.teachingBrief = { resourceNeeds: [{ kind: 'source-image', assetId: resourceId, required: true }] } as typeof chosen.teachingBrief;
+      if (selection === 'reference') chosen.visualIntent!.resourceRefs = [{ kind: 'source-image', resourceId, required: true, reason: '观察实际采用的原图' }];
+      if (selection === 'observation') Object.assign(chosen, { caseObservation: { kind: 'source-image', resourceIds: [resourceId] } });
+      if (selection === 'suggestion') chosen.suggestedImageIds = [resourceId];
+      await saveReadableTestImage('asset-shared');
+      const scene = fixture.classroom.scenes[1]!;
+      if (scene.content.type === 'slide') scene.content.canvas.elements.push({
+        id: 'chosen-figure', type: 'image', src: '/api/uploads/asset-shared',
+      } as typeof scene.content.canvas.elements[number]);
+      const { auditCourseGeneratedResources } = await import('./resource-audit-server');
+      const automatic = await auditCourseGeneratedResources(fixture.course.id, fixture, { reviewContent: false });
+      expect(automatic.issues.filter((issue) => issue.type === 'media')).toEqual([]);
+
+      if (scene.content.type === 'slide') scene.content.canvas.elements = scene.content.canvas.elements
+        .filter((element) => element.id !== 'chosen-figure');
+      const missing = await auditCourseGeneratedResources(fixture.course.id, fixture, { reviewContent: false });
+      expect(missing.issues.filter((issue) => issue.type === 'media')).toEqual([
+        expect.objectContaining({ id: `media:source-image:page-chosen:${resourceId}`,
+          detail: '指定的教材原图未进入对应课堂页面' }),
+      ]);
+    },
+  );
+
+  it('checks every actual selected page and fails unreadable selected image files during automatic checks', async () => {
+    const fixture = sequenceAuditFixture([
+      { id: 'first', figureId: 'figure-shared', labels: ['分析目标', '收集证据'] },
+      { id: 'second', labels: ['规划活动', '评价结果'] },
+    ]);
+    const resourceId = `textbook_fig_${createHash('sha256').update('figure-shared').digest('hex').slice(0, 12)}`;
+    fixture.course.content.teachingBlueprint!.sections[0]!.pages[0]!.sourceSequenceUses = [];
+    fixture.course.content._openmaicSceneOutlines!.forEach((outline) => { outline.suggestedImageIds = [resourceId]; });
+    await saveReadableTestImage('asset-shared');
+    const scene = fixture.classroom.scenes[1]!;
+    if (scene.content.type === 'slide') scene.content.canvas.elements.push({
+      id: 'chosen-figure', type: 'image', src: '/api/uploads/asset-shared',
+    } as typeof scene.content.canvas.elements[number]);
+    const { auditCourseGeneratedResources } = await import('./resource-audit-server');
+    const missingPage = await auditCourseGeneratedResources(fixture.course.id, fixture, { reviewContent: false });
+    expect(missingPage.issues.filter((issue) => issue.id.startsWith('media:source-image:'))).toEqual([
+      expect.objectContaining({ id: `media:source-image:page-first:${resourceId}` }),
+    ]);
+    fileAssetFindFirst.mockResolvedValue(null);
+    const missingFile = await auditCourseGeneratedResources(fixture.course.id, fixture, { reviewContent: false });
+    expect(missingFile.issues).toContainEqual(expect.objectContaining({
+      id: `media:source-image:page-second:${resourceId}`, detail: '媒体文件不存在或无法读取',
+    }));
   });
 
   it('audits a required six-step original and other complete source lists using their own counts', async () => {
@@ -787,6 +882,16 @@ describe("final course resource audit", () => {
       }));
   });
 });
+
+async function saveReadableTestImage(assetId: string): Promise<void> {
+  const png = await sharp({ create: { width: 4, height: 4, channels: 3, background: '#fff' } }).png().toBuffer();
+  const uploadDir = path.join(CLASSROOMS_DIR, 'uploads');
+  await mkdir(uploadDir, { recursive: true });
+  await writeFile(path.join(uploadDir, 'selected.png'), png);
+  vi.stubEnv('UPLOAD_DIR', uploadDir);
+  fileAssetFindFirst.mockImplementation(async ({ where }: { where: { id: string } }) => where.id === assetId
+    ? { storageKey: 'selected.png', mimeType: 'image/png', size: BigInt(png.length) } : null);
+}
 
 function sequenceAuditFixture(sequences: Array<{ id: string; labels: string[]; heading?: string; figureId?: string }>): {
   course: Course; classroom: PersistedClassroomData;

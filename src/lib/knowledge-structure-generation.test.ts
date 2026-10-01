@@ -102,7 +102,7 @@ describe("reviewed knowledge structure generation", () => {
     ['wrong count', '流程有两个步骤：确定目标、设计活动、评价效果。'],
     ['false complete list', '基本流程是确定目标、设计活动等环节。'],
     ['reversed sequence', '基本流程是评价效果、设计活动、确定目标。'],
-  ])("rejects %s before adopting the first knowledge draft", async (_kind, description) => {
+  ])("preserves a %s first draft for final teacher review without another request", async (_kind, description) => {
     const evidence: CourseEvidenceSnapshot = { ...orderedTextbookEvidence, items: [{
       ...orderedTextbookEvidence.items[0], id: 'design-evidence',
       sourceSequences: [{ anchorSourceBlockId: 'three', kind: 'ordered-steps',
@@ -114,9 +114,16 @@ describe("reviewed knowledge structure generation", () => {
     }], knowledgeGraph: { nodes: [], edges: [] } });
     const modelCall = vi.fn().mockResolvedValueOnce(draft(description))
       .mockResolvedValueOnce(draft('基本流程是确定目标、设计活动、评价效果。'));
-    await expect(generateKnowledgeStructureOnce(input, { textbookEvidence: evidence }, {
-      modelCall, retrySleep: async () => {},
-    })).rejects.toThrow();
+    const onCandidate = vi.fn();
+    const onRejected = vi.fn();
+    const result = await generateKnowledgeStructureOnce(input, { textbookEvidence: evidence }, {
+      modelCall, retrySleep: async () => {}, onCandidate, onRejected,
+    });
+    expect(result.knowledgePoints[0]!.description).toBe(description);
+    expect(result.knowledgePoints[0]!.sourceSequenceReferences![0]!.orderedSteps).toHaveLength(3);
+    expect(onCandidate).toHaveBeenCalledWith({ rawResponse: draft(description), attempt: 1 });
+    expect(onRejected).not.toHaveBeenCalled();
+    expect(result.knowledgeGraph?.semanticReview).toBeUndefined();
     expect(modelCall).toHaveBeenCalledTimes(1);
   });
   it("passes the primary textbook's chapter hierarchy and evidence mapping to section planning", () => {
@@ -140,25 +147,29 @@ describe("reviewed knowledge structure generation", () => {
     expect(prompt.user).toContain('"id":"section-constructivism","title":"建构主义"');
     expect(prompt.user).toContain('"sourceKnowledgePointId":"source-theory"');
     expect(prompt.user).toContain("教材末级标题仅列出原理、机制或步骤时，不机械地各立一节");
-    expect(prompt.user).toContain("章节开头已给出实质定义时必须引用该 source-block");
+    expect(prompt.user).toContain("整体概念须有完整权威语境");
     expect(prompt.user).not.toContain("约 10 分钟以上");
   });
 
-  it("restores the primary textbook order even when the model returns interleaved groups in reverse", async () => {
+  it("preserves the planned teaching path and groups while keeping the textbook order only for provenance", async () => {
     const modelCall = vi.fn().mockResolvedValue(JSON.stringify({
       knowledgePoints: [
-        { id: "third", name: "知识3", evidenceItemIds: ["ev-3"], groupId: "A", groupName: "组A" },
+        { id: "third", name: "知识3", evidenceItemIds: ["ev-3"], groupId: "C", groupName: "组C" },
         { id: "second", name: "知识2", evidenceItemIds: ["ev-2"], groupId: "B", groupName: "组B" },
         { id: "first", name: "知识1", evidenceItemIds: ["ev-1"], groupId: "A", groupName: "组A" },
       ], knowledgeGraph: { nodes: [], edges: [] },
     }));
     const result = await generateKnowledgeStructureOnce(input, { textbookEvidence: orderedTextbookEvidence }, { modelCall });
-    expect(result.knowledgePoints.map((point) => point.id)).toEqual(["first", "second", "third"]);
+    expect(result.knowledgePoints.map((point) => point.id)).toEqual(["third", "second", "first"]);
+    expect(result.knowledgePoints.map((point) => [point.groupId, point.groupName]))
+      .toEqual([["C", "组C"], ["B", "组B"], ["A", "组A"]]);
     expect(result.knowledgeScopePlan?.teachingOrder?.baselineKnowledgePointIds).toEqual(["first", "second", "third"]);
+    expect(result.knowledgeScopePlan?.teachingOrder?.knowledgePointIds).toEqual(["third", "second", "first"]);
     expect(result.knowledgeScopePlan?.teachingOrder?.adjustments).toEqual([]);
+    expect(modelCall).toHaveBeenCalledOnce();
   });
 
-  it("teaches the chapter's general distinctions before its theories, modes, and methods", async () => {
+  it("moves a declared parent before its dependent concept while preserving unrelated planned topics", async () => {
     const source = orderedTextbookEvidence.items[0]!.source;
     const evidence: CourseEvidenceSnapshot = { ...orderedTextbookEvidence, items: [
       { id: "intro", kind: "source-block", title: "教学理论与方法",
@@ -183,12 +194,12 @@ describe("reviewed knowledge structure generation", () => {
     }));
     const result = await generateKnowledgeStructureOnce(input, { textbookEvidence: evidence }, { modelCall });
     expect(result.knowledgePoints.map((point) => point.id))
-      .toEqual(["overview", "theory-point", "mode-point", "method-point"]);
+      .toEqual(["theory-point", "method-point", "overview", "mode-point"]);
     expect(result.knowledgeScopePlan?.teachingOrder?.anchors.find((anchor) => anchor.knowledgePointId === "overview"))
       .toMatchObject({ evidenceItemId: "intro", sectionPosition: 0 });
   });
 
-  it("records a justified local adjustment and ignores a vague one", async () => {
+  it("does not turn legacy textbook-order comments into prerequisite constraints on the actual plan", async () => {
     const modelCall = vi.fn().mockResolvedValue(JSON.stringify({
       knowledgePoints: [
         { id: "first", name: "知识1", evidenceItemIds: ["ev-1"] },
@@ -204,10 +215,68 @@ describe("reviewed knowledge structure generation", () => {
       knowledgeGraph: { nodes: [], edges: [] },
     }));
     const result = await generateKnowledgeStructureOnce(input, { textbookEvidence: orderedTextbookEvidence }, { modelCall });
-    expect(result.knowledgePoints.map((point) => point.id)).toEqual(["first", "third", "second"]);
-    expect(result.knowledgeScopePlan?.teachingOrder?.adjustments).toEqual([
-      expect.objectContaining({ knowledgePointId: "third", beforeKnowledgePointId: "second", kind: "learner-obstacle" }),
-    ]);
+    expect(result.knowledgePoints.map((point) => point.id)).toEqual(["first", "second", "third"]);
+    expect(result.knowledgeScopePlan?.teachingOrder?.adjustments).toEqual([]);
+    expect(modelCall).toHaveBeenCalledOnce();
+  });
+
+  it.each(["main", "alternative"])("keeps the same teacher-goal plan when %s is primary and textbooks explain topics in opposite orders", async (primaryRevisionId) => {
+    const evidence: CourseEvidenceSnapshot = {
+      ...orderedTextbookEvidence,
+      selections: ["main", "alternative"].map((revisionId) => ({ revisionId, primary: revisionId === primaryRevisionId, sectionIds: [] })),
+      items: [...orderedTextbookEvidence.items, ...orderedTextbookEvidence.items.map((item, index) => ({
+        ...item, id: `alternative-${index + 1}`, content: `另一教材用不同的情境解释知识${index + 1}`,
+        source: { ...item.source, textbookId: "alternative-book", textbookTitle: "另一教材", revisionId: "alternative",
+          sourceBlockPosition: (3 - index) * 10 },
+      }))],
+    };
+    const points = [3, 1, 2].map((index) => ({ id: `point-${index}`, name: `知识${index}`,
+      description: `依据课程目标解释知识${index}`, evidenceItemIds: [`ev-${index}`, `alternative-${index}`],
+      groupId: `planned-group-${index}`, groupName: `计划主题${index}` }));
+    const modelCall = vi.fn().mockResolvedValue(JSON.stringify({ authoringContract: "knowledge-v1",
+      knowledgePoints: points, knowledgeScopePlan: { rationale: "依据教师目标先比较熟悉情境，再建立概念和检验依据。" },
+      knowledgeGraph: { nodes: [], edges: [] } }));
+    const original = structuredClone(evidence);
+    const result = await generateKnowledgeStructureOnce(input, { textbookEvidence: evidence }, { modelCall });
+
+    expect(result.knowledgePoints.map((point) => point.id)).toEqual(["point-3", "point-1", "point-2"]);
+    expect(result.knowledgePoints.map((point) => point.groupId)).toEqual(points.map((point) => point.groupId));
+    expect(result.knowledgePoints.map((point) => point.evidenceItemIds)).toEqual(points.map((point) => point.evidenceItemIds));
+    expect(result.knowledgeScopePlan?.teachingOrder).toMatchObject({ primaryRevisionId,
+      baselineKnowledgePointIds: primaryRevisionId === "main"
+        ? ["point-1", "point-2", "point-3"] : ["point-3", "point-2", "point-1"],
+      knowledgePointIds: ["point-3", "point-1", "point-2"], adjustments: [] });
+    expect(evidence).toEqual(original);
+    expect(modelCall).toHaveBeenCalledOnce();
+  });
+
+  it("keeps a coherent authored path and group identities without any textbook", async () => {
+    const points = [3, 1, 2].map((index) => ({ id: `point-${index}`, name: `知识${index}`,
+      description: `解释知识${index}`, groupId: `planned-${index}`, groupName: `计划主题${index}` }));
+    const modelCall = vi.fn().mockResolvedValue(JSON.stringify({ authoringContract: "knowledge-v1",
+      knowledgePoints: points, knowledgeGraph: { nodes: [], edges: [] } }));
+    const result = await generateKnowledgeStructureOnce(input, {}, { modelCall });
+    expect(result.knowledgePoints.map((point) => point.id)).toEqual(points.map((point) => point.id));
+    expect(result.knowledgePoints.map((point) => [point.groupId, point.groupName]))
+      .toEqual(points.map((point) => [point.groupId, point.groupName]));
+    expect(result.knowledgeGraph?.nodes.filter((node) => node.instructionalRole === "lesson").map((node) => node.id))
+      .toEqual(points.map((point) => point.id));
+    expect(modelCall).toHaveBeenCalledOnce();
+  });
+
+  it.each(["required-prerequisite", "supports", "application", "transfer"])("keeps a declared required %s dependency before its application with and without textbooks", async (type) => {
+    for (const textbookEvidence of [undefined, orderedTextbookEvidence]) {
+      const modelCall = vi.fn().mockResolvedValue(JSON.stringify({
+        knowledgePoints: [
+          { id: "application", name: "应用判断", description: "用已建立的概念作判断", evidenceItemIds: ["ev-1"], groupId: "application" },
+          { id: "foundation", name: "操作对象", description: "先认识判断对象", evidenceItemIds: ["ev-3"], groupId: "foundation" },
+        ], knowledgeGraph: { nodes: [], edges: [{ source: "foundation", target: "application",
+          type, strength: "required", label: "构成必要基础", rationale: "没有认识操作对象就无法判断应用条件。" }] },
+      }));
+      const result = await generateKnowledgeStructureOnce(input, { textbookEvidence }, { modelCall });
+      expect(result.knowledgePoints.map((point) => point.id)).toEqual(["foundation", "application"]);
+      expect(modelCall).toHaveBeenCalledOnce();
+    }
   });
 
   it("moves a required cross-group dependency ahead of its textbook location and records why", async () => {
@@ -260,12 +329,13 @@ describe("reviewed knowledge structure generation", () => {
     expect(result.knowledgePoints.every((point) => point.groupName === "本课核心知识")).toBe(true);
   });
 
-  it("keeps exact source ids while allowing an additional objective-owned target", async () => {
+  it("keeps source identity and every authored graph node without a scope correction", async () => {
     const modelCall = vi.fn().mockResolvedValue(JSON.stringify({ ...candidate, knowledgeGraph: { ...candidate.knowledgeGraph, nodes: [...candidate.knowledgeGraph.nodes, { id: "group", label: "语言理解", instructionalRole: "lesson" }] } }));
     const result = await generateKnowledgeStructureOnce(input, { teacherKnowledgePoints: [{ id: "stable-leaf", name: "自然语言处理基本任务", description: "原文说明", groupId: "group", groupName: "语言理解" }] }, { modelCall });
     expect(result.knowledgePoints).toHaveLength(2);
     expect(result.knowledgePoints[0]).toMatchObject({ id: "stable-leaf", groupId: "group", groupName: "语言理解" });
-    expect(result.knowledgeGraph?.nodes.some((node) => node.id === "group")).toBe(false);
+    expect(result.knowledgeGraph?.nodes.find((node) => node.id === "group"))
+      .toMatchObject({ label: "语言理解", instructionalRole: "lesson" });
     expect(result.knowledgeGraph?.nodes.find((node) => node.id === "stable-leaf")?.groupName).toBe("语言理解");
   });
 
@@ -419,7 +489,7 @@ describe("reviewed knowledge structure generation", () => {
     expect(result.knowledgePoints.map((point) => point.id)).toEqual(["application", "concept"]);
   });
 
-  it("rejects a necessary parent cycle through the existing invalid-output path", async () => {
+  it("preserves a necessary parent cycle and the complete authored path for final review", async () => {
     const cyclic = {
       knowledgePoints: [
         { id: "a", name: "概念 A", description: "A", parentKnowledgePointIds: ["b"] },
@@ -429,14 +499,20 @@ describe("reviewed knowledge structure generation", () => {
     };
     const modelCall = vi.fn().mockResolvedValue(JSON.stringify(cyclic));
 
-    await expect(generateKnowledgeStructureOnce(input, {}, {
+    const onRejected = vi.fn();
+    const result = await generateKnowledgeStructureOnce(input, {}, {
       modelCall,
       retrySleep: async () => undefined,
-    })).rejects.toThrow("知识结构存在必要依赖循环");
+      onRejected,
+    });
+    expect(result.knowledgePoints.map((point) => [point.id, point.parentKnowledgePointIds]))
+      .toEqual([["a", ["b"]], ["b", ["a"]]]);
+    expect(result.knowledgeGraph?.nodes.map((node) => node.id)).toEqual(["a", "b"]);
+    expect(onRejected).not.toHaveBeenCalled();
     expect(modelCall).toHaveBeenCalledTimes(1);
   });
 
-  it("rejects a cycle made entirely of required prerequisite edges", async () => {
+  it("keeps every edge of a required prerequisite cycle without deleting content or regenerating", async () => {
     const cyclic = {
       knowledgePoints: [{ id: "lesson", name: "本课概念", description: "本课内容" }],
       knowledgeGraph: {
@@ -453,14 +529,21 @@ describe("reviewed knowledge structure generation", () => {
     };
     const modelCall = vi.fn().mockResolvedValue(JSON.stringify(cyclic));
 
-    await expect(generateKnowledgeStructureOnce(input, {}, {
+    const onCandidate = vi.fn();
+    const result = await generateKnowledgeStructureOnce(input, {}, {
       modelCall,
       retrySleep: async () => undefined,
-    })).rejects.toThrow("知识图谱存在必要先修循环");
+      onCandidate,
+    });
+    expect(result.knowledgeGraph?.nodes.map((node) => node.id)).toEqual(["lesson", "prereq-a", "prereq-b"]);
+    expect(result.knowledgeGraph?.edges).toEqual(cyclic.knowledgeGraph.edges.map((edge) => ({
+      ...edge, label: "关系待核对", rationale: "关系依据未提供，请教师核对，不能由节点顺序推断必要性。",
+    })));
+    expect(onCandidate).toHaveBeenCalledWith({ rawResponse: JSON.stringify(cyclic), attempt: 1 });
     expect(modelCall).toHaveBeenCalledTimes(1);
   });
 
-  it("rejects dependencies that make contiguous knowledge groups cyclic", async () => {
+  it("retains the original path and group identities when necessary group dependencies conflict", async () => {
     const cyclicGroups = {
       knowledgePoints: [
         { id: "a-parent", name: "A 上位概念", description: "A", groupId: "group-a", groupName: "A" },
@@ -472,13 +555,66 @@ describe("reviewed knowledge structure generation", () => {
     };
     const modelCall = vi.fn().mockResolvedValue(JSON.stringify(cyclicGroups));
 
-    await expect(generateKnowledgeStructureOnce(input, {}, {
+    const result = await generateKnowledgeStructureOnce(input, {}, {
       modelCall,
       retrySleep: async () => undefined,
-    })).rejects.toThrow("知识结构的必要依赖与知识分组边界冲突");
+    });
+    expect(result.knowledgePoints.map((point) => [point.id, point.groupId, point.parentKnowledgePointIds]))
+      .toEqual(cyclicGroups.knowledgePoints.map((point) => [point.id, point.groupId, point.parentKnowledgePointIds]));
+    expect(modelCall).toHaveBeenCalledOnce();
   });
 
-  it("keeps every resource-package leaf even when the model tries to collapse the catalog", async () => {
+  it('preserves every authored relationship including cycles, self relations, reverse levels and distinct claims on one pair', async () => {
+    const knowledgePoints = [
+      { id: 'application', name: '实际应用', description: '应用正文保持原样。', level: 'application', groupId: 'a' },
+      { id: 'foundation', name: '基础概念', description: '基础正文保持原样。', level: 'foundation', groupId: 'b' },
+    ];
+    const edges = [
+      { id: 'application-foundation', source: 'application', target: 'foundation', type: 'application', strength: 'required', label: '原稿的逆层级应用关系' },
+      { id: 'foundation-application', source: 'foundation', target: 'application', type: 'supports', strength: 'required', label: '原稿的必要支撑关系' },
+      { id: 'self', source: 'application', target: 'application', type: 'supports', strength: 'required', label: '原稿自关系' },
+      { id: 'parallel-contrast', source: 'application', target: 'foundation', type: 'contrast', strength: 'helpful', label: '同端点另一种辨析关系' },
+      { id: 'reverse-prerequisite', source: 'foundation', target: 'prerequisite', type: 'required-prerequisite', strength: 'required', label: '原稿反向先修关系' },
+      { id: 'prerequisite-application', source: 'prerequisite', target: 'application', type: 'required-prerequisite', strength: 'required', label: '原稿先修关系' },
+      { id: 'extra-transfer', source: 'application', target: 'foundation', type: 'transfer', strength: 'helpful', label: '额外迁移关系' },
+    ];
+    const rawResponse = JSON.stringify({ authoringContract: 'knowledge-v1', knowledgePoints,
+      knowledgeGraph: { nodes: [{ id: 'prerequisite', label: '既有基础', instructionalRole: 'prerequisite' }], edges } });
+    const aiCall = vi.fn().mockResolvedValue(rawResponse);
+    const onCandidate = vi.fn();
+    const onRejected = vi.fn();
+    const result = await generateKnowledgeStructureOnce(input, {}, { aiCall, onCandidate, onRejected });
+
+    expect(result.knowledgePoints.map((point) => [point.id, point.name, point.description, point.groupId]))
+      .toEqual(knowledgePoints.map((point) => [point.id, point.name, point.description, point.groupId]));
+    expect(result.knowledgeGraph?.edges.map(({ rationale, ...edge }) => {
+      expect(rationale).toContain('关系依据未提供');
+      return edge;
+    })).toEqual(edges);
+    expect(result.knowledgeGraph?.semanticReview).toBeUndefined();
+    expect(aiCall).toHaveBeenCalledOnce();
+    expect(onCandidate).toHaveBeenCalledWith({ rawResponse, attempt: 1 });
+    expect(onRejected).not.toHaveBeenCalled();
+  });
+
+  it('keeps distinct authored nodes with identical names and does not auto-fill an omitted teacher target', async () => {
+    const rawResponse = JSON.stringify({ authoringContract: 'knowledge-v1', knowledgePoints: [
+      { id: 'first-context', name: '模型解释', description: '第一种情境中的完整解释。', sourceKnowledgePointIds: [] },
+      { id: 'second-context', name: '模型解释', description: '第二种情境中的完整解释。', sourceKnowledgePointIds: [] },
+    ], knowledgeGraph: { nodes: [], edges: [] } });
+    const aiCall = vi.fn().mockResolvedValue(rawResponse);
+    const result = await generateKnowledgeStructureOnce(input, { teacherRequiredKnowledgePoints: ['教师指定目标'],
+      teacherKnowledgePoints: [{ id: 'required-source', name: '教师指定目标', description: '明确教学责任' }] }, { aiCall });
+    expect(result.knowledgePoints.map((point) => [point.id, point.name, point.description])).toEqual([
+      ['first-context', '模型解释', '第一种情境中的完整解释。'],
+      ['second-context', '模型解释', '第二种情境中的完整解释。'],
+    ]);
+    expect(result.knowledgeGraph?.nodes.map((node) => node.id)).toEqual(['first-context', 'second-context']);
+    expect(result.knowledgeScopePlan?.decisions[0]).toMatchObject({ disposition: 'deferred', targetKnowledgePointIds: [] });
+    expect(aiCall).toHaveBeenCalledOnce();
+  });
+
+  it("keeps actual authored composite targets and source references without replacing them with generated leaf placeholders", async () => {
     const teacherKnowledgePoints = Array.from({ length: 20 }, (_, index) => ({
       id: `source-${index + 1}`,
       name: `来源概念${index + 1}`,
@@ -525,16 +661,16 @@ describe("reviewed knowledge structure generation", () => {
       },
     }, { modelCall });
 
-    expect(result.knowledgePoints).toHaveLength(20);
+    expect(result.knowledgePoints).toHaveLength(4);
     expect(result.knowledgePoints.map((point) => point.id)).toEqual(
-      teacherKnowledgePoints.map((point) => point.id),
+      compiledPoints.map((point) => point.id),
     );
     expect(result.knowledgePoints.map((point) => point.name)).toEqual(
-      teacherKnowledgePoints.map((point) => point.name),
+      compiledPoints.map((point) => point.name),
     );
-    expect(result.knowledgePoints.every((point) => point.sourceKnowledgePointIds?.length === 1)).toBe(true);
+    expect(result.knowledgePoints.every((point) => point.sourceKnowledgePointIds?.length === 5)).toBe(true);
     expect(result.knowledgePoints.map((point) => point.keyInfo)).toEqual(
-      teacherKnowledgePoints.map((point) => point.description),
+      compiledPoints.map((point) => point.keyInfo),
     );
     expect(result.knowledgePoints.flatMap((point) => point.sourceKnowledgePointIds ?? []))
       .toEqual(teacherKnowledgePoints.map((point) => point.id));
@@ -544,14 +680,15 @@ describe("reviewed knowledge structure generation", () => {
       assessmentReserveMin: 4,
       explanationAndActivityMin: 26,
       sourcePointCount: 20,
-      targetPointCount: 20,
+      targetPointCount: 4,
     });
     expect(result.knowledgeScopePlan?.decisions).toHaveLength(20);
     expect(result.knowledgeScopePlan?.decisions.every((decision) => (
-      decision.disposition === "standalone"
-      && decision.targetKnowledgePointId === decision.sourceKnowledgePointId
+      decision.disposition === "mapped"
+      && compiledPoints.some((point) => point.id === decision.targetKnowledgePointId)
     ))).toBe(true);
-    expect(result.knowledgeScopePlan?.rationale).toContain("完整保留资源包规定的知识点");
+    expect(result.knowledgeScopePlan?.rationale).toContain("30分钟只独立建立四个核心目标");
+    expect(modelCall).toHaveBeenCalledOnce();
   });
   it("allows textbook concepts to split one upstream requirement while preserving evidence and coverage", async () => {
     const modelCall = vi.fn().mockResolvedValue(JSON.stringify({
@@ -581,7 +718,7 @@ describe("reviewed knowledge structure generation", () => {
     });
     expect(modelCall.mock.calls[0][0][1].content).toContain("允许拆分、合并和多对多映射");
   });
-  it("stops instead of silently restoring an unmapped upstream node in textbook mode", async () => {
+  it("preserves an unmapped first draft without inventing a source target or blocking generation", async () => {
     const incomplete = {
       knowledgePoints: [{ id: "textbook-target", name: "教材概念", description: "教材解释", evidenceItemIds: ["evidence-1"] }],
       knowledgeGraph: { nodes: [], edges: [] },
@@ -593,7 +730,7 @@ describe("reviewed knowledge structure generation", () => {
     const modelCall = vi.fn()
       .mockResolvedValueOnce(JSON.stringify(incomplete))
       .mockResolvedValueOnce(JSON.stringify(complete));
-    await expect(generateKnowledgeStructureOnce(input, {
+    const result = await generateKnowledgeStructureOnce(input, {
       teacherKnowledgePoints: [{ id: "source-requirement", name: "教师要求", description: "需要实质覆盖" }],
       textbookEvidence: {
         schemaVersion: 2, version: 1, fingerprint: "f", createdAt: new Date(0).toISOString(), retrievalMode: "hybrid",
@@ -601,7 +738,11 @@ describe("reviewed knowledge structure generation", () => {
           { id: "evidence-1", kind: "concept", title: "教材概念", content: "教材解释", source: { textbookId: "book", textbookTitle: "教材", revisionId: "revision", revisionVersion: 1, sectionPath: [] } },
         ],
       },
-    }, { modelCall, retrySleep: async () => undefined })).rejects.toThrow();
+    }, { modelCall, retrySleep: async () => undefined });
+    expect(result.knowledgePoints.map((point) => point.id)).toEqual(["textbook-target"]);
+    expect(result.knowledgePoints[0]!.sourceKnowledgePointIds).toBeUndefined();
+    expect(result.knowledgeScopePlan?.decisions[0]).toMatchObject({ disposition: "deferred", targetKnowledgePointIds: [] });
+    expect(result.knowledgeScopePlan?.decisions[0]!.targetKnowledgePointId).toBeUndefined();
     expect(modelCall).toHaveBeenCalledTimes(1);
   });
   it("does not create a self dependency when a textbook target merges a parent and its child", async () => {
@@ -678,7 +819,7 @@ describe("reviewed knowledge structure generation", () => {
     expect(aiCall).toHaveBeenCalledTimes(1);
   });
 
-  it("mechanically completes malformed relationship metadata without an AI repair call", async () => {
+  it("keeps relationship types and labels even when their content merits final teacher review", async () => {
     const malformed = {
       ...candidate,
       knowledgeGraph: {
@@ -708,13 +849,8 @@ describe("reviewed knowledge structure generation", () => {
     expect(modelCall).toHaveBeenCalledTimes(1);
     expect(result.knowledgeGraph?.semanticReview).toBeUndefined();
     expect(result.knowledgeGraph?.edges.length).toBeGreaterThan(0);
-    expect(result.knowledgeGraph?.edges.every((edge) => (
-      Boolean(edge.type && edge.strength && edge.rationale)
-    ))).toBe(true);
-    expect(result.knowledgeGraph?.edges.some((edge) => (
-      (edge.type === "application" || edge.type === "transfer")
-      && result.knowledgeGraph?.nodes.find((node) => node.id === edge.target)?.level === "core"
-    ))).toBe(false);
+    expect(result.knowledgeGraph?.edges.map((edge) => ({ id: edge.id, source: edge.source, target: edge.target,
+      label: edge.label, type: edge.type }))).toEqual(malformed.knowledgeGraph.edges);
   });
 
   it("rejects empty authored knowledge rather than turning objectives into a successful placeholder", async () => {

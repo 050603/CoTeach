@@ -1,7 +1,7 @@
 import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db/client";
 import { runMutationTransaction } from "@/lib/db/transaction-retry";
-import { CLASSROOM_MEDIA_ORIGIN_PREFIX } from './classroom-media-origin';
+import { CLASSROOM_MEDIA_ORIGIN_PREFIX, saveFinalizationMediaOrigins } from './classroom-media-origin';
 import { SECTION_CAPACITY_CHECKPOINT_PREFIX } from './section-capacity-checkpoints';
 import { SOURCE_CONTENT_CHECKPOINT_PREFIX, SOURCE_NARRATION_BASELINE_STEP } from './source-content-acceptance';
 
@@ -29,6 +29,12 @@ export async function loadGenerationCheckpoints(jobId: string) {
     classicOutlineAttempt: rows.find((row) => row.step === 'course-design-attempt:classic-outline')?.state ?? null,
     courseFinalization: rows.find((row) => row.step === COURSE_FINALIZATION_STEP)?.state ?? null,
     sourceNarrationBaseline: rows.find((row) => row.step === SOURCE_NARRATION_BASELINE_STEP)?.state ?? null,
+    authoringHistory: rows.filter((row) => /^authoring-history:v\d+:usage-summary$/u.test(row.step)).map((row) => {
+      const prefix = row.step.slice(0, -'usage-summary'.length);
+      return { request: row.state && typeof row.state === 'object' && !Array.isArray(row.state)
+        ? row.state.request : undefined,
+      stages: rows.filter((stage) => stage.step.startsWith(`${prefix}stage:`)).map((stage) => stage.state) };
+    }),
     pages: rows.filter((row) => row.step.startsWith("page:")).map((row) => row.state),
     stages: rows.filter((row) => row.step.startsWith("stage:")).map((row) => row.state),
     stageAttempts: rows.filter((row) => row.step.startsWith("stage-attempt:")).map((row) => row.state),
@@ -50,21 +56,26 @@ export async function saveGenerationCheckpoint(
     return;
   }
   const value = JSON.parse(JSON.stringify(state)) as Prisma.InputJsonValue;
-  if (!options.executionId) {
+  if (!options.executionId && step !== COURSE_FINALIZATION_STEP) {
     await prisma.generationCheckpoint.upsert({ where: { jobId_step: { jobId, step } }, create: { jobId, step, state: value }, update: { state: value } });
     return;
   }
   await runMutationTransaction(async (tx) => {
     await tx.$queryRaw`SELECT id FROM "GenerationJob" WHERE id = ${jobId} FOR UPDATE`;
-    const row = await tx.generationJob.findUnique({ where: { id: jobId }, select: { status: true, trace: true } });
-    const trace = row?.trace && typeof row.trace === "object" && !Array.isArray(row.trace)
-      ? row.trace as Record<string, unknown>
-      : {};
-    const stateEnvelope = trace.state && typeof trace.state === "object" && !Array.isArray(trace.state)
-      ? trace.state as Record<string, unknown>
-      : {};
-    if (row?.status !== "RUNNING" || stateEnvelope.executionId !== options.executionId) {
-      throw new Error("GENERATION_JOB_EXECUTION_LOST");
+    if (options.executionId) {
+      const row = await tx.generationJob.findUnique({ where: { id: jobId }, select: { status: true, trace: true } });
+      const trace = row?.trace && typeof row.trace === "object" && !Array.isArray(row.trace)
+        ? row.trace as Record<string, unknown>
+        : {};
+      const stateEnvelope = trace.state && typeof trace.state === "object" && !Array.isArray(trace.state)
+        ? trace.state as Record<string, unknown>
+        : {};
+      if (row?.status !== "RUNNING" || stateEnvelope.executionId !== options.executionId) {
+        throw new Error("GENERATION_JOB_EXECUTION_LOST");
+      }
+    }
+    if (step === COURSE_FINALIZATION_STEP) {
+      await saveFinalizationMediaOrigins(tx, jobId, value);
     }
     await tx.generationCheckpoint.upsert({
       where: { jobId_step: { jobId, step } },

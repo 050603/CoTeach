@@ -4,6 +4,7 @@ import type { SemanticCapacityGroup, SemanticPageCapacityAssessment } from './se
 import { rebalanceMeasuredTeachingSection, replanMeasuredTeachingSection } from './section-capacity-replanner';
 import type { TextMeasure } from '@openmaic/generation';
 import { hasCompatibleOutlinePlan } from '@/lib/course-generation/generation-scope';
+import { REFERENCE_LECTURE_TYPOGRAPHY } from './slide-presentation-typography';
 
 const group = (id: string, sourcePageId: string, height: number, extra: Partial<SemanticCapacityGroup> = {}): SemanticCapacityGroup => ({
   id, kind: 'text', visibleText: `完整教学点 ${id}`, narrationExpansion: [`解释 ${id}`],
@@ -27,6 +28,60 @@ const assessment = (id: string, groups: SemanticCapacityGroup[], decision: Seman
 });
 
 describe('measured section redistribution', () => {
+  it('restores only actually established display references and never promotes a visual continuation into an introduction', () => {
+    const first = outline('first'), continuation = outline('visual');
+    first.teachingBrief!.teachingPlan!.introduces = ['definition'];
+    continuation.teachingBrief!.teachingPlan!.introduces = [];
+    const items = [
+      { text: '同一概念的第一个角度', nodeIds: ['definition'], role: 'key-point' as const },
+      { text: '同一概念的第二个角度', nodeIds: ['definition'], role: 'key-point' as const },
+      { text: '观察已讲案例；跨节承接已讲前提', nodeIds: ['definition', 'prior-section', 'never-taught'], role: 'case-observation' as const },
+    ];
+    const groups = items.map((item, index) => group(`part-${index}`, index < 2 ? 'first' : 'visual', 220,
+      { visibleText: item.text, sourceNodeIds: index < 2 ? ['definition'] : [],
+        referencedNodeIds: index < 2 ? [] : item.nodeIds, presentationItems: [item] }));
+    continuation.teachingBrief!.teachingPlan!.presentationItems = [items[2]!];
+    const pages = rebalanceMeasuredTeachingSection([first, continuation], [
+      assessment('first', groups.slice(0, 2), 'page-overflow'), assessment('visual', groups.slice(2), 'fits'),
+    ], { priorTeachingNodeIds: ['prior-section'] })!;
+    expect(pages).toHaveLength(3);
+    expect(pages.map((page) => page.teachingBrief?.teachingPlan?.introduces)).toEqual([['definition'], [], []]);
+    expect(pages.map((page) => page.teachingBrief?.teachingPlan?.deepens)).toEqual([[], ['definition'], []]);
+    expect(pages[2]?.teachingBrief?.teachingPlan?.references).toEqual(['definition', 'prior-section']);
+    expect(pages[2]?.teachingBrief?.teachingPlan?.presentationItems).toEqual([items[2]]);
+    expect(pages.flatMap((page) => page.teachingBrief?.teachingPlan?.references ?? [])).not.toContain('never-taught');
+    expect(pages.reduce((seconds, page) => seconds + page.targetDurationSec!, 0)).toBe(120);
+  });
+
+  it('moves authored display roles and node references with their actual narration and fingerprints typography', () => {
+    const original = outline('first');
+    const presentationItems = [
+      { text: '取样机会须明确', nodeIds: ['definition'], role: 'key-point' as const },
+      { text: '观察名单覆盖了哪些人\n核对研究对象与名单范围', nodeIds: ['case'], role: 'case-observation' as const },
+    ];
+    const explanations = ['只有抽取机会明确，才能判断实际采用的抽样规则。', '核对样本名单是否来自需要研究的目标总体。'];
+    original.teachingBrief!.teachingPlan!.presentationTypography = REFERENCE_LECTURE_TYPOGRAPHY;
+    original.teachingBrief!.teachingPlan!.presentationItems = presentationItems;
+    original.teachingBrief!.teachingPlan!.presentationContent = presentationItems.map((item) => item.text);
+    original.teachingBrief!.teachingPlan!.introduces = ['definition', 'case'];
+    original.teachingBrief!.explanation = explanations.join('\n');
+    const groups = presentationItems.map((item, index) => group(`item-${index}`, 'first', 220, {
+      visibleText: item.text, sourceNodeIds: item.nodeIds, presentationItems: [item], narrationExpansion: [explanations[index]!],
+    }));
+    const measured = assessment('first', groups, 'page-overflow');
+    const pages = rebalanceMeasuredTeachingSection([original], [measured])!;
+    expect(pages).toHaveLength(2);
+    expect(pages.map((page) => page.teachingBrief?.teachingPlan?.presentationItems)).toEqual(presentationItems.map((item) => [item]));
+    expect(pages.flatMap((page) => page.teachingBrief?.teachingPlan?.narrationFocus ?? [])).toEqual(explanations);
+    expect(pages.map((page) => page.teachingBrief?.teachingPlan?.introduces)).toEqual([['definition'], ['case']]);
+    expect(pages.every((page) => page.teachingBrief?.teachingPlan?.presentationTypography === REFERENCE_LECTURE_TYPOGRAPHY)).toBe(true);
+    expect(pages.reduce((seconds, page) => seconds + page.targetDurationSec!, 0)).toBe(60);
+    const legacy = structuredClone(original);
+    delete legacy.teachingBrief!.teachingPlan!.presentationTypography;
+    expect(rebalanceMeasuredTeachingSection([legacy], [measured])![0]?.sectionPlanVersion).not.toBe(pages[0]!.sectionPlanVersion);
+    expect(original.teachingBrief?.teachingPlan?.presentationItems).toEqual(presentationItems);
+  });
+
   it('redistributes display projections together with their complete spoken source meaning', () => {
     const original = outline('first');
     const presentationContent = ['独立来源支持交叉核验', '记录须直接涉及同一说法'];
@@ -170,6 +225,41 @@ describe('measured section redistribution', () => {
     return { naturalWidth: text.length * fontSize, height: padding * 2 + lines * fontSize * 1.5,
       lines: Array.from({ length: lines }, () => text) };
   };
+
+  it('partitions a real overload by grouped measured compositions and preserves already-fitting neighboring pages', async () => {
+    const original = outline('overload'), neighboring = outline('neighbor');
+    const items = Array.from({ length: 10 }, (_, index) => ({ text: `条目${index + 1}：${'完整条件与事实'.repeat(10)}`,
+      nodeIds: ['overload'], role: 'key-point' as const }));
+    original.keyPoints = items.map((item) => item.text);
+    original.teachingBrief!.teachingPlan!.presentationItems = items;
+    original.teachingBrief!.teachingPlan!.presentationContent = original.keyPoints;
+    original.teachingBrief!.teachingPlan!.presentationTypography = REFERENCE_LECTURE_TYPOGRAPHY;
+    neighboring.keyPoints = ['已测量可行的邻页保留本来的案例与结构。'];
+    neighboring.teachingBrief!.teachingPlan!.presentationContent = neighboring.keyPoints;
+    neighboring.teachingBrief!.teachingPlan!.presentationTypography = REFERENCE_LECTURE_TYPOGRAPHY;
+    const paragraphMeasure: TextMeasure = async (input) => {
+      const paragraphs = [...input.html.matchAll(/<p(?:\s[^>]*)?>([\s\S]*?)<\/p>/g)].map((match) => match[1]!.replace(/<[^>]*>/g, ''));
+      const lines = (paragraphs.length ? paragraphs : [input.text]).map((text) => Math.max(1,
+        Math.ceil([...text].length / Math.max(1, Math.floor((input.width - input.padding * 2) / input.fontSize)))));
+      return { naturalWidth: input.text.length * input.fontSize,
+        height: input.padding * 2 + lines.reduce((sum, count) => sum + count * input.fontSize * 1.5, 0)
+          + Math.max(0, paragraphs.length - 1) * input.paragraphSpace, lines: lines.flatMap((count) => Array(count).fill('完整教学行')) };
+    };
+    const result = await replanMeasuredTeachingSection([original, neighboring], { measure: paragraphMeasure });
+    expect(result.status).toBe('replanned');
+    if (result.status !== 'replanned') return;
+    const changed = result.outlines.filter((page) => page.sourcePageIds?.includes('overload'));
+    expect(changed).toHaveLength(2);
+    expect(result.outlines).toHaveLength(3);
+    expect(changed.flatMap((page) => page.teachingBrief?.teachingPlan?.presentationItems ?? [])).toEqual(items);
+    expect(result.outlines.at(-1)?.keyPoints).toEqual(neighboring.keyPoints);
+    expect(result.outlines.at(-1)?.teachingBrief).toBe(neighboring.teachingBrief);
+    expect(changed.flatMap((page) => page.teachingBrief?.teachingPlan?.introduces ?? [])).toEqual(['overload']);
+    expect(changed.at(-1)?.teachingBrief?.teachingPlan?.deepens).toEqual(['overload']);
+    expect(result.assessments.every((assessment) => assessment.selectedLayout?.fits)).toBe(true);
+    expect(result.outlines.reduce((seconds, page) => seconds + page.targetDurationSec!, 0)).toBe(120);
+    expect(result.outlines.reduce((seconds, page) => seconds + page.plannedTiming!.narrationSec, 0)).toBe(80);
+  });
 
   it('replans only unlocked adopted pages and keeps original lineage and every timing component', async () => {
     const locked = outline('locked');

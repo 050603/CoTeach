@@ -34,6 +34,7 @@ type ReviewSnapshot = {
   signature: string;
   classroom: PersistedClassroomData;
   blockingIssues?: CourseQualityIssue[];
+  qualityDiagnostics?: CourseQualityIssue[];
   quality: CourseQualityReport | null;
   reviewScope?: CourseQualityReport['reviewScope'];
   renderReview: CourseRenderReview | null;
@@ -203,6 +204,7 @@ export function CourseQualityReview({ courseId, onDecisionChange, onOpenPage, on
     for (const issue of [
       ...(snapshot?.quality?.issues ?? []),
       ...pages.flatMap((page) => page.issues),
+      ...(snapshot?.qualityDiagnostics ?? []),
     ]) {
       // Cached diagnostics cannot add publication requirements. Current server
       // blockers are applied last so a stale report cannot hide one either.
@@ -210,7 +212,7 @@ export function CourseQualityReview({ courseId, onDecisionChange, onOpenPage, on
     }
     for (const issue of snapshot?.blockingIssues ?? []) byId.set(issue.id, issue);
     return [...byId.values()];
-  }, [snapshot?.blockingIssues, snapshot?.quality?.issues, pages]);
+  }, [snapshot?.blockingIssues, snapshot?.quality?.issues, snapshot?.qualityDiagnostics, pages]);
   const openIssues = useMemo(() => issues.filter((issue) => issue.status !== 'resolved'), [issues]);
   const blockingIssues = useMemo(() => openIssues.filter(isBlockingIssue), [openIssues]);
   const toReview = useMemo(() => reviewableIssues(openIssues), [openIssues]);

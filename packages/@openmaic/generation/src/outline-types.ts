@@ -143,6 +143,8 @@ export interface SceneOutline {
   title: string;
   description: string;
   keyPoints: string[];
+  /** Adopted before authoring and shared by measurement and native compilation. */
+  presentationTypography?: { bodyFontSize: number; minimumBodyFontSize: number; titleFontSize: number; minimumTitleFontSize: number; chartFontSize?: number };
   teachingObjective?: string;
   estimatedDuration?: number;
   order: number;

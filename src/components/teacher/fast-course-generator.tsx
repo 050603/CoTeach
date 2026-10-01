@@ -45,6 +45,8 @@ import type {
   CourseDesignGenerationTraceEntry,
   KnowledgeGraph,
   KnowledgePoint,
+  OpenMaicSceneOutlineSnapshot,
+  TeachingBlueprint,
 } from "@/lib/session/types";
 import type { SceneOutline } from "@/lib/openmaic/types/generation";
 import { cn } from "@/lib/utils";
@@ -116,7 +118,8 @@ type ResponsePayload = {
     knowledgeScopePlan?: CourseContent["knowledgeScopePlan"];
     courseEvidence?: CourseEvidenceSnapshot;
   } | null;
-  outlinePreview?: SceneOutline[];
+  outlinePreview?: OpenMaicSceneOutlineSnapshot[];
+  blueprintPreview?: TeachingBlueprint | null;
   error?: string;
   detail?: string;
 };
@@ -164,6 +167,16 @@ const CLASSROOM_PAGE_STAGE_LABELS: Record<string, string> = {
 
 const QUICK_TOOLBAR_CONTROL_CLASS =
   "inline-flex min-h-11 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-[9px] px-2.5 text-xs font-semibold transition focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-stone-500";
+
+function sceneOutlinesForPreview(outlines: readonly OpenMaicSceneOutlineSnapshot[] = []): SceneOutline[] {
+  return outlines.map((outline, index) => ({
+    ...outline,
+    type: outline.type === "quiz" || outline.type === "interactive" || outline.type === "pbl" ? outline.type : "slide",
+    description: outline.description ?? "",
+    keyPoints: outline.keyPoints ?? [],
+    order: outline.order ?? index + 1,
+  })) as SceneOutline[];
+}
 
 function formatDuration(seconds: number | null | undefined): string {
   if (seconds == null) return "剩余时间估算中";
@@ -315,8 +328,12 @@ export function FastCourseGenerator({
     courseEvidence?: CourseEvidenceSnapshot;
   }>({ knowledgePoints: [], knowledgeGraph: { nodes: [], edges: [] } });
   const [knowledgeReviewOpen, setKnowledgeReviewOpen] = useState(false);
-  const [outlinePreview, setOutlinePreview] = useState<SceneOutline[]>([]);
+  const [outlinePreview, setOutlinePreview] = useState<SceneOutline[]>(() => sceneOutlinesForPreview(course.content?._openmaicSceneOutlines));
+  const [blueprintPreview, setBlueprintPreview] = useState<TeachingBlueprint | null>(course.content?.teachingBlueprint ?? null);
   const [outlineReviewOpen, setOutlineReviewOpen] = useState(false);
+  const [outlineDetailsOpen, setOutlineDetailsOpen] = useState(false);
+  const [outlineDetailsRefreshing, setOutlineDetailsRefreshing] = useState(false);
+  const [outlineDetailsError, setOutlineDetailsError] = useState<string>();
   const [generationPreview, setGenerationPreview] = useState<{
     classroomId: string;
     loadedScenesCount: number;
@@ -378,7 +395,8 @@ export function FastCourseGenerator({
       setTextbookSelections((current) => current.length ? current : payload.job!.requestPreview!.textbookSelections!);
     }
     if (payload.knowledgePreview) setKnowledgePreview(payload.knowledgePreview);
-    if (payload.outlinePreview) setOutlinePreview(payload.outlinePreview);
+    if (payload.outlinePreview) setOutlinePreview(sceneOutlinesForPreview(payload.outlinePreview));
+    if (payload.blueprintPreview !== undefined) setBlueprintPreview(payload.blueprintPreview);
     if (payload.job?.status === "failed") {
       setError(`${payload.job.error || "快速生成遇到系统或网络错误，请稍后重试。"} 首稿、教师要求和已完成内容均已保存。可继续已保存首稿，或修改要求后主动重生成失败阶段。`);
     } else if (payload.job && ["queued", "running", "review_available", "paused", "completed"].includes(payload.job.status)) {
@@ -388,13 +406,18 @@ export function FastCourseGenerator({
     if (payload.job?.status === "cancelled") setError("本次快速生成已中断，可以修改要求后重新开始。");
   }, []);
 
-  const fetchJob = useCallback(async () => {
+  const fetchJobPayload = useCallback(async () => {
     const response = await fetch(`/api/courses/${course.id}/design-generation`, { cache: "no-store" });
     const payload = await readJsonResponse<ResponsePayload>(response, "快速生成服务没有返回内容，请刷新页面后重试。");
     if (!response.ok) throw new Error(payload.detail || payload.error || "无法读取快速生成状态");
+    return payload;
+  }, [course.id]);
+
+  const fetchJob = useCallback(async () => {
+    const payload = await fetchJobPayload();
     applyPayload(payload);
     return payload;
-  }, [applyPayload, course.id]);
+  }, [applyPayload, fetchJobPayload]);
 
   const fetchClassroomJob = useCallback(async (startPersistedJob = false) => {
     const response = await fetch(`/api/courses/${course.id}/generation`, startPersistedJob
@@ -641,11 +664,26 @@ export function FastCourseGenerator({
         const accepted = window.confirm(`${latest.job.message}\n\n选择“确定”表示按当前知识范围与时长继续；选择“取消”会保持暂停，便于先调整课程资料或时间。`);
         if (accepted) await resumeAfterCapacityReview();
       } else {
-        setOutlinePreview(latest.outlinePreview ?? []);
+        setOutlinePreview(sceneOutlinesForPreview(latest.outlinePreview));
         setOutlineReviewOpen(true);
       }
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "无法打开待确认内容");
+    }
+  }
+
+  async function viewOutlineDetails() {
+    setOutlineDetailsOpen(true);
+    setOutlineDetailsRefreshing(true);
+    setOutlineDetailsError(undefined);
+    try {
+      const payload = await fetchJobPayload();
+      if (payload.outlinePreview) setOutlinePreview(sceneOutlinesForPreview(payload.outlinePreview));
+      if (payload.blueprintPreview !== undefined) setBlueprintPreview(payload.blueprintPreview);
+    } catch (cause) {
+      setOutlineDetailsError(cause instanceof Error ? cause.message : "最新课程设计读取失败，已保存的详情仍可查看。");
+    } finally {
+      setOutlineDetailsRefreshing(false);
     }
   }
 
@@ -752,16 +790,32 @@ export function FastCourseGenerator({
   const tokenUsage = Math.max(0, job?.tokenUsage?.totalTokens ?? 0)
     + Math.max(0, classroomJob?.tokenUsage?.totalTokens ?? 0);
   const showGenerationCanvas = running || job?.status === "completed" || classroomRunning || classroomCompleted;
+  const outlineDetailsAvailable = outlinePreview.length > 0 || Boolean(blueprintPreview?.sections.length);
 
   useEffect(() => {
     const classroomId = classroomJob?.result?.id;
-    if (!classroomCompleted || !classroomId || autoOpenedClassroomId.current === classroomId) return;
+    if (!classroomCompleted || !classroomId || outlineDetailsOpen || outlineReviewOpen || generationPreview || autoOpenedClassroomId.current === classroomId) return;
     const timer = window.setTimeout(() => {
       autoOpenedClassroomId.current = classroomId;
       router.push(`/teacher/prepare/${course.id}/preview?view=student&classroomId=${encodeURIComponent(classroomId)}`);
     }, 900);
     return () => window.clearTimeout(timer);
-  }, [classroomCompleted, classroomJob?.result?.id, course.id, router]);
+  }, [classroomCompleted, classroomJob?.result?.id, course.id, generationPreview, outlineDetailsOpen, outlineReviewOpen, router]);
+
+  const outlineDetailsDialog = (
+    <AnimatePresence>
+      {outlineDetailsOpen ? (
+        <QuickOutlineReviewDialog
+          blueprint={blueprintPreview}
+          initialOutlines={outlinePreview}
+          onClose={() => setOutlineDetailsOpen(false)}
+          readOnly
+          refreshing={outlineDetailsRefreshing}
+          refreshError={outlineDetailsError}
+        />
+      ) : null}
+    </AnimatePresence>
+  );
 
   if (showGenerationCanvas) {
     return (
@@ -791,6 +845,8 @@ export function FastCourseGenerator({
         }}
         onRetry={() => void resumeClassroomGeneration()}
         onReview={() => void reviewArtifact()}
+        onViewOutline={() => void viewOutlineDetails()}
+        outlineDetailsAvailable={outlineDetailsAvailable}
         paused={job?.status === "paused"}
         progress={overallProgress}
         previewScenesCount={classroomJob?.preview?.scenesCount ?? 0}
@@ -821,6 +877,7 @@ export function FastCourseGenerator({
         ) : null}
         {outlineReviewOpen ? (
           <QuickOutlineReviewDialog
+            blueprint={blueprintPreview}
             initialOutlines={outlinePreview}
             testMode={generationScope === "test-lesson"}
             onClose={() => setOutlineReviewOpen(false)}
@@ -828,6 +885,7 @@ export function FastCourseGenerator({
           />
         ) : null}
       </AnimatePresence>
+      {outlineDetailsDialog}
       {generationPreview ? (
         <GenerationCheckpointPreview
           availableScenesCount={classroomJob?.preview?.scenesCount ?? generationPreview.loadedScenesCount}
@@ -1100,8 +1158,16 @@ export function FastCourseGenerator({
           </div>
         </div>
 
+        {outlineDetailsAvailable ? (
+          <div className="mt-4 flex justify-center">
+            <button className="inline-flex min-h-11 items-center gap-2 rounded-[9px] border border-stone-300 bg-white px-4 text-sm font-semibold text-stone-700 transition hover:border-blue-300 hover:text-[var(--pbl-teacher)] focus-visible:outline-2 focus-visible:outline-[var(--pbl-teacher)]" onClick={() => void viewOutlineDetails()} type="button">
+              <FileText className="size-4" />查看大纲与蓝图
+            </button>
+          </div>
+        ) : null}
         {error ? <p className="mx-auto mt-4 max-w-[760px] rounded-[10px] bg-red-50 px-4 py-3 text-center text-xs font-semibold leading-5 text-red-700">{error}</p> : null}
       </div>
+      {outlineDetailsDialog}
     </section>
   );
 }

@@ -22,21 +22,25 @@ function wav(seconds: number): Uint8Array {
 }
 
 describe("classroom speech duration recheck", () => {
-  it("remeasures current files and discards stale or missing audio durations", async () => {
+  it("measures current and reused clips by their actual owner and discards stale or missing durations", async () => {
     const scenes = [{ id: "slide", actions: [
       { id: "valid", type: "speech", text: "讲授", audioUrl: "/api/openmaic/classroom-media/classroom-1/audio/current.wav", audioDurationSec: 99 },
       { id: "missing", type: "speech", text: "小测", audioUrl: "/api/openmaic/classroom-media/classroom-1/audio/missing.wav", audioDurationSec: 22 },
       { id: "invalidated", type: "speech", text: "新讲稿", audioUrl: "/api/openmaic/classroom-media/classroom-1/audio/old.wav", audioDurationSec: 5, audioInvalidated: true },
-      { id: "wrong-classroom", type: "speech", text: "其他课堂", audioUrl: "/api/openmaic/classroom-media/other/audio/current.wav", audioDurationSec: 7 },
+      { id: "reused", type: "speech", text: "复用讲稿", audioUrl: "/api/openmaic/classroom-media/test-lesson/audio/current.wav", audioDurationSec: 7 },
     ] }] as unknown as Scene[];
     const readAudio = vi.fn(async (filename: string) => {
+      if (filename.endsWith("/test-lesson/audio/current.wav")) return wav(3);
       if (filename.endsWith("current.wav")) return wav(2);
       throw new Error("file missing");
     });
 
     const [measured] = await remeasureClassroomSpeech("classroom-1", scenes, readAudio);
     expect(measured.actions?.map((action) => action.type === "speech" ? action.audioDurationSec : undefined))
-      .toEqual([2, undefined, undefined, undefined]);
-    expect(readAudio).toHaveBeenCalledTimes(2);
+      .toEqual([2, undefined, undefined, 3]);
+    expect(readAudio).toHaveBeenCalledTimes(3);
+    expect(measured.actions?.[3]).toMatchObject({
+      text: "复用讲稿", audioUrl: "/api/openmaic/classroom-media/test-lesson/audio/current.wav",
+    });
   });
 });

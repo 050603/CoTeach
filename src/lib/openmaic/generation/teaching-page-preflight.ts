@@ -1,7 +1,7 @@
 import type { SceneOutline } from '../types/generation';
 import { fingerprintSceneOutline } from '@/lib/course-generation/page-checkpoints';
 import { isOutlineWithinSourceSelection } from '@/lib/course-generation/generation-scope';
-import { evaluateSemanticPageCapacity, type SemanticPageCapacityAssessment, type SemanticPageCapacityOptions } from './semantic-page-capacity';
+import { evaluateSemanticPageCapacity, SEMANTIC_PAGE_CAPACITY_VERSION, type SemanticPageCapacityAssessment, type SemanticPageCapacityOptions } from './semantic-page-capacity';
 import { replanMeasuredTeachingSection } from './section-capacity-replanner';
 
 export type TeachingPagePreflightOptions = SemanticPageCapacityOptions & {
@@ -18,6 +18,8 @@ export type TeachingPagePreflightResult = {
   outlines: SceneOutline[];
   assessments: SemanticPageCapacityAssessment[];
   changed: boolean;
+  /** Unresolved quality findings are retained for review, never a production stop. */
+  diagnostics?: string[];
 };
 
 export class TeachingPagePreflightError extends Error {
@@ -39,8 +41,19 @@ export async function prepareTeachingPageCapacity(
   const locked = new Set([...(options.lockedOutlineIds ?? []), ...completed]);
   const selected = options.selectedSourceOutlineIds ? new Set(options.selectedSourceOutlineIds) : undefined;
   const assessments = new Map<string, SemanticPageCapacityAssessment>();
+  const diagnostics: string[] = [];
+  const assess = async (page: SceneOutline): Promise<SemanticPageCapacityAssessment> => {
+    try { return await evaluateSemanticPageCapacity(page, options); }
+    catch (error) {
+      if (error instanceof Error && error.name === 'AbortError') throw error;
+      return { schemaVersion: 1, planningVersion: SEMANTIC_PAGE_CAPACITY_VERSION,
+        outlineId: page.id, sourcePageId: page.spatialParentId ?? page.id,
+        decision: 'measurement-unavailable', measurementMode: 'unavailable', groups: [], layouts: [],
+        reason: error instanceof Error ? error.message : String(error) };
+    }
+  };
   for (const page of outlines.filter((outline) => outline.type === 'slide' && !completed.has(outline.id))) {
-    assessments.set(page.id, await evaluateSemanticPageCapacity(page, options));
+    assessments.set(page.id, await assess(page));
   }
   const failed = (assessment: SemanticPageCapacityAssessment | undefined) => assessment
     && ['page-overflow', 'section-overload', 'measurement-unavailable'].includes(assessment.decision);
@@ -57,17 +70,29 @@ export async function prepareTeachingPageCapacity(
     const fullSection = (options.allOutlines ?? outlines).filter((page) => page.type === 'slide'
       && page.generationPurpose === 'knowledge-teaching' && page.lectureSectionId === sectionId);
     if (fullSection.length !== pages.length || pages.some((page) => !fullSection.some((candidate) => candidate.id === page.id))) continue;
-    const proposal = await replanMeasuredTeachingSection(pages, { ...options,
-      allowAcceptedPlan: true, lockedOutlineIds: pages.filter((page) => locked.has(page.id)).map((page) => page.id) });
+    const completePlan = options.allOutlines ?? outlines;
+    const firstPageIndex = completePlan.findIndex((page) => page.id === pages[0]?.id);
+    const priorTeachingNodeIds = completePlan.slice(0, Math.max(0, firstPageIndex))
+      .flatMap((page) => page.type === 'slide' ? page.teachingBrief?.teachingPlan?.introduces ?? [] : []);
+    let proposal: Awaited<ReturnType<typeof replanMeasuredTeachingSection>>;
+    try {
+      proposal = await replanMeasuredTeachingSection(pages, { ...options, priorTeachingNodeIds,
+        allowAcceptedPlan: true, lockedOutlineIds: pages.filter((page) => locked.has(page.id)).map((page) => page.id) });
+    } catch (error) {
+      if (error instanceof Error && error.name === 'AbortError') throw error;
+      diagnostics.push(`${sectionId}：自动容量重规划未完成，保留原稿继续生成：${error instanceof Error ? error.message : String(error)}`);
+      continue;
+    }
     if (proposal.status !== 'replanned') continue;
     if (selected && proposal.outlines.some((page) => !isOutlineWithinSourceSelection(page, selected))) continue;
     if (pages.some((page) => locked.has(page.id) && fingerprintSceneOutline(page)
       !== fingerprintSceneOutline(proposal.outlines.find((candidate) => candidate.id === page.id) ?? { ...page, id: '__missing__' }))) {
-      throw new Error('容量预检不能改动已确认或已完成的页面');
+      diagnostics.push('容量重规划尝试改动已确认或已完成的页面，已保留原页面计划并继续生成');
+      continue;
     }
     const verified: SemanticPageCapacityAssessment[] = [];
     for (const page of proposal.outlines.filter((page) => !completed.has(page.id))) {
-      verified.push(await evaluateSemanticPageCapacity(page, options));
+      verified.push(await assess(page));
     }
     if (verified.some(failed)) continue;
     replacements.set(sectionId, proposal.outlines);
@@ -84,6 +109,6 @@ export async function prepareTeachingPageCapacity(
     return replacement;
   }).map((page, order) => page.order === order ? page : { ...page, order });
   const issues = [...assessments.values()].filter((assessment) => failed(assessment));
-  if (issues.length) throw new TeachingPagePreflightError(prepared, issues);
-  return { outlines: prepared, assessments: [...assessments.values()], changed: replacements.size > 0 };
+  diagnostics.push(...issues.map((item) => `${item.outlineId}：${item.reason}；保留当前页面计划并继续生成`));
+  return { outlines: prepared, assessments: [...assessments.values()], changed: replacements.size > 0, diagnostics };
 }

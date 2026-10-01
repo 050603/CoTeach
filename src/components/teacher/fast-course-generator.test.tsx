@@ -198,7 +198,7 @@ describe("FastCourseGenerator knowledge references", () => {
       return Response.json({ backgroundEnabled: true, job: { id: "legacy", status: "failed", progress: 20, trace: [], message: "可继续", requestPreview: { teacherBrief: "旧的课程要求", generationMode: "standard", options: { enableImageGeneration: true, enableTTS: true, enableVideoGeneration: false }, referenceMaterials: [] } } });
     }));
     render(<FastCourseGenerator course={{ id: "legacy-course" } as Course} onOpenDetailed={vi.fn()} simplified />);
-    const retry = await screen.findByRole("button", { name: "从已保存内容继续生成" });
+    const retry = await screen.findByRole("button", { name: "重生成失败阶段" });
     await waitFor(() => expect((retry as HTMLButtonElement).disabled).toBe(false));
     fireEvent.change(screen.getByLabelText("补充课程生成要求（可选）"), { target: { value: "新的课程要求" } });
     expect((retry as HTMLButtonElement).disabled).toBe(true);

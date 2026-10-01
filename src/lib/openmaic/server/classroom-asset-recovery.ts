@@ -135,16 +135,31 @@ export function reusePersistedSceneAssets(restored: Scene, previous?: Scene): Sc
       audioDurationSec: prior.audioDurationSec, speechAlignment: prior.speechAlignment };
   });
   if (restored.content.type !== 'slide' || previous.content.type !== 'slide') return { ...restored, actions };
-  const resourceKey = (element: { id: string; src?: string; resourceId?: unknown; mediaRef?: unknown }) =>
-    typeof element.resourceId === 'string' ? element.resourceId
-      : typeof element.mediaRef === 'string' ? element.mediaRef
-        : element.src && isMediaPlaceholder(element.src) ? element.src
-          : isMediaPlaceholder(element.id) ? element.id : null;
+  const isGeneratedResource = (value: string) => isMediaPlaceholder(value) || /^generated_[a-f0-9]{20}$/u.test(value);
+  // Server-generated files retain the exact planned resource ID in their
+  // filename, including blueprint IDs that use the generated_<hash> form.
+  // This proves identity without assuming that an unchanged slot kept its image.
+  const persistedResource = (src?: string) => {
+    const match = src?.match(/^\/api\/openmaic\/classroom-media\/[^/]+\/media\/([^/]+)\.(?:png|jpe?g|webp|gif|mp4)$/iu);
+    if (!match) return null;
+    try {
+      const id = decodeURIComponent(match[1]);
+      return isGeneratedResource(id) ? id : null;
+    } catch { return null; }
+  };
+  const resourceKey = (element: { id: string; src?: string; resourceId?: unknown; mediaRef?: unknown }) => {
+    const declared = typeof element.resourceId === 'string' ? element.resourceId
+      : typeof element.mediaRef === 'string' ? element.mediaRef : null;
+    const persisted = persistedResource(element.src);
+    if (persisted) return declared && declared !== persisted ? null : persisted;
+    return declared ?? (element.src && isGeneratedResource(element.src) ? element.src
+      : isGeneratedResource(element.id) ? element.id : null);
+  };
   const priorElements = new Map(previous.content.canvas.elements.map((element) => [element.id, element]));
   const elements = restored.content.canvas.elements.map((element) => {
     const prior = priorElements.get(element.id);
     if ((element.type !== 'image' && element.type !== 'video') || prior?.type !== element.type
-      || !element.src || !isMediaPlaceholder(element.src) || !prior.src || isMediaPlaceholder(prior.src)) return element;
+      || !element.src || !isGeneratedResource(element.src) || !prior.src || isGeneratedResource(prior.src)) return element;
     // A group can keep its element ID while switching from one planned image
     // to another. Ambiguous legacy slots must not substitute the wrong image.
     if (!resourceKey(element) || resourceKey(element) !== resourceKey(prior)) return element;

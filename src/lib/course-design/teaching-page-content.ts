@@ -52,7 +52,9 @@ export function projectTeachingPageContent(
       ].filter((item): item is string => Boolean(item?.trim()))
     : undefined;
   const visibleContent = canonicalVisibleContent({
-    required: introducedConceptDefinitions,
+    // Interactive tasks still need their full operating conditions. A lecture
+    // slide owns its authored display, while its definitions are spoken.
+    required: page?.type === 'interactive' ? introducedConceptDefinitions : [],
     proposed: independentVisibleContent ?? page?.keyPoints ?? [],
   });
   // The blueprint author has already selected the self-contained points for

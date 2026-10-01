@@ -2,12 +2,13 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
-  revisions: vi.fn(), retrievalItems: vi.fn(), sourceBlocks: vi.fn(), figures: vi.fn(), search: vi.fn(), transaction: vi.fn(),
+  revisions: vi.fn(), sections: vi.fn(), retrievalItems: vi.fn(), sourceBlocks: vi.fn(), figures: vi.fn(), search: vi.fn(), transaction: vi.fn(),
 }));
 
 vi.mock("@/lib/textbook/service", () => ({ searchTextbookEvidence: mocks.search }));
 vi.mock("@/lib/db/client", () => ({ prisma: {
   textbookRevision: { findMany: mocks.revisions },
+  textbookSection: { findMany: mocks.sections },
   textbookRetrievalItem: { findMany: mocks.retrievalItems },
   textbookSourceBlock: { findMany: mocks.sourceBlocks },
   textbookFigure: { findMany: mocks.figures },
@@ -20,10 +21,42 @@ import { SOURCE_SEQUENCE_POLICY_VERSION } from './figure-sequence';
 import { bindRequiredTextbookFiguresToOutlines } from "./course-visual-binding";
 import type { SceneOutline } from "@/lib/openmaic/types/generation";
 
+function parentIntroductionFixture() {
+  const definition = '缓存一致性是指多个处理器对同一内存位置的缓存副本，按照规定的读写顺序保持一致的机制。';
+  const item: CourseEvidenceItem = {
+    id: 'adopted-properties', kind: 'source-block', title: '缓存一致性的状态',
+    content: '缓存行状态描述当前副本与内存及其他副本之间的关系。',
+    source: { textbookId: 'book-1', textbookTitle: '计算机系统', revisionId: 'revision-1',
+      revisionVersion: 3, sectionId: 'properties', sectionPath: ['技术基础', '缓存一致性', '缓存一致性的状态'],
+      sourceBlockId: 'property-block', sourceBlockIds: ['property-block'], sourceBlockPosition: 13 },
+    figureRefs: [], figureIds: [], figureSequences: [], figureSequencesResolved: true,
+    sourceSequences: [], sourceSequencesResolved: true, sourceSequencePolicyVersion: SOURCE_SEQUENCE_POLICY_VERSION,
+  };
+  const adopted = { id: 'property-block', revisionId: 'revision-1', sectionId: 'properties',
+    position: 13, blockType: 'PARAGRAPH', content: item.content, figures: [] };
+  const sections = [
+    { id: 'chapter', revisionId: 'revision-1', parentId: null, title: '技术基础', path: '技术基础',
+      kind: 'CHAPTER', level: 0, position: 0 },
+    { id: 'topic', revisionId: 'revision-1', parentId: 'chapter', title: '缓存一致性', path: '技术基础 / 缓存一致性',
+      kind: 'SUBSECTION', level: 1, position: 10 },
+    { id: 'properties', revisionId: 'revision-1', parentId: 'topic', title: '缓存一致性的状态',
+      path: '技术基础 / 缓存一致性 / 缓存一致性的状态', kind: 'SUBSECTION', level: 2, position: 12 },
+    { id: 'sibling', revisionId: 'revision-1', parentId: 'topic', title: '缓存一致性的过程',
+      path: '技术基础 / 缓存一致性 / 缓存一致性的过程', kind: 'SUBSECTION', level: 2, position: 20 },
+  ];
+  const introduction = { id: 'definition-block', revisionId: 'revision-1', sectionId: 'topic',
+    position: 11, blockType: 'PARAGRAPH', content: definition };
+  mocks.sections.mockResolvedValue(sections);
+  mocks.sourceBlocks.mockImplementation(async ({ where }: { where: { id?: unknown; blockType?: string } }) =>
+    where.id ? [adopted] : where.blockType === 'PARAGRAPH' ? [introduction] : []);
+  return { item, adopted, sections, introduction, definition };
+}
+
 describe("course textbook evidence", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.sourceBlocks.mockResolvedValue([]);
+    mocks.sections.mockResolvedValue([]);
     mocks.revisions.mockResolvedValue([{
       id: "revision-1", revision: 3, status: "WAITING_EMBEDDING", textbookId: "book-1",
       textbook: { id: "book-1", title: "人工智能教学", status: "ACTIVE" },
@@ -204,6 +237,132 @@ describe("course textbook evidence", () => {
         sourceBlockIds: ['long-block'] } };
     const [hydrated] = await hydrateCourseEvidenceFigureReferences([item]);
     expect(hydrated?.completeSourceBlocks).toEqual([{ sourceBlockId: 'long-block', content: full }]);
+  });
+
+  it('closes an adopted child excerpt with its real parent introduction in the first authoring context', async () => {
+    const { item, definition } = parentIntroductionFixture();
+
+    const [hydrated] = await hydrateCourseEvidenceFigureReferences([item], { includeAncestorIntroductions: true });
+
+    expect(hydrated?.id).toBe(item.id);
+    expect(hydrated?.content).toBe(item.content);
+    expect(hydrated?.source).toEqual(item.source);
+    expect(hydrated?.sourceSequences).toBe(item.sourceSequences);
+    expect(hydrated?.figureRefs).toEqual(item.figureRefs);
+    expect(hydrated?.completeSourceBlocks).toEqual([{ sourceBlockId: 'definition-block', content: definition,
+      source: { textbookId: 'book-1', textbookTitle: '计算机系统', revisionId: 'revision-1', revisionVersion: 3,
+        sectionId: 'topic', sectionPath: ['技术基础', '缓存一致性'], sectionHierarchy: [
+          { id: 'chapter', title: '技术基础', kind: 'CHAPTER', level: 0 },
+          { id: 'topic', title: '缓存一致性', kind: 'SUBSECTION', level: 1 },
+        ], sectionPosition: 10, sourceBlockId: 'definition-block', sourceBlockPosition: 11, quote: definition } }]);
+    expect(item.completeSourceBlocks).toBeUndefined();
+    expect(mocks.sourceBlocks).toHaveBeenCalledWith(expect.objectContaining({ where: {
+      OR: [{ revisionId: 'revision-1', sectionId: 'topic', position: { gt: 10, lt: 12 } }], blockType: 'PARAGRAPH',
+    } }));
+    const snapshot = { schemaVersion: 2 as const, version: 1, fingerprint: 'unchanged-frozen-source',
+      createdAt: '2026-01-01', retrievalMode: 'hybrid' as const, selections: [], warnings: [],
+      items: [hydrated!], mappings: [{ sourceKnowledgePointId: 'upstream-properties',
+        sourceKnowledgePointName: '缓存一致性的状态', status: 'direct' as const,
+        evidenceItemIds: [item.id], rationale: '本节的原始证据' }] };
+    for (const deduplicateItems of [false, true]) {
+      const context = formatCourseEvidenceContext(snapshot, { deduplicateItems });
+      expect(context).toContain(definition);
+      expect(context).toContain('"sectionId":"topic"');
+      expect(context).toContain('"sectionId":"properties"');
+      expect(context).toContain('"sourceBlockPosition":11');
+    }
+    expect(snapshot.fingerprint).toBe('unchanged-frozen-source');
+    expect(snapshot.mappings[0]?.evidenceItemIds).toEqual([item.id]);
+    expect(mocks.transaction).not.toHaveBeenCalled();
+  });
+
+  it('keeps ancestor context opt-in so the frozen evidence and its resolver identity remain unchanged', async () => {
+    const { item } = parentIntroductionFixture();
+
+    const [defaultHydrated] = await hydrateCourseEvidenceFigureReferences([item]);
+    const [explicitlyDisabled] = await hydrateCourseEvidenceFigureReferences([item], { includeAncestorIntroductions: false });
+
+    expect(defaultHydrated).toEqual(item);
+    expect(explicitlyDisabled).toEqual(defaultHydrated);
+    expect(mocks.sections).not.toHaveBeenCalled();
+    expect(mocks.sourceBlocks).toHaveBeenCalledTimes(2);
+    await resolveCourseEvidenceSnapshot({ courseId: 'course-1',
+      selections: [{ revisionId: 'revision-1', primary: true, sectionIds: [] }],
+      upstreamKnowledgePoints: [{ id: 'source-properties', name: '缓存一致性的状态', description: '缓存副本之间的关系' }] });
+    expect(mocks.sections).not.toHaveBeenCalled();
+  });
+
+  it('rejects sibling prose, later parent prose, non-prose, other revisions and broader chapter text', async () => {
+    const { item, adopted, introduction } = parentIntroductionFixture();
+    const outside = [
+      { ...introduction, id: 'sibling-block', sectionId: 'sibling', position: 21, content: '不可混入兄弟节内容' },
+      { ...introduction, id: 'parent-conclusion', position: 19, content: '不可混入首个子节之后的父段内容' },
+      { ...introduction, id: 'other-revision', revisionId: 'revision-2', content: '不可混入其他版本' },
+      { ...introduction, id: 'parent-heading', blockType: 'HEADING', content: '不可把标题当成定义' },
+      { ...introduction, id: 'parent-table', blockType: 'TABLE', content: '不可混入非引言表格' },
+      { ...introduction, id: 'chapter-block', sectionId: 'chapter', position: 1, content: '不可扩展成整章引言' },
+    ];
+    mocks.sourceBlocks.mockImplementation(async ({ where }: { where: { id?: unknown } }) =>
+      where.id ? [adopted] : [introduction, ...outside]);
+
+    const [hydrated] = await hydrateCourseEvidenceFigureReferences([item], { includeAncestorIntroductions: true });
+
+    expect(hydrated?.completeSourceBlocks?.map((block) => block.sourceBlockId)).toEqual(['definition-block']);
+    expect(JSON.stringify(hydrated)).not.toContain('不可');
+  });
+
+  it.each(['empty', 'unknown', 'wrong-revision', 'wrong-section'] as const)
+    ('does not expand %s adopted source identities', async (invalid) => {
+      const { item, adopted } = parentIntroductionFixture();
+      const input = invalid === 'empty' ? { ...item,
+        source: { ...item.source, sourceBlockId: undefined, sourceBlockIds: [] } }
+        : invalid === 'unknown' ? { ...item,
+          source: { ...item.source, sourceBlockId: 'unknown', sourceBlockIds: ['unknown'] } }
+          : invalid === 'wrong-section' ? { ...item, source: { ...item.source, sectionId: 'another-section' } } : item;
+      if (invalid === 'wrong-revision') mocks.sourceBlocks.mockResolvedValue([{ ...adopted, revisionId: 'revision-2' }]);
+
+      const [hydrated] = await hydrateCourseEvidenceFigureReferences([input], { includeAncestorIntroductions: true });
+
+      expect(hydrated?.completeSourceBlocks).toBeUndefined();
+      expect(mocks.sections).not.toHaveBeenCalled();
+      expect(mocks.transaction).not.toHaveBeenCalled();
+    });
+
+  it('requires the actual directory parent to belong to the same immutable revision', async () => {
+    const { item, sections } = parentIntroductionFixture();
+    mocks.sections.mockResolvedValue(sections.map((section) => section.id === 'topic'
+      ? { ...section, revisionId: 'revision-2' } : section));
+
+    const [hydrated] = await hydrateCourseEvidenceFigureReferences([item], { includeAncestorIntroductions: true });
+
+    expect(hydrated?.completeSourceBlocks).toBeUndefined();
+    expect(mocks.sourceBlocks).toHaveBeenCalledTimes(1);
+  });
+
+  it('is idempotent and retains a previously read introduction if that paragraph later cannot be read', async () => {
+    const { item, adopted, introduction } = parentIntroductionFixture();
+    const clipped = { ...item, content: item.content.slice(0, 8) };
+    const [first] = await hydrateCourseEvidenceFigureReferences([clipped], { includeAncestorIntroductions: true });
+    const [second] = await hydrateCourseEvidenceFigureReferences([first!], { includeAncestorIntroductions: true });
+
+    expect(second).toEqual(first);
+    expect(second?.completeSourceBlocks?.map((block) => block.sourceBlockId)).toEqual(['definition-block', 'property-block']);
+    mocks.sourceBlocks.mockImplementation(async ({ where }: { where: { id?: unknown } }) =>
+      where.id ? [adopted] : []);
+    const [temporarilyUnavailable] = await hydrateCourseEvidenceFigureReferences([second!], { includeAncestorIntroductions: true });
+    expect(temporarilyUnavailable).toEqual(second);
+    expect(temporarilyUnavailable?.completeSourceBlocks?.find((block) => block.sourceBlockId === introduction.id)
+      ?.source?.sectionId).toBe('topic');
+  });
+
+  it('does not repeat a parent introduction already present in the adopted paragraph', async () => {
+    const { item, definition } = parentIntroductionFixture();
+    const alreadyComplete = { ...item, content: `${definition}\n${item.content}` };
+
+    const [hydrated] = await hydrateCourseEvidenceFigureReferences([alreadyComplete], { includeAncestorIntroductions: true });
+
+    expect(hydrated?.completeSourceBlocks).toBeUndefined();
+    expect(hydrated?.content).toBe(alreadyComplete.content);
   });
 
   it("freezes traceable lexical evidence without claiming semantic retrieval succeeded", async () => {

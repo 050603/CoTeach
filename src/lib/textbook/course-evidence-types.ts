@@ -64,8 +64,9 @@ export type CourseEvidenceItem = {
   content: string;
   aliases?: string[];
   source: CourseEvidenceSource;
-  /** Whole immutable source blocks omitted or cut by the bounded retrieval excerpt. */
-  completeSourceBlocks?: Array<{ sourceBlockId: string; content: string }>;
+  /** Whole immutable source blocks omitted or cut by the bounded retrieval excerpt.
+   * Context from a parent introduction retains its own original location. */
+  completeSourceBlocks?: Array<{ sourceBlockId: string; content: string; source?: CourseEvidenceSource }>;
   /** Relation-aware references used for visual planning. */
   figureRefs?: CourseEvidenceFigureReference[];
   /** Complete ordered source facts, including paragraphs beyond the retrieved chunk boundary. */
@@ -128,7 +129,9 @@ export type CourseTextbookFigureResource = {
 
 export type CourseSourceSequenceContract = {
   resourceId: string;
-  required: true;
+  required: boolean;
+  /** A retrieved/adopted source is reference material, not a whole-list lesson assignment. */
+  coveragePolicy?: 'authored-scope';
   knowledgePointIds: string[];
   orderedSteps: CourseEvidenceSourceSequence['steps'];
   scope: 'knowledge-point';
@@ -182,7 +185,8 @@ export function resolveCourseSourceSequenceContracts(
     if (current) {
       current.knowledgePointIds = [...new Set([...current.knowledgePointIds, ...pointIds])];
     } else byAnchor.set(sequence.anchorSourceBlockId, {
-      resourceId: `source-sequence:${sequence.anchorSourceBlockId}`, required: true,
+      resourceId: `source-sequence:${sequence.anchorSourceBlockId}`, required: false,
+      coveragePolicy: 'authored-scope',
       knowledgePointIds: pointIds, orderedSteps: sequence.steps,
       scope: 'knowledge-point',
       sequenceSemantics: sourceSequenceSemantics(item, sequence.steps),

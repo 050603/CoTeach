@@ -390,6 +390,11 @@ async function worker(output: string): Promise<void> {
             prepared.textbookFigureResources, prepared.input.sourceSequences);
           const capacity = await load("src/lib/openmaic/generation/teaching-page-preflight.ts");
           const preflight = await capacity.prepareTeachingPageCapacity(outlines, {
+            explanationNodes: blueprint.sections.flatMap((section: { units: Array<{ explanationNodes?: unknown[] }> }) =>
+              section.units.flatMap((unit) => unit.explanationNodes ?? [])),
+            resourceSequences: Object.fromEntries(prepared.textbookFigureResources
+              .filter((resource: { orderedSteps?: unknown[] }) => resource.orderedSteps?.length)
+              .map((resource: { id: string; orderedSteps: unknown[] }) => [resource.id, resource.orderedSteps])),
             lockedOutlineIds: [], resourceDimensions: Object.fromEntries(prepared.textbookFigureResources
               .filter((resource: { width?: number; height?: number }) => resource.width && resource.height)
               .map((resource: { id: string; width: number; height: number }) => [resource.id, { width: resource.width, height: resource.height }])),

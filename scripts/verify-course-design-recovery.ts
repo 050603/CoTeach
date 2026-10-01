@@ -317,6 +317,8 @@ async function main(): Promise<void> {
           lockedOutlineIds: state.preserveAcceptedPagePlans ? outlines.map((page) => page.id) : [],
           explanationNodes: boundBlueprint.sections.flatMap((section) => section.units
             .flatMap((unit) => unit.explanationNodes ?? [])),
+          resourceSequences: Object.fromEntries(resources.flatMap((resource) =>
+            resource.orderedSteps?.length ? [[resource.id, resource.orderedSteps]] : [])),
           resourceDimensions: Object.fromEntries(resources.flatMap((resource) => resource.width && resource.height
             ? [[resource.id, { width: resource.width, height: resource.height }]] : [])),
         });

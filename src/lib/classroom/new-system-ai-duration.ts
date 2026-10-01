@@ -240,9 +240,14 @@ export function buildNewSystemAiDurationMessages(input: NewSystemAiDurationInput
 export function normalizeNewSystemAiDurationRecommendation(
   value: unknown,
   input: NewSystemAiDurationInput,
-  options: { normalized?: boolean } = {},
+  options: { normalized?: boolean; qualityMode?: 'strict' | 'diagnostic' } = {},
 ): NewSystemAiDurationRecommendation {
   const raw = asRecord(value);
+  const qualityDiagnostics = textArray(raw.qualityDiagnostics);
+  const qualityIssue = (message: string): void => {
+    if (options.qualityMode !== 'diagnostic') throw new Error(message);
+    qualityDiagnostics.push(message);
+  };
   const normalizedBudget = options.normalized === true || raw.normalizationVersion === "duration-v1";
   // An omitted marker does not turn relative weights into legacy minute budgets.
   const singleAuthoring = normalizedBudget || raw.authoringContract === "duration-v1"
@@ -256,7 +261,7 @@ export function normalizeNewSystemAiDurationRecommendation(
   }
   const rationale = text(raw.rationale);
   if (!rationale) {
-    throw new Error("知识讲授时长判断失败：模型未说明判断依据。");
+    qualityIssue("知识讲授时长诊断：模型未说明判断依据。");
   }
 
   const durationMin = Math.min(
@@ -278,10 +283,12 @@ export function normalizeNewSystemAiDurationRecommendation(
   rawBudgets.forEach((budget) => {
     const id = text(budget.clusterId);
     if (singleAuthoring && (!teachingClusters.some((cluster) => cluster.id === id) || budgetById.has(id)
-      || !finitePositive(normalizedBudget ? budget.durationMin : budget.relativeWeight))) throw new Error("知识讲授时长判断失败：知识簇身份或相对投入无效。");
+      || !finitePositive(normalizedBudget ? budget.durationMin : budget.relativeWeight))) {
+      qualityIssue("知识讲授时长诊断：知识簇身份或相对投入无效，沿用有效投入并按既有知识簇权重分配缺失部分。");
+    }
     if (id && !budgetById.has(id)) budgetById.set(id, budget);
   });
-  if (singleAuthoring && budgetById.size !== teachingClusters.length) throw new Error("知识讲授时长判断失败：缺少知识簇投入。");
+  if (singleAuthoring && budgetById.size !== teachingClusters.length) qualityIssue("知识讲授时长诊断：缺少知识簇投入，按既有知识簇权重分配。");
   // Accept an old completed response only as weight evidence. It is folded
   // into canonical semantic groups and never restored as per-point timing.
   const legacyPointBudgets = Array.isArray(raw.knowledgePointBudgets)
@@ -310,18 +317,18 @@ export function normalizeNewSystemAiDurationRecommendation(
     });
     for (const requirementId of returnedRequirementIds) {
       if (mappedClustersByRequirementId.get(requirementId)?.length && !applicableRequirementIds.includes(requirementId)) {
-        throw new Error(`知识讲授时长判断失败：教学重点或难点被安排到不相关的知识簇“${cluster.title}”。`);
+        qualityIssue(`知识讲授时长诊断：教学重点或难点被安排到不相关的知识簇“${cluster.title}”。`);
       }
       const requirement = requirementById.get(requirementId)!;
       if (!singleAuthoring && requirement.kind === "difficulty") {
         const strategy = difficultyStrategies.find((item) => item.requirementId === requirementId);
         if (!strategy || /^(?:举例讲解|加强理解|详细讲解|重点讲解)$/u.test(strategy.teachingApproach.replace(/\s+/g, ""))) {
-          throw new Error(`知识讲授时长判断失败：知识簇“${cluster.title}”缺少教学难点的具体障碍、讲法或理解证据。`);
+          qualityIssue(`知识讲授时长诊断：知识簇“${cluster.title}”缺少教学难点的具体障碍、讲法或理解证据。`);
         }
       }
     }
     if (returnedRequirementIds.length && !requirementRationale) {
-      throw new Error(`知识讲授时长判断失败：知识簇“${cluster.title}”未说明重点或难点如何影响投入。`);
+      qualityIssue(`知识讲授时长诊断：知识簇“${cluster.title}”未说明重点或难点如何影响投入。`);
     }
     const legacyWeight = cluster.knowledgePointIds.reduce(
       (sum, id) => sum + (legacyWeightByPointId.get(id) ?? 0),
@@ -331,7 +338,8 @@ export function normalizeNewSystemAiDurationRecommendation(
       clusterId: cluster.id,
       title: cluster.title,
       knowledgePointIds: cluster.knowledgePointIds,
-      durationMin: singleAuthoring ? finitePositive(normalizedBudget ? budget?.durationMin : budget?.relativeWeight)! : (finitePositive(budget?.durationMin)
+      durationMin: singleAuthoring ? (finitePositive(normalizedBudget ? budget?.durationMin : budget?.relativeWeight)
+        ?? teachingClusterWeight(cluster, pointsById, input.knowledgeGraph)) : (finitePositive(budget?.durationMin)
         ?? (legacyWeight > 0 ? legacyWeight : teachingClusterWeight(cluster, pointsById, input.knowledgeGraph)))
         * (1 + returnedRequirementIds.reduce((sum, id) => (
           sum + (requirementById.get(id)?.kind === "difficulty" ? 0.35 : 0.25)
@@ -346,18 +354,18 @@ export function normalizeNewSystemAiDurationRecommendation(
     const assignedBudgets = teachingClusterBudgets.filter((budget) => budget.requirementIds?.includes(requirement.id));
     const mappedClusterIds = mappedClustersByRequirementId.get(requirement.id) ?? [];
     if (!assignedBudgets.length) {
-      throw new Error(`知识讲授时长判断失败：教学${requirement.kind === "highlight" ? "重点" : "难点"}“${requirement.text}”未进入任何知识簇预算。`);
+      qualityIssue(`知识讲授时长诊断：教学${requirement.kind === "highlight" ? "重点" : "难点"}“${requirement.text}”未进入任何知识簇预算。`);
     }
     if (!mappedClusterIds.length && assignedBudgets.length !== 1) {
-      throw new Error(`知识讲授时长判断失败：全局教学${requirement.kind === "highlight" ? "重点" : "难点"}“${requirement.text}”必须只安排到一个最相关的知识簇。`);
+      qualityIssue(`知识讲授时长诊断：全局教学${requirement.kind === "highlight" ? "重点" : "难点"}“${requirement.text}”必须只安排到一个最相关的知识簇。`);
     }
     for (const sourceId of requirement.sourceKnowledgePointIds) {
       const eligibleClusters = teachingClusters.filter((cluster) => clusterSourceIds(cluster, input).has(sourceId));
       if (!eligibleClusters.length) {
-        throw new Error(`知识讲授时长判断失败：教学${requirement.kind === "highlight" ? "重点" : "难点"}“${requirement.text}”关联的知识主题“${sourceId}”未纳入本次知识讲授范围。`);
+        qualityIssue(`知识讲授时长诊断：教学${requirement.kind === "highlight" ? "重点" : "难点"}“${requirement.text}”关联的知识主题“${sourceId}”未纳入本次知识讲授范围。`);
       }
       if (!eligibleClusters.some((cluster) => assignedBudgets.some((budget) => budget.clusterId === cluster.id))) {
-        throw new Error(`知识讲授时长判断失败：教学${requirement.kind === "highlight" ? "重点" : "难点"}“${requirement.text}”关联的知识主题“${sourceId}”未进入任何知识簇预算。`);
+        qualityIssue(`知识讲授时长诊断：教学${requirement.kind === "highlight" ? "重点" : "难点"}“${requirement.text}”关联的知识主题“${sourceId}”未进入任何知识簇预算。`);
       }
     }
   }
@@ -397,6 +405,7 @@ export function normalizeNewSystemAiDurationRecommendation(
     : `知识讲授预算限定为整课 ${availableMinutes} 分钟的 20%–40%（${minMinutes}–${maxMinutes} 分钟），先确定总时长再生成课程。`);
 
   return {
+    ...(qualityDiagnostics.length ? { qualityDiagnostics: [...new Set(qualityDiagnostics)] } : {}),
     ...(singleAuthoring ? { normalizationVersion: "duration-v1" as const } : {}),
     durationMin,
     rationale,
@@ -437,7 +446,7 @@ export async function generateNewSystemAiDurationRecommendation(
         maxTransientRetries: 0,
       });
   try {
-    return normalizeNewSystemAiDurationRecommendation(parseLLMJson<unknown>(raw), input);
+    return normalizeNewSystemAiDurationRecommendation(parseLLMJson<unknown>(raw), input, { qualityMode: 'diagnostic' });
   } catch (error) {
     throw invalidGeneratedOutput(error, "知识讲授时长结果无法解析或缺少必要字段");
   }

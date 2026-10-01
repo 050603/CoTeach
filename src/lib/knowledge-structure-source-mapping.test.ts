@@ -350,14 +350,25 @@ describe("explicit textbook source mappings", () => {
     },
   ];
 
-  it.each(invalidMappings)("rejects $name without inventing or dropping source responsibilities", async ({ change, issue }) => {
+  it.each(invalidMappings)("preserves $name for final teacher review without another authoring request", async ({ change }) => {
     const value = draft();
     change(value);
     const modelCall = vi.fn().mockResolvedValue(JSON.stringify(value));
 
-    await expect(generateKnowledgeStructureOnce(input, context, {
-      modelCall, retrySleep: async () => {},
-    })).rejects.toThrow(issue);
+    const original = structuredClone(value);
+    const onCandidate = vi.fn();
+    const onRejected = vi.fn();
+    const result = await generateKnowledgeStructureOnce(input, context, {
+      modelCall, retrySleep: async () => {}, onCandidate, onRejected,
+    });
+    expect(result.knowledgePoints).toHaveLength(value.knowledgePoints.length);
+    expect(result.knowledgePoints.map((point) => point.description).sort())
+      .toEqual(value.knowledgePoints.map((point) => point.description).sort());
+    expect(result.knowledgeGraph?.edges).toHaveLength(value.knowledgeGraph.edges.length);
+    expect(result.knowledgeScopePlan?.decisions).toHaveLength(context.teacherKnowledgePoints!.length);
+    expect(onCandidate).toHaveBeenCalledWith({ rawResponse: JSON.stringify(original), attempt: 1 });
+    expect(onRejected).not.toHaveBeenCalled();
+    expect(value).toEqual(original);
     expect(modelCall).toHaveBeenCalledTimes(1);
   });
 });
@@ -382,6 +393,9 @@ it("derives both the reverse source mapping and lesson graph nodes from one auth
 it("does not recover missing modern source mappings from names or the legacy reverse field", async () => {
   const legacy = draft();
   const aiCall = vi.fn().mockResolvedValue(JSON.stringify({ ...legacy, authoringContract: "knowledge-v1" }));
-  await expect(generateKnowledgeStructureOnce(input, context, { aiCall })).rejects.toThrow("缺少显式 sourceKnowledgePointIds");
+  const result = await generateKnowledgeStructureOnce(input, context, { aiCall });
+  expect(result.knowledgePoints.map((point) => point.id)).toEqual(legacy.knowledgePoints.map((point) => point.id));
+  expect(result.knowledgePoints.every((point) => point.sourceKnowledgePointIds === undefined)).toBe(true);
+  expect(result.knowledgeScopePlan?.decisions.every((decision) => decision.targetKnowledgePointIds?.length === 0)).toBe(true);
   expect(aiCall).toHaveBeenCalledOnce();
 });

@@ -320,9 +320,8 @@ describe('formal course teaching enhancement', () => {
       onProgress: ({ completedSections, totalSections }) => {
         progress.push(`${completedSections}/${totalSections}`);
       },
-    })).rejects.toThrow('教学增强未完整生成');
-    expect(warnings).toHaveLength(1);
-    expect(warnings[0]).toContain('页面2');
+    })).rejects.toThrow('教学增强缺少页面');
+    expect(warnings).toEqual([expect.stringContaining('页面2')]);
     expect(ai).toHaveBeenCalledTimes(2);
     expect(progress[0]).toBe('0/2');
     expect(progress.at(-1)).toBe('2/2');
@@ -594,7 +593,7 @@ describe('adopted historical teaching contracts', () => {
       teachingPlan: { ...teachingPlan, presentationContent } });
   });
 
-  it('rejects a foreign page projection rather than adopting it through the single-page fallback', async () => {
+  it('records an unusable foreign display projection and preserves the confirmed page', async () => {
     const adopted = { ...page('p1', 0), teachingBrief: {
       schemaVersion: 1 as const, designVersion: TEACHING_ENHANCEMENT_VERSION, sharedContext, teachingPlan,
       explanation: '已有说明', examples: [], conditions: [], evidence: [], assessmentFocus: '判断记录关系',
@@ -602,8 +601,24 @@ describe('adopted historical teaching contracts', () => {
     const aiCall = vi.fn<AICallFn>().mockResolvedValue(JSON.stringify({
       pages: [{ outlineId: 'another-real-page', presentationContent: ['别页的概念'] }],
     }));
-    await expect(enhanceTeachingBriefs({ outlines: [adopted], presentationOutlineIds: ['p1'],
-      requirement: '保持页面归属', aiCall, retrySleep: async () => undefined })).rejects.toThrow('教学增强未完整生成');
+    const warnings: string[] = [];
+    const result = await enhanceTeachingBriefs({ outlines: [adopted], presentationOutlineIds: ['p1'],
+      requirement: '保持页面归属', aiCall, retrySleep: async () => undefined,
+      onWarning: (warning) => { warnings.push(warning); } });
+    expect(result[0]?.teachingBrief).toEqual(adopted.teachingBrief);
+    expect(warnings).toEqual([expect.stringContaining('presentationContent')]);
+    expect(aiCall).toHaveBeenCalledOnce();
+  });
+
+  it('retains authored teaching text without requiring complete enhancement metadata', () => {
+    const diagnostics: string[] = [];
+    const normalized = normalizeTeachingEnhancement({ pages: [{ outlineId: 'p1',
+      explanation: '身体参与学习活动，能够提供认知所需的经验。' }] }, [page('p1', 0)], '',
+    { onDiagnostic: (message) => { diagnostics.push(message); } });
+    expect(normalized.get('p1')?.explanation).toBe('身体参与学习活动，能够提供认知所需的经验。');
+    expect(normalized.get('p1')?.teachingPlan).toBeUndefined();
+    expect(normalized.get('p1')?.sharedContext).toBeUndefined();
+    expect(diagnostics).toHaveLength(2);
   });
 
   it('adds supported missing case facts while preserving adopted wording and terms', () => {

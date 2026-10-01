@@ -7,7 +7,7 @@ import {
 } from "@/lib/openmaic/pedagogy/teaching-constraints";
 import { JSON_TEACHER_PROMPT_CONTRACT } from "@/lib/prompt-quality/policy";
 import { deriveCourseEntryPolicy, formatCourseEntryPolicy } from "@/lib/course-entry-policy";
-import { formatCourseEvidenceContext, type CourseEvidenceSnapshot } from "@/lib/textbook/course-evidence-types";
+import { formatCourseEvidenceContext, sourceSequenceSemantics, type CourseEvidenceSnapshot } from "@/lib/textbook/course-evidence-types";
 
 const GRADE_BAND_LABELS: Record<string, string> = {
   primary: "小学",
@@ -300,6 +300,45 @@ export function deduplicateKnowledgePromptSources(prompt: string, sources: unkno
   ].join("\n\n");
 }
 
+/** The author sees the same list identities that evidence adoption binds later. */
+function knowledgeSourceListContext(snapshot?: CourseEvidenceSnapshot): string {
+  if (!snapshot) return "";
+  const referencedIds = new Set(snapshot.mappings.flatMap((mapping) => mapping.evidenceItemIds));
+  const lists = new Map<string, {
+    resourceId: string; evidenceItemIds: string[]; sectionPath: string[];
+    sequenceSemantics: "ordered-steps" | "enumerated-items"; orderedLabels: string[];
+  }>();
+  for (const item of snapshot.items.filter((candidate) => referencedIds.has(candidate.id))) {
+    const sequences = [
+      ...(item.sourceSequences ?? []).map((sequence) => ({
+        resourceId: `source-sequence:${sequence.anchorSourceBlockId}`, steps: sequence.steps,
+        sequenceSemantics: sourceSequenceSemantics(item, sequence.steps),
+      })),
+      ...(item.figureSequences ?? []).map((sequence) => ({
+        resourceId: `figure-sequence:${sequence.figureId}`, steps: sequence.steps,
+        sequenceSemantics: "ordered-steps" as const,
+      })),
+    ];
+    for (const sequence of sequences) {
+      const existing = lists.get(sequence.resourceId);
+      if (existing) {
+        if (!existing.evidenceItemIds.includes(item.id)) existing.evidenceItemIds.push(item.id);
+      } else lists.set(sequence.resourceId, {
+        resourceId: sequence.resourceId, evidenceItemIds: [item.id],
+        sectionPath: item.source.sectionPath,
+        sequenceSemantics: sequence.sequenceSemantics,
+        orderedLabels: sequence.steps.map((step) => step.label),
+      });
+    }
+  }
+  if (!lists.size) return "";
+  return [
+    "教材列表索引（完整参考事实目录，引用证据不等于本课须完整讲授该列表）：",
+    JSON.stringify([...lists.values()].map((list) => ({ ...list, itemCount: list.orderedLabels.length }))),
+    "对涉及列表的节点，description 解释本课负责教会什么，keyInfo 说明核心区别、适用条件或重点，不要求把清单缩写后重抄。只有明确讲解某个完整框架时才按对应原始列表保留全部事实和必要条件；选讲只承担实际选中的条目，不把代表性条目写成完整框架；不得把条目标题缩成无法对应原项的替代名称，也不得把重点条目说成全部。ordered-steps 保留原先后；enumerated-items 表达并列要求，不虚构先后或因果。流程还须保留原文的执行主体、操作对象、发生阶段和用途：备课设计、课堂实施、模型开发和模型运行分别承担不同工作，不能因都有顺序便把其中一种当作另一种的定义或完整过程；相关知识点的应用边界也按此确定。名称精炼不等于教材事实精炼；完整条目正文和限定条件仍通过 evidenceItemIds 提供给后续设计，由真实课程目标和实际采用范围决定讲授内容；未采用的参考条目不强制进入课程。",
+  ].join("\n\n");
+}
+
 export function buildKnowledgeGraphPrompt(input: GenerateInput, context?: {
   pblOutline?: string;
   teacherRequiredKnowledgePoints?: string[];
@@ -357,9 +396,13 @@ export function buildKnowledgeGraphPrompt(input: GenerateInput, context?: {
       content: material.content.trim(),
     }));
   const textbookEvidence = formatCourseEvidenceContext(context?.textbookEvidence, { deduplicateItems: true });
+  const sourceLists = knowledgeSourceListContext(context?.textbookEvidence);
   const textbookDriven = Boolean(context?.textbookEvidence?.items.length);
+  const originalConceptContextRule = textbookDriven
+    ? "completeSourceBlocks 中的 source 保留完整原段自己的真实章节、版本和位置。子章节的概念要素、特征或流程可能依赖父章节直接引言给出的整体概念：分别依据这些原段建立整个理论、模式或方法与其组成要素的含义，不能拿‘在某方法中，某要素指……’替代整个方法的定义。父引言仅补全当前已采用段落的上位语境，不把兄弟章节或整章内容都扩为本课责任；保留原证据 ID 引用，并按各段自己的位置判断真正的知识关系。备课或设计自查是教师选择课堂模式与活动的依据，不能把其步骤填作学生课堂实施顺序或所选模式。"
+    : "";
   const textbookSequenceRule = textbookDriven
-    ? "主教材证据中的 completeSourceBlocks 是被检索字数边界截断或遗漏的完整原文段落，sourceSequences 和 figureSequences 是从同一教材版本恢复的完整编号序列；它们均优先于可能截断的 content。知识点只撰写课程摘要与掌握边界，不在 description/keyInfo 重抄完整实施流程或全部教材列表；通过 evidenceItemIds 引用全部采用证据，完整步骤由系统随来源合同传给教学设计。若摘要确需说明数量或先后关系，必须依据对应完整原文；明确宣称完整流程时不得遗漏步骤或混合两个独立列表。sectionHierarchy（含章节 ID、标题、类型、层级）和 sectionPath 是教材目录依据，sectionPosition、sourceBlockPosition、quoteStart 表示原文位置；旧证据缺少 sectionHierarchy 时可参考 sectionPath，但不能推断不存在的章节 ID。主教材与本课目标相关时，按教材首次实际解释知识的先后及其上位概念到下位内容的递进编排，不得为追求变化先讲具体理论、模式或方法，最后才首次解释统摄它们的基本概念；同章也要看正文先后。每个 knowledgePoint 的 evidenceItemIds 应包含首次直接解释它的教材段落，章节开头已给出实质定义时必须引用该 source-block；后文仅提及、应用或举例的段落不能代替首次定义。检索分数、证据数组顺序和标题字典序都不是教材顺序。辅助教材只补充解释。每步写清已建立的认识如何支撑下一步；无主教材定位的点只按确有依据的知识依赖衔接，不虚构教材位置。如因具体学习者障碍需要把某点移到教材所示的另一点之前，在 knowledgeScopePlan.teachingOrderAdjustments 填 knowledgePointId、beforeKnowledgePointId、obstacle（学生具体会卡在哪里）和 basis（教材事实或学段依据）；无充分理由不要填写。"
+    ? "教材证据中的 completeSourceBlocks 是被检索字数边界截断或遗漏的完整原文段落，sourceSequences 和 figureSequences 是从同一教材版本恢复的完整编号序列；它们均优先于可能截断的 content。知识点只撰写课程摘要与掌握边界，不在 description/keyInfo 重抄完整实施流程或全部教材列表；通过 evidenceItemIds 引用全部采用证据，完整步骤作为参考事实传给教学设计，实际采用范围由课程目标和页面讲授计划决定；不要求完整复刻引用段落下所有清单。若摘要确需说明数量或先后关系，必须依据对应完整原文；明确宣称完整流程时不得遗漏步骤或混合两个独立列表。sectionHierarchy（含章节 ID、标题、类型、层级）和 sectionPath 用于教材目录追溯，sectionPosition、sourceBlockPosition、quoteStart 表示原文位置；旧证据缺少 sectionHierarchy 时可参考 sectionPath，但不能推断不存在的章节 ID。根据教师确认的课程目标、学习者已有经验、理解障碍、真实必要先备和可用时间，规划本课实际教学顺序。教材目录和正文展开顺序提供编排参考；不同教材可采用不同的合理展开顺序和解释方式，允许比较、选择或综合主教材与辅助教材的权威解释和样例。每个 knowledgePoint 的 evidenceItemIds 只引用实际用于解释它的合法原文；整体概念须有完整权威语境，单纯提及、应用、要素或举例不能替代其基本含义。教材的首次出现位置用于追溯，不限定本课必须从那一段或按那一顺序教学。引用某个具体真实流程时保留其内部步骤关系、执行主体、条件和用途，不据此固定全课主题顺序。每步写清已建立的认识如何支撑下一步；所需概念尚未建立时安排必要解释，未定位到教材的内容保留其真实来源身份。knowledgePoints 的数组顺序表达本课实际计划，无需填写偏离教材顺序的许可或调整理由。"
     : "";
   const sourceScopeRule = textbookDriven
     ? "资源包来源目录是教师确认的上游教学要求与组织指导。以教材概念体系重新形成本课 knowledgePoints，允许重命名，允许拆分、合并和多对多映射；每项上游要求必须且仅通过 knowledgePoints 的 sourceKnowledgePointIds 显式映射到一个或多个真实课程节点；系统据此派生反向 knowledgeScopePlan.decisions，不重复生成第二套映射，但不要求原始名称、说明或节点边界原样进入课程。不得因课时紧张静默丢失其教学责任；若教材证据与要求确实冲突，应明确报告。"
@@ -378,8 +421,10 @@ ${buildAuthoritativeCourseBasisPrompt(input, { teachingCapacity: context?.teachi
 教师指定、必须保留的知识点：${teacherRequiredKnowledgePoints.length > 0 ? JSON.stringify(teacherRequiredKnowledgePoints) : "（无额外指定）"}
 资源包提供的来源概念目录：${teacherKnowledgePoints.length > 0 ? JSON.stringify(teacherKnowledgePoints) : "（无结构化来源目录）"}
 教师上传的知识参考资料：${referenceMaterials.length > 0 ? JSON.stringify(referenceMaterials) : "（未上传；不要因此降低知识结构质量）"}
+${sourceLists}
 ${textbookEvidence || "未选择永久教材；继续采用兼容的资源包知识规划规则。"}
 ${textbookSequenceRule}
+${originalConceptContextRule}
 
 课程阶段：
 ${stageList}
@@ -388,8 +433,8 @@ ${stageList}
 	1. 先做容量规划，再建图。${sourceScopeRule} 以知识讲授可用时间、学习者基础、知识关系和理解难点决定解释深度、分组方式、哪些相关点共用一个讲授单元或页面，以及是否增加真正必要的桥接或拓展节点。当前 ${constraints.recommendedKnowledgePointRange.min}-${constraints.recommendedKnowledgePointRange.max} 仅供没有资源包目录时估计独立目标容量，不是资源包知识点的数量上限。不得按知识点数量机械平均分钟，也不得以“每点给一个定义和例子”冒充讲清；若必授范围与输入时长确实无法兼容，应明确报告容量冲突而不是静默删点。
 	2. ${textbookDriven ? "已选择永久教材：按教材概念体系组织本课 knowledgePoints，允许把一个上游知识责任拆成多个教材节点，也允许一个教材节点覆盖多个上游责任。每个课程节点通过 sourceKnowledgePointIds 保留全部对应的上游 ID，并通过 evidenceItemIds 只引用上面提供的合法教材证据 ID；全部上游责任必须至少被一个本课节点映射。无法获得教材支持的内容必须明确作为 AI 补充，不得伪造教材出处。每项填写 teachingDepth（detailed|brief|extension）。" : "knowledgePoints 至少逐项包含资源包来源目录和教师明确指定项。资源包条目必须保留精确 id、name；来源 groupId/groupName 只用于追溯原目录，本课 groupId/groupName 可按教材或教学逻辑重新划分；每个来源条目的 sourceKnowledgePointIds 只填写它自己的来源 ID。教师指定项必须以完全相同的 name 分别保留。"} 每项填写 masteryBoundary 和 objectiveIndexes。masteryBoundary 是完成本课后才应达到的可观察能力，不表示学生课前已经具备，也不得据此在课程前段直接使用后续待授概念。
 	2a. 知识结构先表达学科理解本身，再表达真实存在的应用迁移。驱动问题、最终成果和资料中的“任务关联”不自动成为每个节点的 keyInfo、masteryBoundary、groupName 或关系边；不能因为某知识将来可用于成果制作，就把它和最终任务强行合组或为它编造 application/transfer 边。只有当前知识目标本身要求任务应用，或存在可解释的真实迁移关系时才建立连接。
-3. 每个本课 knowledgePoint 必须填写 groupId 和 groupName，它们表示课堂小节的边界，组内知识点按可教学顺序连续排列。若主教材有与本课教学主题相符的章节划分，优先沿用能够完整承载该主题的章节层级；教材末级标题仅列出原理、机制或步骤时，不机械地各立一节。教材只覆盖部分内容时，其余内容按教学逻辑分组，不虚构教材归属。没有可用教材划分时，围绕一个完整的概念、问题或技能，把定义、原理、机制、步骤和必要应用组织成连续的理解目标；例如建构主义的基本原理与实施步骤可以同属“建构主义”一节。只有后续内容具有可独立学习和检验的目标，才另开小节；一般关联或先修关系本身不足以合节。小节不设分钟、PPT 页数或知识点数量上限；整体教学仍须符合总课时，确实无法完成必授内容时报告容量冲突。
-4. 返回 knowledgeScopePlan 的范围理由 rationale 和有依据的 teachingOrderAdjustments；不输出 decisions，反向来源列表与处置状态由系统从 sourceKnowledgePointIds 派生。资源包来源项不得标为 embedded 或 deferred。
+3. 每个本课 knowledgePoint 必须填写 groupId 和 groupName，它们表示课堂小节的边界，组内知识点按可教学顺序连续排列。依据本课目标、学情与理解关系决定分组，教材章节层级可提供组织参考，多教材可以比较或综合，不要求复刻某本书的章节划分；教材末级标题仅列出原理、机制或步骤时，不机械地各立一节。教材只覆盖部分内容时，其余内容按教学逻辑分组，不虚构教材归属。围绕一个完整的概念、问题或技能，把定义、原理、机制、步骤和必要应用组织成连续的理解目标；例如建构主义的基本原理与实施步骤可以同属“建构主义”一节。只有后续内容具有可独立学习和检验的目标，才另开小节；一般关联或先修关系本身不足以合节。小节不设分钟、PPT 页数或知识点数量上限；整体教学仍须符合总课时，确实无法完成必授内容时报告容量冲突。
+4. 返回 knowledgeScopePlan 的范围理由 rationale，说明课程目标、学情与真实先备怎样支持实际教学路径；无需填写偏离教材顺序的 teachingOrderAdjustments。由 knowledgePoints 数组顺序表达实际计划，真正必要的知识依赖在图中说明。反向来源列表与处置状态由系统从 sourceKnowledgePointIds 派生，不输出 decisions。资源包来源项不得标为 embedded 或 deferred。
 5. knowledgeGraph.nodes 只输出 instructionalRole=prerequisite 的真实课前先修节点；本课节点由系统从 knowledgePoints 派生，边仍可引用本课 ID。先修节点不进入 knowledgePoints，不占用本课知识点数量，也不成为课后达标测目标。数量与时间遵循当前课程动态入口策略：${formatCourseEntryPolicy(entryPolicy)}。
 6. 本平台主要服务小学、初中、高中学生，也覆盖大学学习者。“知识启蒙”不代表课程主题没有前序知识。先按学段定位，再反推缺失会直接阻断本课目标的具体先修能力；填写 priorKnowledgeEvidence 和 diagnosticBoundary。高中自然语言处理等较深主题需要按实际目标核对训练集、验证集、测试集等真实前序概念，但不得机械照抄示例。不得虚构具体文件条款。
 7. 不得把本课准备讲授的基础层内容标成课前先修。foundation 表示本课内部基础层，不等于 prerequisite；常识、激趣背景和仅有帮助的内容不进入前测。
@@ -401,7 +446,7 @@ ${stageList}
 
 仅返回 JSON：{
   "authoringContract": "knowledge-v1",
-  "knowledgeScopePlan": { "rationale": "如何在完整覆盖来源目录的前提下按时间决定分组与深度", "teachingOrderAdjustments": [{ "knowledgePointId": "需提前的本课节点ID", "beforeKnowledgePointId": "原本在其前面的本课节点ID", "obstacle": "具体理解障碍", "basis": "教材或学段依据" }] },
+  "knowledgeScopePlan": { "rationale": "如何依据课程目标、学情、真实先备和时间决定实际教学路径、分组与深度，并保留来源教学责任" },
   "knowledgePoints": [{ "id": "kp-1", "name": "string", "description": "string", "keyInfo": "string", "masteryBoundary": "string", "objectiveIndexes": [0], "level": "foundation", "teachingDepth": "detailed", "evidenceItemIds": ["合法教材证据ID"], "relatedIds": ["kp-2"], "parentKnowledgePointIds": ["真实上位概念节点ID"], "sourceKnowledgePointIds": ["来源ID"], "groupId": "section-1", "groupName": "一组相关知识的小节名" }],
   "knowledgeGraph": {
     "nodes": [
@@ -629,7 +674,7 @@ ${stageList}
 1. 为六个课程模块中需要细化的每个活动生成一个或多个二级条目，必须使用 parentActivityId 指向真实的课程模块 id；不能按数组位置推断父子关系。每个父模块的 targetDurationSec 合计必须等于父级 durationMin×60。
 2. 知识讲授阶段（stageKey=ai-learning）只生成学生学习资源：把相互关联的知识点组成若干小节，知识讲解使用 slide，互动/代码练习使用 interactive；每小节末尾必须紧跟一个 quiz 并遵循已确认的测验模式。深度作答模式每小节恰好 1 道覆盖全节知识点的综合简答题；普通模式每小节 2—4 道单选、多选或判断题，错误选项要能区分常见误解，不设置开放式简答，题目合计覆盖全节知识点。每个页面与题目必须关联已确认 knowledgePointIds。
 3. 引入、项目启动、方案构思、项目实践、成果汇报与评价、学习反思及迁移等普通课堂活动只生成教师可用的 PPT/讲稿资源或主持支架，audience 必须为 teacher，resourceTypes 只能是 ppt、script，ttsPolicy 必须是 none。
-4. 每个二级条目必须填写 detailKind、knowledgePointIds、targetDurationSec 与 ttsPolicy。知识讲授条目的 targetDurationSec 应由父模块 durationMin 按相关知识簇的共同解释任务、关系复杂度、必要操作和节末小测拆分；多个紧密相关知识点共用的引入、图示、案例与判断过程只计一次，禁止按“知识点数量 × 单点分钟数”分配或判断冲突。每页只承担一个主要认知任务：紧密相关且共用同一视觉焦点的概念与关系可同页，完整例子、反例/边界、方法/操作、对比或练习需要独立视觉焦点时必须拆页；一页预计连续讲授超过约 4 分钟时应在自然理解转折处继续拆分。不得按固定页数机械切分，也不得把“知识结论+完整例子+练习”挤在同一页。不要使用固定的“4.5 字/秒”公式，服务端会根据实际选定的 TTS provider/model 注入内容量预算，生成时必须通过增删与当前 knowledgePointIds 直接相关的有效解释、案例、反例和分步说明让讲稿贴近模型预算；不得为了填满时长引入图谱之外的知识。
+4. 每个二级条目必须填写 detailKind、knowledgePointIds、targetDurationSec 与 ttsPolicy。知识讲授条目的 targetDurationSec 应由父模块 durationMin 按相关知识簇的共同解释任务、关系复杂度、必要操作和节末小测拆分；多个紧密相关知识点共用的引入、图示、案例与判断过程只计一次，禁止按“知识点数量 × 单点分钟数”分配或判断冲突。以完整解释主题组织页面：相关的定义、机制、必要条件与辅助小案例可在同页形成一条理解主线，完整故事和详细推理留在讲稿。解释角色、案例段落与口头讲解时长不是分页边界；确有不同观察/操作任务或既定可读图文版面无法共享时再拆页。不要让辅助案例的故事、图片与结论分别独占一页，独立作答放在有控件的互动或正式检测。不要使用固定的“4.5 字/秒”公式，服务端会根据实际选定的 TTS provider/model 注入内容量预算，生成时必须通过增删与当前 knowledgePointIds 直接相关的有效解释、案例、反例和分步说明让讲稿贴近模型预算；不得为了填满时长引入图谱之外的知识。
 5. 必须先覆盖 foundation/core 节点，再安排 application/extension 节点；不得创造知识点 ID、改变已确认知识点含义，或超出课程年级的知识边界。每个知识讲授条目必须能说明其内容如何服务于所列 knowledgePointIds。
 6. objectives 必须明确写出将学习或应用的知识节点，activities 要说明学生如何通过案例、测验或小任务验证节点间关系。
 

@@ -2,6 +2,8 @@ import type { GeneratedSlideContent, SceneOutline } from '@/lib/openmaic/types/g
 import type { Scene } from '@/lib/openmaic/types/stage';
 import type { FigureSequenceContract } from '@/lib/textbook/course-visual-binding';
 import { AUTHORING_RESPONSE_PREFIX } from './authoring-checkpoints';
+import { randomUUID } from 'node:crypto';
+import { deserializeCourseGenerationFailure } from './failure-policy';
 import { fingerprintSceneOutline, type PageCheckpointSnapshot, type SceneGenerationCheckpointStage,
   type SceneStageAttemptSnapshot, type SceneStageCheckpointSnapshot } from './page-checkpoints';
 import { hasCompatibleOutlinePlan } from './generation-scope';
@@ -22,6 +24,15 @@ export type FailedStageRegenerationPlan = {
   issues: string[];
 };
 const stages = new Set<SceneGenerationCheckpointStage>(['content', 'reviewed-content', 'narration', 'actions']);
+
+/** Only an explicit retry of the measured failure can revise unstarted pages. */
+export function explicitFailedStageRequestIdentity(error: string | null, authoringRequestId: string = randomUUID()): {
+  authoringRequestId: string; capacityReplanRequestId?: string;
+} {
+  const failure = error ? deserializeCourseGenerationFailure(error) as Error & { code?: string } : undefined;
+  return { authoringRequestId, ...(failure?.code === 'TEACHING_PAGE_PREFLIGHT_FAILED'
+    ? { capacityReplanRequestId: authoringRequestId } : {}) };
+}
 function record(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === 'object' && !Array.isArray(value));
 }
@@ -44,6 +55,7 @@ export function planFailedStageRegeneration(input: {
   saved: SavedRegenerationCheckpoints;
   request: { sceneOutlines?: readonly SceneOutline[] };
   sourceContracts?: readonly FigureSequenceContract[];
+  reviewContent?: boolean;
 }): FailedStageRegenerationPlan {
   const { saved } = input;
   const reset = new Set<string>();
@@ -75,6 +87,8 @@ export function planFailedStageRegeneration(input: {
     if (Array.isArray(content?.questions) && !Array.isArray(content.phaseNarration)
       && !accepted.has(`${stage.pageKey}:actions`)) resetStage(stage.pageKey, 'content');
   }
+
+  if (input.reviewContent === false) return { resetSteps: [...reset].sort(), needsExplicitSourceEdit: false, issues: [] };
 
   const requestOutlines = input.request.sceneOutlines ?? [];
   const prepared = Array.isArray(saved.preparedOutlines) ? saved.preparedOutlines as SceneOutline[] : undefined;

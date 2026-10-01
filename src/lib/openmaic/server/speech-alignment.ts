@@ -77,6 +77,7 @@ export type SpeechAlignmentErrorCode =
   | 'SERVICE_UNAVAILABLE'
   | 'SERVICE_BUSY'
   | 'ALIGNMENT_REJECTED'
+  | 'INVALID_SPANS'
   | 'INVALID_RESPONSE';
 
 export class SpeechAlignmentError extends Error {
@@ -199,7 +200,7 @@ function validateResult(
         || candidate.startMs < previousEndMs
         || candidate.endMs < candidate.startMs
         || candidate.endMs > durationMs + 1_000) {
-      throw new SpeechAlignmentError('INVALID_RESPONSE', 'Speech alignment service returned invalid token spans.', true);
+      throw new SpeechAlignmentError('INVALID_SPANS', 'Speech alignment service returned invalid token spans.', false);
     }
     previousChar = candidate.endChar;
     previousEndMs = candidate.endMs;
@@ -322,6 +323,11 @@ async function requestAlignment(
     const serviceCode = isRecord(body) && typeof body.error === 'string' ? body.error : '';
     if (response.status === 503 || serviceCode === 'SERVICE_BUSY') {
       throw new SpeechAlignmentError('SERVICE_BUSY', 'Speech alignment service is busy.', true);
+    }
+    if (response.status === 422 && [
+      'UNMAPPABLE_TOKEN', 'INVALID_SOURCE_RANGES', 'INVALID_TIMESTAMPS',
+    ].includes(serviceCode)) {
+      throw new SpeechAlignmentError('INVALID_SPANS', `Speech alignment failed: ${serviceCode}`, false);
     }
     throw new SpeechAlignmentError(
       'ALIGNMENT_REJECTED',

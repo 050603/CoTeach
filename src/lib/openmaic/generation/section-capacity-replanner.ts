@@ -1,13 +1,17 @@
 import { createHash } from 'node:crypto';
 import type { SceneOutline } from '../types/generation';
+import type { TeachingPresentationItem } from '@/lib/session/types';
 import { hasCompatibleOutlinePlan } from '@/lib/course-generation/generation-scope';
+import { mergeSourceSequenceUses } from '@/lib/textbook/source-sequence-use';
 import { evaluateSemanticPageCapacity, type SemanticCapacityGroup, type SemanticPageCapacityAssessment,
   type SemanticPageCapacityOptions } from './semantic-page-capacity';
+import { hasReferenceLectureTypography } from './slide-presentation-typography';
 
 const GAP = 12;
 
 type OwnedGroup = SemanticCapacityGroup & { owner: SceneOutline; height: number };
 type Unit = { groups: OwnedGroup[]; height: number; sourcePageIds: string[] };
+type RebalanceOptions = { allowAcceptedPlan?: boolean; priorTeachingNodeIds?: readonly string[] };
 
 function distinct<T>(items: readonly T[]): T[] { return [...new Set(items)]; }
 
@@ -109,9 +113,16 @@ function total(outlines: readonly SceneOutline[], field: 'targetDurationSec' | '
 
 /** A section-level, measurable redistribution of the existing teaching claims. */
 export function rebalanceMeasuredTeachingSection(
+  outlines: readonly SceneOutline[], assessments: readonly SemanticPageCapacityAssessment[], options: RebalanceOptions = {},
+): SceneOutline[] | undefined {
+  return rebalanceTeachingSection(outlines, assessments, options);
+}
+
+function rebalanceTeachingSection(
   outlines: readonly SceneOutline[],
   assessments: readonly SemanticPageCapacityAssessment[],
-  options: { allowAcceptedPlan?: boolean } = {},
+  options: RebalanceOptions,
+  measuredBreaks?: readonly number[],
 ): SceneOutline[] | undefined {
   if (!outlines.length || outlines.length !== assessments.length
     || outlines.some((outline) => outline.type !== 'slide' || outline.sectionPlanVersion && !options.allowAcceptedPlan)
@@ -129,8 +140,10 @@ export function rebalanceMeasuredTeachingSection(
   const capacities = assessments.flatMap((assessment) => assessment.layouts.map((layout) => layout.availableHeight));
   const capacity = Math.min(...capacities);
   if (!Number.isFinite(capacity)) return undefined;
-  const breaks = pageBreaks(units, capacity, outlines.length);
+  const breaks = measuredBreaks ?? pageBreaks(units, capacity, outlines.length);
   if (!breaks) return undefined;
+  if (breaks[0] !== 0 || breaks.at(-1) !== units.length
+    || breaks.some((boundary, index) => !Number.isInteger(boundary) || index > 0 && boundary <= breaks[index - 1]!)) return undefined;
   const pageUnits = breaks.slice(0, -1).map((start, index) => units.slice(start, breaks[index + 1]!));
   const pages = pageUnits.map((assigned) => assigned.flatMap((unit) => unit.groups));
   const weights = pageUnits.map((assigned) => Math.max(1, assigned.reduce((sum, unit) => sum + unit.height, 0)));
@@ -160,8 +173,15 @@ export function rebalanceMeasuredTeachingSection(
       }
     }
   }));
-  const version = createHash('sha256').update(JSON.stringify({ policy: 'semantic-section-rebalance-v1',
-    sectionId, assignments: pages.map((page) => page.map((group) => group.id)),
+  const firstIntroductionPage = new Map<string, number>();
+  for (const source of outlines) for (const nodeId of source.teachingBrief?.teachingPlan?.introduces ?? []) {
+    const page = firstPageForNode.get(`${source.id}:${nodeId}`) ?? firstPageForSource.get(source.id);
+    if (page !== undefined && !firstIntroductionPage.has(nodeId)) firstIntroductionPage.set(nodeId, page);
+  }
+  const priorTeachingNodeIds = new Set(options.priorTeachingNodeIds ?? []);
+  const version = createHash('sha256').update(JSON.stringify({ policy: 'semantic-section-rebalance-v2',
+    sectionId, assignments: pages.map((page) => page.map((group) => ({ id: group.id,
+      presentationItems: group.presentationItems, typography: group.owner.teachingBrief?.teachingPlan?.presentationTypography }))),
   })).digest('hex').slice(0, 16);
   return pages.map((page, index) => {
     const ownerPageIds = distinct(page.map((group) => group.sourcePageId));
@@ -169,7 +189,9 @@ export function rebalanceMeasuredTeachingSection(
     const sourcePageIds = distinct(ownerPageIds.flatMap((id) => owners.get(id)?.sourcePageIds?.length
       ? owners.get(id)!.sourcePageIds! : [id]));
     const visible = distinct(page.flatMap((group) => group.sourceClaim ? [group.visibleText]
-      : group.visibleText.split('\n').map((text) => text.trim()).filter(Boolean)));
+      : group.presentationItems?.length && group.presentationItems.map((item) => item.text).join('\n') === group.visibleText
+        ? group.presentationItems.map((item) => item.text)
+        : group.visibleText.split('\n').map((text) => text.trim()).filter(Boolean)));
     const semanticSourceClaims = [...new Map(page.flatMap((group) => group.sourceClaim
       ? [[group.sourceClaim.id, { id: group.sourceClaim.id, sourcePageId: group.sourceClaim.sourcePageId,
         text: group.sourceClaim.text, parts: group.sourceClaim.parts }] as const] : [])).values()];
@@ -237,6 +259,18 @@ export function rebalanceMeasuredTeachingSection(
       return firstPageForSource.get(item.id) === index;
     }));
     const originalPlan = source.teachingBrief?.teachingPlan;
+    const hasPresentationProjection = Boolean(originalPlan?.presentationItems?.length || originalPlan?.presentationContent?.length);
+    const authoredPresentationItems = page.flatMap((group) => group.presentationItems ?? []).concat(sourced
+      .flatMap((item) => item.teachingBrief?.teachingPlan?.presentationItems ?? [])
+      .filter((item) => visible.includes(item.text)));
+    const presentationItems = [...new Map<string, TeachingPresentationItem>(authoredPresentationItems.map((item) => [
+      `${item.role}:${item.text}:${item.nodeIds.join('|')}`, { ...item, nodeIds: [...item.nodeIds] },
+    ])).values()];
+    const displayReferenceIds = distinct([
+      ...page.flatMap((group) => group.referencedNodeIds ?? []),
+      ...presentationItems.flatMap((item) => item.nodeIds),
+    ]).filter((id) => !nodeIds.has(id) && (priorTeachingNodeIds.has(id)
+      || (firstIntroductionPage.get(id) ?? Infinity) < index));
     const explanation = distinct([...visible, ...narrationFocus]).join('\n');
     const localVisualDescription = visible.join('；') || source.teachingObjective || source.title;
     const localVisualRelationship = originalPlan?.visualRelationship ? {
@@ -251,14 +285,20 @@ export function rebalanceMeasuredTeachingSection(
       || source.visualIntent?.representation === 'native-diagram');
     const teachingPlan = originalPlan ? {
       ...originalPlan,
-      visibleContent: originalPlan.presentationContent?.length ? distinct([...visible, ...narrationFocus]) : visible,
-      ...(originalPlan.presentationContent?.length ? { presentationContent: visible } : {}),
-      newContent: originalPlan.presentationContent?.length ? explanation : visible.join('；') || originalPlan.newContent,
+      ...(sourced.some((item) => item.teachingBrief?.teachingPlan?.sourceSequenceUses !== undefined)
+        ? { sourceSequenceUses: mergeSourceSequenceUses(sourced) } : {}),
+      visibleContent: hasPresentationProjection ? distinct([...visible, ...narrationFocus]) : visible,
+      ...(hasPresentationProjection ? { presentationContent: visible } : {}),
+      ...(sourced.some((item) => item.teachingBrief?.teachingPlan?.presentationItems !== undefined)
+        ? { presentationItems } : {}),
+      newContent: hasPresentationProjection ? explanation : visible.join('；') || originalPlan.newContent,
       takeaway: visible.at(-1) ?? originalPlan.takeaway,
       narrationFocus: narrationFocus.length ? narrationFocus : visible,
       introduces: responsibilities('introduces'), deepens: responsibilities('deepens'),
-      references: distinct([...responsibilities('references'), ...page.flatMap((group) => group.prerequisiteNodeIds ?? [])
-        .filter((id) => !nodeIds.has(id) && (lastTeachingPageForNode.get(id) ?? Infinity) < index)]),
+      references: distinct([...responsibilities('references'), ...displayReferenceIds,
+        ...page.flatMap((group) => group.prerequisiteNodeIds ?? [])
+        .filter((id) => !nodeIds.has(id) && (priorTeachingNodeIds.has(id)
+          || (lastTeachingPageForNode.get(id) ?? Infinity) < index))]),
       visualRelationship: diagramOwner?.teachingBrief?.teachingPlan?.visualRelationship
         ?? sourceImageOwner?.teachingBrief?.teachingPlan?.visualRelationship
         ?? (movedDiagram ? undefined : localVisualRelationship),
@@ -326,6 +366,8 @@ export type MeasuredTeachingSectionReplanOptions = SemanticPageCapacityOptions &
   allowAcceptedPlan?: boolean;
   /** Successfully generated content keeps its exact adopted outline. */
   lockedOutlineIds?: readonly string[];
+  /** Nodes actually introduced in execution pages before this section. */
+  priorTeachingNodeIds?: readonly string[];
   reason?: { category: 'page-capacity' | 'section-overload'; requestedPageCount?: number; detail?: string };
 };
 
@@ -333,6 +375,66 @@ export type MeasuredTeachingSectionReplanResult =
   | { status: 'replanned'; outlines: SceneOutline[]; assessments: SemanticPageCapacityAssessment[] }
   | { status: 'unchanged'; reason?: string; assessments: SemanticPageCapacityAssessment[] }
   | { status: 'infeasible'; reason: string; assessments: SemanticPageCapacityAssessment[] };
+
+/** Current lecture pages are partitioned by complete measured compositions,
+ * never by the sum of one independently padded full-width box per claim. The
+ * integer boundaries retain reading order and each original indivisible unit. */
+async function rebalanceReferenceLectureSection(
+  outlines: readonly SceneOutline[], assessments: readonly SemanticPageCapacityAssessment[],
+  options: MeasuredTeachingSectionReplanOptions,
+): Promise<SceneOutline[] | undefined> {
+  const groups: OwnedGroup[] = assessments.flatMap((assessment, index) => assessment.groups.map((group) => ({
+    ...group, sourcePageId: outlines[index]!.id, owner: outlines[index]!, height: group.measuredHeight ?? Infinity,
+  })));
+  const units = indivisibleUnits(groups, assessments);
+  const compositions = new Map<string, Promise<number | undefined>>();
+  const compositionCost = (start: number, end: number) => {
+    const key = `${start}:${end}`;
+    let pending = compositions.get(key);
+    if (!pending) {
+      // The prefix/suffix retain real introduction order while measuring this
+      // interval. Their capacity is deliberately not used to certify this page.
+      const boundaries = distinct([0, start, end, units.length]);
+      const candidate = rebalanceTeachingSection(outlines, assessments, options, boundaries)
+        ?.at(start === 0 ? 0 : 1);
+      pending = candidate ? evaluateSemanticPageCapacity(candidate, options).then((measured) => {
+        const layout = measured.selectedLayout;
+        if (!layout?.fits || measured.decision === 'measurement-unavailable') return undefined;
+        return (layout.usedHeight / layout.availableHeight - 0.8) ** 2;
+      }) : Promise.resolve(undefined);
+      compositions.set(key, pending);
+    }
+    return pending;
+  };
+  for (let count = outlines.length; count <= units.length; count += 1) {
+    const costs = Array.from({ length: count + 1 }, () => Array<number>(units.length + 1).fill(Infinity));
+    const previous = Array.from({ length: count + 1 }, () => Array<number>(units.length + 1).fill(-1));
+    costs[0]![0] = 0;
+    for (let pages = 1; pages <= count; pages += 1) {
+      for (let end = pages; end <= units.length - (count - pages); end += 1) {
+        for (let start = pages - 1; start < end; start += 1) {
+          if (!Number.isFinite(costs[pages - 1]![start])) continue;
+          const cost = await compositionCost(start, end);
+          if (cost === undefined) continue;
+          const totalCost = costs[pages - 1]![start]! + cost;
+          if (totalCost < costs[pages]![end]!) {
+            costs[pages]![end] = totalCost;
+            previous[pages]![end] = start;
+          }
+        }
+      }
+    }
+    if (!Number.isFinite(costs[count]![units.length])) continue;
+    const boundaries = [units.length];
+    let end = units.length;
+    for (let pages = count; pages > 0; pages -= 1) {
+      end = previous[pages]![end]!;
+      boundaries.push(end);
+    }
+    return rebalanceTeachingSection(outlines, assessments, options, boundaries.reverse());
+  }
+  return undefined;
+}
 
 /** Remeasure a complete section and redistribute only its unlocked intervals. */
 export async function replanMeasuredTeachingSection(
@@ -351,16 +453,30 @@ export async function replanMeasuredTeachingSection(
     return { status: 'infeasible', reason: 'Locked pages belong to incompatible section plan versions.', assessments };
   }
   const result: SceneOutline[] = [];
+  const failed = (assessment: SemanticPageCapacityAssessment) =>
+    assessment.decision === 'page-overflow' || assessment.decision === 'section-overload';
+  // A measured-fit new lecture page is not evidence for a section rewrite.
+  // Keep it intact and repair only contiguous actual overloads. Legacy pages
+  // retain their original additive redistribution and saved placement grammar.
+  const retain = (index: number) => locked.has(outlines[index]!.id)
+    || hasReferenceLectureTypography(outlines[index]!) && !failed(assessments[index]!);
   for (let start = 0; start < outlines.length;) {
-    if (locked.has(outlines[start]!.id)) { result.push(outlines[start]!); start += 1; continue; }
+    if (retain(start)) { result.push(outlines[start]!); start += 1; continue; }
     let end = start + 1;
-    while (end < outlines.length && !locked.has(outlines[end]!.id)) end += 1;
+    while (end < outlines.length && !retain(end)) end += 1;
     const segment = outlines.slice(start, end);
     const measured = assessments.slice(start, end);
     const needsReplan = measured.some((assessment) => assessment.decision === 'page-overflow' || assessment.decision === 'section-overload');
     if (!needsReplan) result.push(...segment);
     else {
-      const replanned = rebalanceMeasuredTeachingSection(segment, measured, { allowAcceptedPlan: options.allowAcceptedPlan });
+      const rebalanceOptions = { ...options,
+        allowAcceptedPlan: options.allowAcceptedPlan,
+        priorTeachingNodeIds: distinct([...(options.priorTeachingNodeIds ?? []),
+          ...result.flatMap((outline) => outline.teachingBrief?.teachingPlan?.introduces ?? [])]),
+      };
+      const replanned = segment.every(hasReferenceLectureTypography)
+        ? await rebalanceReferenceLectureSection(segment, measured, rebalanceOptions)
+        : rebalanceMeasuredTeachingSection(segment, measured, rebalanceOptions);
       if (!replanned) return { status: 'infeasible', reason: 'A complete semantic unit cannot fit a measured page while preserving its observations and the section budget.', assessments };
       result.push(...replanned);
     }

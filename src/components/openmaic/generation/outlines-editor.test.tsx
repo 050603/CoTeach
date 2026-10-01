@@ -22,6 +22,23 @@ const outline: SceneOutline = {
 };
 
 describe('OutlinesEditor lesson script workspace', () => {
+  it('lets the teacher browse saved pages without changing them or starting generation', () => {
+    const onChange = vi.fn();
+    const onConfirm = vi.fn();
+    render(
+      <I18nProvider locale="zh-CN">
+        <OutlinesEditor outlines={[outline]} onChange={onChange} onConfirm={onConfirm} onBack={vi.fn()} readOnly scriptWorkspace />
+      </I18nProvider>,
+    );
+    expect(screen.getByDisplayValue(outline.title)).toBeDisabled();
+    expect(screen.getByDisplayValue(outline.description)).toBeDisabled();
+    expect(screen.getByRole('article', { name: '第 1 页：观察变量之间的关系' })).toHaveAttribute('draggable', 'false');
+    expect(screen.queryByRole('button', { name: /Insert a scene here|在此处插入一个场景/ })).toBeNull();
+    expect(screen.queryByRole('button', { name: /删除|Delete|确认|Confirm/ })).toBeNull();
+    expect(onChange).not.toHaveBeenCalled();
+    expect(onConfirm).not.toHaveBeenCalled();
+  });
+
   it('labels a flexible quiz as a range and keeps its generation contract when the teacher fixes the count', () => {
     const onChange = vi.fn();
     const quiz: SceneOutline = {

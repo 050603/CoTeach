@@ -1,7 +1,12 @@
-import { describe, expect, it } from 'vitest';
+import { afterAll, describe, expect, it, vi } from 'vitest';
+import { compileTextComponents } from '@openmaic/generation';
 import type { TextMeasure } from '../../../../packages/@openmaic/generation/src/text-layout-compiler';
 import type { SceneOutline } from '@/lib/openmaic/types/generation';
 import { canonicalVisibleContent, evaluateSemanticPageCapacity } from './semantic-page-capacity';
+import { REFERENCE_LECTURE_TYPOGRAPHY } from './slide-presentation-typography';
+import { closeSpatialMeasurementBrowser, measureAuthoredSlideText } from './slide-spatial-measurement';
+
+afterAll(closeSpatialMeasurementBrowser);
 
 const measure: TextMeasure = async ({ text, width, fontSize, padding }) => {
   const charactersPerLine = Math.max(1, Math.floor((width - padding * 2) / fontSize));
@@ -16,6 +21,140 @@ function outline(keyPoints: string[], patch: Partial<SceneOutline> = {}): SceneO
 }
 
 describe('semantic page capacity', () => {
+  it('measures grouped display paragraphs exactly as the native renderer, without a padded box per claim', async () => {
+    const points = Array.from({ length: 10 }, (_, index) => `试验${index + 1}：只有温度与培养时间相同，甲组与乙组的颜色才可比较。`);
+    const page = outline(points, { teachingBrief: {
+      schemaVersion: 1, explanation: '逐项解释实验的控制条件。', examples: [], conditions: [], evidence: [], assessmentFocus: '',
+      teachingPlan: { purpose: '', priorKnowledge: '', newContent: '', learnerQuestion: '', reasoningSteps: [], takeaway: '',
+        visibleContent: [], narrationFocus: [], introduces: [], deepens: [], references: ['experiment'],
+        presentationItems: points.map((text) => ({ text, nodeIds: ['experiment'], role: 'key-point' as const })),
+        presentationContent: points, presentationTypography: REFERENCE_LECTURE_TYPOGRAPHY },
+    } });
+    const capacity = await evaluateSemanticPageCapacity(page);
+    const [compiled] = await compileTextComponents([{ kind: 'textBox', left: 50, top: 130, width: 900,
+      paragraphs: points, role: 'body', fontSize: 18 }], measureAuthoredSlideText);
+    if (!compiled || compiled.type !== 'text') throw new Error('Expected editable grouped lecture text');
+    const fullWidth = capacity.layouts.find((layout) => layout.kind === 'full-width' && layout.bodyFontSize === 18)!;
+    expect(fullWidth).toMatchObject({ fits: true, usedHeight: compiled.height });
+    expect(capacity.groups.reduce((sum, group) => sum + group.measuredHeight!, 0) + 12 * 9).toBeGreaterThan(fullWidth.availableHeight);
+    expect(capacity.groups.map((group) => group.visibleText)).toEqual(points);
+    expect(capacity.groups.every((group) => group.sourceNodeIds.length === 0 && group.referencedNodeIds?.[0] === 'experiment')).toBe(true);
+  });
+
+  it('keeps actual prior display sources distinct from new teaching ownership', async () => {
+    const items = [
+      { text: '承接已讲概念：根据相同维度比较', nodeIds: ['prior'], role: 'heading' as const },
+      { text: '只有条件相同，才能判断本次变化', nodeIds: ['new', 'prior'], role: 'key-point' as const },
+    ];
+    const page = outline(items.map((item) => item.text), { teachingBrief: {
+      schemaVersion: 1, explanation: '展开当前条件及其边界。', examples: [], conditions: [], evidence: [], assessmentFocus: '',
+      teachingPlan: { purpose: '', priorKnowledge: '', newContent: '', learnerQuestion: '', reasoningSteps: [], takeaway: '',
+        visibleContent: [], narrationFocus: [], introduces: ['new'], deepens: [], references: ['prior'],
+        presentationItems: items, presentationTypography: REFERENCE_LECTURE_TYPOGRAPHY },
+    } });
+    const capacity = await evaluateSemanticPageCapacity(page, { measure });
+    expect(capacity.groups.map((group) => group.sourceNodeIds)).toEqual([[], ['new']]);
+    expect(capacity.groups.map((group) => group.referencedNodeIds)).toEqual([['prior'], ['prior']]);
+    expect(capacity.groups.map((group) => group.presentationItems)).toEqual(items.map((item) => [item]));
+  });
+
+  it('keeps a complete annotated diagram beside an existing display with its real established source', async () => {
+    const items = [
+      { text: '用流程检查活动是否完整', nodeIds: ['flow'], role: 'heading' as const },
+      { text: '三步有真实先后关系；遗漏任何一步，活动都不完整', nodeIds: ['flow'], role: 'key-point' as const },
+      { text: '检查任务：只有结果，没有采样，缺少哪一步？', nodeIds: ['flow'], role: 'case-observation' as const },
+    ];
+    const diagram = { topology: 'sequence' as const, nodes: [{ id: 'a', label: '提出问题' }, { id: 'b', label: '采样核对' }, { id: 'c', label: '分析结果' }],
+      edges: [{ from: 'a', to: 'b' }, { from: 'b', to: 'c' }], annotation: '这三步按真实顺序组成完整活动。' };
+    const page = outline(items.map((item) => item.text), { visualIntent: { representation: 'native-diagram', observationGoal: '检查流程完整性', diagram },
+      teachingBrief: { schemaVersion: 1, explanation: '观察此前已讲流程。', examples: [], conditions: [], evidence: [], assessmentFocus: '',
+        teachingPlan: { purpose: '', priorKnowledge: '', newContent: '', learnerQuestion: '', reasoningSteps: [], takeaway: '',
+          visibleContent: [], narrationFocus: [], introduces: [], deepens: [], references: [],
+          presentationItems: items, presentationTypography: REFERENCE_LECTURE_TYPOGRAPHY } },
+    });
+    const capacity = await evaluateSemanticPageCapacity(page, { measure, explanationNodes: [{
+      id: 'flow', kind: 'relation', content: '流程依次为提出问题、采样核对、分析结果。', knowledgePointIds: [], prerequisiteNodeIds: [], provenance: 'course-source',
+    }] });
+    const visual = capacity.groups.find((group) => group.kind === 'diagram')!;
+    const observation = capacity.groups.find((group) => visual.indivisibleWith.includes(group.id))!;
+    expect(visual.visibleText).toBe(diagram.annotation);
+    expect(observation.presentationItems?.[0]?.nodeIds).toEqual(['flow']);
+    expect(observation.referencedNodeIds).toEqual(['flow']);
+    expect(capacity.groups.every((group) => group.sourceNodeIds.length === 0)).toBe(true);
+    expect(capacity.units?.find((unit) => unit.groupIds.includes(visual.id))?.groupIds).toContain(observation.id);
+    expect(page.visualIntent?.diagram).toBe(diagram);
+  });
+
+  it('binds authored case observations to their picture without duplicating the old long source cue', async () => {
+    const items = [
+      { text: '甲图保留了鱼身，但增添了牛角', nodeIds: ['case'], role: 'case-observation' as const },
+      { text: '乙图出现牛角、四条腿和斑纹', nodeIds: ['case'], role: 'case-observation' as const },
+    ];
+    const oldCue = '原案例的完整故事与原因。'.repeat(20);
+    const page = outline(items.map((item) => item.text), { visualIntent: { representation: 'generated-image', observationGoal: oldCue,
+      resourceRefs: [{ resourceId: 'picture', kind: 'generated-image', required: true, reason: '对照已有案例', observationGoal: oldCue }] },
+      mediaGenerations: [{ type: 'image', elementId: 'picture', prompt: '两个形象的对照', aspectRatio: '16:9' }],
+      teachingBrief: { schemaVersion: 1, explanation: oldCue, examples: [], conditions: [], evidence: [], assessmentFocus: '',
+        teachingPlan: { purpose: '', priorKnowledge: '', newContent: '', learnerQuestion: '', reasoningSteps: [], takeaway: '',
+          visibleContent: [], narrationFocus: [oldCue], introduces: [], deepens: [], references: ['case'],
+          presentationItems: items, presentationTypography: REFERENCE_LECTURE_TYPOGRAPHY } },
+    });
+    const capacity = await evaluateSemanticPageCapacity(page, { measure });
+    const visual = capacity.groups.find((group) => group.kind === 'media')!;
+    expect(capacity.groups.filter((group) => group.visibleText).map((group) => group.visibleText)).toEqual(items.map((item) => item.text));
+    expect(visual.indivisibleWith).toEqual(capacity.groups.filter((group) => group.visibleText).map((group) => group.id));
+    expect(capacity.groups.flatMap((group) => group.narrationExpansion)).toContain(oldCue);
+    expect(page.visualIntent?.resourceRefs?.[0]?.observationGoal).toBe(oldCue);
+  });
+
+  it('measures concise authored comparisons at 18/16 and keeps explicit explanation ownership', async () => {
+    const presentationItems = [
+      { text: '随机抽样：明确每个对象的抽取机会', nodeIds: ['random'], role: 'comparison' as const },
+      { text: '便利抽样：直接选取身边对象', nodeIds: ['convenience'], role: 'comparison' as const },
+    ];
+    const random = '随机抽样必须使目标总体中的对象具有明确的被抽取机会。';
+    const convenience = '便利抽样是根据对象的可接近性选取样本的方法，不能据此保证每个对象有相同机会。';
+    const page = outline(presentationItems.map((item) => item.text), { teachingBrief: {
+      schemaVersion: 1, explanation: `${random}\n${convenience}`, examples: [], conditions: [], evidence: [], assessmentFocus: '',
+      teachingPlan: { purpose: '', priorKnowledge: '', newContent: `${random}\n${convenience}`, learnerQuestion: '',
+        reasoningSteps: [], takeaway: '', visibleContent: [random, convenience], narrationFocus: [random, convenience],
+        introduces: ['random', 'convenience'], deepens: [], references: [], presentationItems,
+        presentationContent: presentationItems.map((item) => item.text), presentationTypography: REFERENCE_LECTURE_TYPOGRAPHY,
+        visualRelationship: { kind: 'comparison', preferredForm: 'text', description: '比较两种取样方式',
+          rationale: '对齐两种方式的取样依据', readingOrder: presentationItems.map((item) => item.text) },
+      },
+    } });
+    const measured = vi.fn(measure);
+    const capacity = await evaluateSemanticPageCapacity(page, { measure: measured, explanationNodes: [
+      { id: 'random', kind: 'concept', content: random, knowledgePointIds: ['sampling'], prerequisiteNodeIds: [], provenance: 'course-source' },
+      { id: 'convenience', kind: 'concept', content: convenience, knowledgePointIds: ['sampling'], prerequisiteNodeIds: [], provenance: 'course-source' },
+    ] });
+    expect(capacity.planningVersion).toBe('semantic-page-capacity-v2');
+    expect(capacity.decision).toBe('fits');
+    expect(capacity.layouts.find((layout) => layout.kind === 'full-width' && layout.bodyFontSize === 18)?.fits).toBe(true);
+    expect(capacity.selectedLayout).toMatchObject({ kind: 'two-column', bodyFontSize: 18, fits: true });
+    expect(capacity.groups.map((group) => group.sourceNodeIds)).toEqual([['random'], ['convenience']]);
+    expect(capacity.groups.map((group) => group.presentationItems)).toEqual(presentationItems.map((item) => [item]));
+    expect(capacity.groups.map((group) => group.narrationExpansion)).toEqual([[random], [convenience]]);
+    expect(new Set(measured.mock.calls.map(([input]) => input.fontSize))).toEqual(new Set([32, 18, 16]));
+  });
+
+  it('retains separately authored headings instead of merging them into a longer display point', async () => {
+    const presentationItems = [
+      { text: '条件与边界', nodeIds: ['condition'], role: 'heading' as const },
+      { text: '条件与边界：只有来自目标总体\n结论才适用于该总体', nodeIds: ['condition'], role: 'key-point' as const },
+    ];
+    const page = outline(presentationItems.map((item) => item.text), { teachingBrief: {
+      schemaVersion: 1, explanation: '完整的口头解释。', examples: [], conditions: [], evidence: [], assessmentFocus: '',
+      teachingPlan: { purpose: '', priorKnowledge: '', newContent: '', learnerQuestion: '', reasoningSteps: [], takeaway: '',
+        visibleContent: [], narrationFocus: [], introduces: ['condition'], deepens: [], references: [], presentationItems,
+        presentationContent: presentationItems.map((item) => item.text), presentationTypography: REFERENCE_LECTURE_TYPOGRAPHY },
+    } });
+    const capacity = await evaluateSemanticPageCapacity(page, { measure });
+    expect(capacity.groups.map((group) => group.visibleText)).toEqual(presentationItems.map((item) => item.text));
+    expect(capacity.groups.map((group) => group.sourceNodeIds)).toEqual([['condition'], ['condition']]);
+  });
+
   it('measures adopted display points while retaining the full source definition for narration', async () => {
     const definition = '随机抽样是指从目标总体中按随机规则选取样本的方法。';
     const sourceExplanation = `${definition}${'只有个体具有明确的被抽取机会，才能减少人为选择产生的偏差。'.repeat(18)}`;
@@ -69,7 +208,7 @@ describe('semantic page capacity', () => {
     const page = outline(['随机抽样从目标总体取得样本。'], {
       visualIntent: { observationGoal: '观察抽取对象', representation: 'generated-image',
         resourceRefs: [{ resourceId: 'img-1', kind: 'generated-image', required: true,
-          reason: '显示抽取对象' }] },
+          reason: '帮助理解抽样', observationGoal: '显示抽取对象' }] },
       mediaGenerations: [{ type: 'image', elementId: 'img-1', prompt: '抽取样本', aspectRatio: '16:9' }],
     });
     const capacity = await evaluateSemanticPageCapacity(page, { measure });
@@ -83,6 +222,27 @@ describe('semantic page capacity', () => {
     expect(picture.indivisibleWith).toContain(observation.id);
     expect(observation.indivisibleWith).toContain(picture.id);
     expect(capacity.groups.some((group) => group.visibleText === '随机抽样从目标总体取得样本。')).toBe(true);
+  });
+
+  it.each([false, true])('never promotes an internal media rationale to teaching content (explicit observation: %s)', async (explicitObservation) => {
+    const reason = '只有看到这张图片，学生才能理解对象之间的差别。';
+    const observation = '两组培养物在相同条件下呈现不同的边缘与颜色。';
+    const point = '只有比较相同培养条件，颜色差异才可作为分类依据。';
+    const page = outline([point], {
+      visualIntent: { observationGoal: observation, representation: 'generated-image',
+        resourceRefs: [{ resourceId: 'culture', kind: 'generated-image', required: true,
+          reason, ...(explicitObservation ? { observationGoal: observation } : {}) }] },
+      mediaGenerations: [{ type: 'image', elementId: 'culture', prompt: '两组培养物对照', aspectRatio: '4:3' }],
+    });
+    const capacity = await evaluateSemanticPageCapacity(page, { measure });
+    const observed = capacity.groups.find((group) => group.visibleText === observation)!;
+    const picture = capacity.groups.find((group) => group.resourceIds.includes('culture'))!;
+    expect(picture.indivisibleWith).toContain(observed.id);
+    expect(observed.indivisibleWith).toContain(picture.id);
+    expect(capacity.groups.filter((group) => group.kind === 'text').map((group) => group.visibleText))
+      .toEqual([point, observation]);
+    expect(capacity.groups.flatMap((group) => [group.visibleText, ...group.narrationExpansion])).not.toContain(reason);
+    expect(page.visualIntent?.resourceRefs?.[0]?.reason).toBe(reason);
   });
 
   it('tries a narrower media column before declaring a portrait image excessive', async () => {
@@ -248,6 +408,83 @@ describe('semantic page capacity', () => {
     expect(capacity.groups.find((group) => group.id === 'resource-source')?.measuredHeight).toBe(900);
     expect(capacity.selectedLayout?.fits).toBe(true);
     expect(capacity.units?.find((unit) => unit.groupIds.includes('resource-source'))?.selectedLayout?.mediaWidth).toBeLessThanOrEqual(328);
+  });
+
+  it('anchors a mixed source-image page to its complete source flow without adding a duplicate page-wide caption', async () => {
+    const concept = '问题式教学以真实且开放的问题组织学习，问题没有唯一的正确答案。';
+    const flow = '项目教学依次经历选择项目、制定计划、活动探究、制作作品、成果交流、活动评价六个环节。';
+    const points = [concept, flow];
+    const page = outline(points, { visualIntent: {
+      representation: 'mixed', observationGoal: points.join('；'),
+      resourceRefs: [{ resourceId: 'source-flow', kind: 'source-image', required: true,
+        reason: '知识点首次完整讲解必须使用的教材原图；来源信息',
+        observationGoal: '知识点首次完整讲解必须使用的教材原图；来源信息' }],
+    } });
+    const original = structuredClone(page);
+    const capacity = await evaluateSemanticPageCapacity(page, { measure,
+      resourceDimensions: { 'source-flow': { width: 501, height: 291 } },
+      resourceSequences: { 'source-flow': ['选择项目', '制定计划', '活动探究', '制作作品', '成果交流', '活动评价']
+        .map((label) => ({ label })) },
+    });
+    expect(capacity.selectedLayout?.fits).toBe(true);
+    expect(capacity.groups.filter((group) => group.visibleText).map((group) => group.visibleText)).toEqual(points);
+    const image = capacity.groups.find((group) => group.resourceIds.includes('source-flow'))!;
+    const anchor = capacity.groups.find((group) => group.visibleText === flow)!;
+    expect(image.indivisibleWith).toEqual([anchor.id]);
+    expect(anchor.indivisibleWith).toContain(image.id);
+    expect(page).toEqual(original);
+  });
+
+  it.each([false, true])('keeps the source image with its own canonical flow when a native diagram is present (same source: %s)', async (sameSource) => {
+    const sourceLabels = ['选择项目', '制定计划', '活动探究', '制作作品', '成果交流', '活动评价'];
+    const otherLabels = ['创设情境', '自主探究', '解释点拨', '拓展延伸', '评价反思'];
+    const flow = `项目教学依次经历${sourceLabels.join('、')}六个环节。`;
+    const other = `探究教学依次经历${otherLabels.join('、')}五个环节。`;
+    const diagramLabels = sameSource ? sourceLabels : otherLabels;
+    const nodes = diagramLabels.map((label, index) => ({ id: `d${index}`, label }));
+    const diagram = { topology: 'sequence' as const, nodes,
+      edges: nodes.slice(1).map((node, index) => ({ from: nodes[index]!.id, to: node.id })),
+      annotation: sameSource ? flow : other };
+    const page = outline(sameSource ? [flow] : [flow, other], { visualIntent: {
+      representation: 'mixed', observationGoal: '分别观察两种教学流程，不能把它们连接为同一条顺序。', diagram,
+      resourceRefs: [{ resourceId: 'source-flow', kind: 'source-image', required: true,
+        reason: '观察选用教材中的项目教学流程', observationGoal: '项目教学的六个环节及其顺序' }],
+    } });
+    const before = structuredClone(page);
+    const capacity = await evaluateSemanticPageCapacity(page, { measure,
+      resourceDimensions: { 'source-flow': { width: 501, height: 291 } },
+      resourceSequences: { 'source-flow': sourceLabels.map((label) => ({ label })) },
+    });
+    const image = capacity.groups.find((group) => group.resourceIds.includes('source-flow'))!;
+    const anchor = capacity.groups.find((group) => group.visibleText === flow)!;
+    const native = capacity.groups.find((group) => group.kind === 'diagram')!;
+    expect(image.indivisibleWith).toEqual([anchor.id]);
+    expect(anchor.indivisibleWith).toContain(image.id);
+    if (sameSource) expect(anchor).toBe(native);
+    else {
+      expect(anchor).not.toBe(native);
+      expect(native.indivisibleWith).not.toContain(image.id);
+      expect(capacity.units?.find((unit) => unit.groupIds.includes(image.id))?.groupIds).not.toContain(native.id);
+      expect(native.visibleText).toBe(other);
+    }
+    expect(capacity.groups.map((group) => group.visibleText).join('\n')).toContain(flow);
+    expect(page).toEqual(before);
+  });
+
+  it.each([false, true])('measures a combined observation once and preserves additional conditions (extra condition: %s)', async (extraCondition) => {
+    const points = ['甲组培养物的边缘呈圆形。', '乙组培养物的边缘不规则。'];
+    const observation = `${points.join('；')}${extraCondition ? '只有培养条件相同才可比较。' : ''}`;
+    const page = outline(points, { visualIntent: { representation: 'mixed', observationGoal: observation,
+      resourceRefs: [{ resourceId: 'culture', kind: 'generated-image', required: true,
+        reason: '帮助比较培养物', observationGoal: observation }] },
+      mediaGenerations: [{ type: 'image', elementId: 'culture', prompt: '培养物对照', aspectRatio: '16:9' }],
+    });
+    const capacity = await evaluateSemanticPageCapacity(page, { measure });
+    const text = capacity.groups.filter((group) => group.visibleText).map((group) => group.visibleText);
+    expect(text).toEqual(extraCondition ? [...points, observation] : points);
+    const media = capacity.groups.find((group) => group.resourceIds.includes('culture'))!;
+    expect(media.indivisibleWith).toEqual(capacity.groups.filter((group) =>
+      extraCondition ? group.visibleText === observation : points.includes(group.visibleText)).map((group) => group.id));
   });
 
   it('keeps a complete source fact when a similar annotation omits its qualification', async () => {

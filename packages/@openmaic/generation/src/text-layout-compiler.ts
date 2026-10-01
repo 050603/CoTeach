@@ -94,6 +94,16 @@ export class TextLayoutError extends Error {
   }
 }
 
+/** Production keeps usable text when a measured quality preference cannot be met. */
+export interface TextLayoutDiagnostics {
+  onDiagnostic?: (detail: string) => void;
+}
+
+function qualityIssue(message: string, options: TextLayoutDiagnostics): void {
+  if (options.onDiagnostic) options.onDiagnostic(`Text layout: ${message}`);
+  else throw new TextLayoutError(message);
+}
+
 interface Box {
   left: number;
   top: number;
@@ -136,7 +146,7 @@ function finiteNumber(value: unknown, name: string): number {
   return value;
 }
 
-function componentBox(component: ComponentBox, name: string): Box {
+function componentBox(component: ComponentBox, name: string, options: TextLayoutDiagnostics = {}): Box {
   const left = finiteNumber(component.left ?? component.x, `${name}.left/x`);
   const top = finiteNumber(component.top ?? component.y, `${name}.top/y`);
   const width = finiteNumber(component.width, `${name}.width`);
@@ -145,29 +155,32 @@ function componentBox(component: ComponentBox, name: string): Box {
     throw new TextLayoutError(`${name} needs a positive area beyond text padding`);
   }
   if (left < SAFE_LEFT || top < SAFE_TOP || left + width > SAFE_RIGHT || top + height > SAFE_BOTTOM) {
-    throw new TextLayoutError(`${name} must stay inside the slide safe area (${SAFE_LEFT}, ${SAFE_TOP})–(${SAFE_RIGHT}, ${SAFE_BOTTOM})`);
+    qualityIssue(`${name} lies outside the slide safe area (${SAFE_LEFT}, ${SAFE_TOP})–(${SAFE_RIGHT}, ${SAFE_BOTTOM})`, options);
   }
   if (component.left !== undefined && component.x !== undefined && component.left !== component.x) {
-    throw new TextLayoutError(`${name}.left and x disagree`);
+    qualityIssue(`${name}.left and x disagree; retaining left`, options);
   }
   if (component.top !== undefined && component.y !== undefined && component.top !== component.y) {
-    throw new TextLayoutError(`${name}.top and y disagree`);
+    qualityIssue(`${name}.top and y disagree; retaining top`, options);
   }
   return { left, top, width, height };
 }
 
-function styleOf(component: TextBoxComponent | LabelGridComponent, defaultSize: number): TextStyle {
-  const fontSize = component.fontSize ?? defaultSize;
-  if (finiteNumber(fontSize, 'fontSize') <= 0) {
-    throw new TextLayoutError('fontSize must be positive');
+function styleOf(component: TextBoxComponent | LabelGridComponent, defaultSize: number, options: TextLayoutDiagnostics = {}): TextStyle {
+  let fontSize = component.fontSize ?? defaultSize;
+  if (typeof fontSize !== 'number' || !Number.isFinite(fontSize) || fontSize <= 0) {
+    qualityIssue('fontSize must be positive; using the component font default', options);
+    fontSize = defaultSize;
   }
-  const align = component.align ?? 'left';
+  let align = component.align ?? 'left';
   if (!['left', 'center', 'right'].includes(align)) {
-    throw new TextLayoutError('align must be left, center, or right');
+    qualityIssue('align must be left, center, or right; using left alignment', options);
+    align = 'left';
   }
-  const color = component.color ?? '#263445';
+  let color = component.color ?? '#263445';
   if (typeof color !== 'string' || !color.trim()) {
-    throw new TextLayoutError('color must be a nonempty string');
+    qualityIssue('color must be a nonempty string; using the component text color', options);
+    color = '#263445';
   }
   return { fontSize, bold: component.bold ?? false, color, align };
 }
@@ -312,7 +325,7 @@ async function minimumLabelWidth(text: string, style: TextStyle, measure: Measur
   return Math.min(natural, ...candidates.map((candidate) => candidate.width));
 }
 
-async function fitLabel(text: string, width: number, style: TextStyle, measure: Measure): Promise<{ display: string; measurement: TextMeasureResult }> {
+async function fitLabel(text: string, width: number, style: TextStyle, measure: Measure, options: TextLayoutDiagnostics = {}): Promise<{ display: string; measurement: TextMeasureResult }> {
   const contentWidth = width - 2 * TEXT_LAYOUT_PADDING;
   if (contentWidth <= 0) throw new TextLayoutError(`label ${JSON.stringify(text)} has no text area`);
   const explicit = text.split(/\r\n?|\n/);
@@ -328,7 +341,7 @@ async function fitLabel(text: string, width: number, style: TextStyle, measure: 
     const measurement = await measure([text], width, style);
     const explicitCount = text.split(/\r\n?|\n/).length;
     if (measurement.lines.length > explicitCount) {
-      throw new TextLayoutError(`label ${JSON.stringify(text)} wrapped unexpectedly`);
+      qualityIssue(`label ${JSON.stringify(text)} wrapped unexpectedly`, options);
     }
     return { display: text, measurement };
   }
@@ -352,16 +365,17 @@ async function fitLabel(text: string, width: number, style: TextStyle, measure: 
       if (measurement.lines.length === wrapped.lines.length && measurement.lines.every((line) => !isOrphanTextLine(line) && !FORBIDDEN_LINE_START.test(line.trimStart()))) return { display, measurement };
     }
   }
-  throw new TextLayoutError(`label ${JSON.stringify(text)} cannot fit in ${width}px without an orphan line`);
+  qualityIssue(`label ${JSON.stringify(text)} cannot fit in ${width}px without an orphan line`, options);
+  return { display: text, measurement: wrapped };
 }
 
-async function compileTextBox(component: TextBoxComponent, measure: Measure): Promise<PPTElement[]> {
+async function compileTextBox(component: TextBoxComponent, measure: Measure, options: TextLayoutDiagnostics = {}): Promise<PPTElement[]> {
   const top = finiteNumber(component.top ?? component.y, 'textBox.top/y');
   if (component.height !== undefined && finiteNumber(component.height, 'textBox.height') <= 0) {
     throw new TextLayoutError('textBox.height must be positive when supplied');
   }
-  const maximum = component.maxHeight === undefined ? SAFE_BOTTOM - top : finiteNumber(component.maxHeight, 'textBox.maxHeight');
-  const box = componentBox({ ...component, height: maximum }, 'textBox');
+  const maximum = component.maxHeight === undefined ? Math.max(1, SAFE_BOTTOM - top) : finiteNumber(component.maxHeight, 'textBox.maxHeight');
+  const box = componentBox({ ...component, height: maximum }, 'textBox', options);
   if (component.text !== undefined && component.paragraphs !== undefined) {
     throw new TextLayoutError('textBox accepts text or paragraphs, not both');
   }
@@ -370,11 +384,11 @@ async function compileTextBox(component: TextBoxComponent, measure: Measure): Pr
     throw new TextLayoutError('textBox needs plain text or a nonempty string paragraph array');
   }
   const defaultSize = component.role === 'title' ? 34 : component.role === 'label' ? 20 : 24;
-  const style = styleOf(component, defaultSize);
+  const style = styleOf(component, defaultSize, options);
   let output = paragraphs;
   let measured: TextMeasureResult;
   if (component.role === 'label' && paragraphs.length === 1) {
-    const fitted = await fitLabel(paragraphs[0], box.width, style, measure);
+    const fitted = await fitLabel(paragraphs[0], box.width, style, measure, options);
     output = [fitted.display];
     measured = fitted.measurement;
   } else {
@@ -389,7 +403,7 @@ async function compileTextBox(component: TextBoxComponent, measure: Measure): Pr
         if (result.lines.length < 2 || !isOrphanTextLine(result.lines.at(-1)!)) return segment;
         const lines = [...result.lines];
         const tail = lines.splice(-2).join('');
-        const fitted = await fitLabel(tail, box.width, style, measure);
+        const fitted = await fitLabel(tail, box.width, style, measure, options);
         // Only introduce measured breaks when text identity is preserved, including Latin spaces.
         const candidate = [...lines, fitted.display].join('\n');
         if (candidate.replace(/\n/g, '') !== segment) return segment;
@@ -400,7 +414,7 @@ async function compileTextBox(component: TextBoxComponent, measure: Measure): Pr
     measured = await measure(output, box.width, style);
   }
   if (measured.height > box.height + EPSILON) {
-    throw new TextLayoutError(`textBox content needs ${measured.height}px but its maximum allocation is ${box.height}px high`);
+    qualityIssue(`textBox content needs ${measured.height}px but its maximum allocation is ${box.height}px high`, options);
   }
   const element = textElement(component.id ?? 'text-box', { ...box, height: measured.height }, output, style);
   element.vAlign = 'top';
@@ -408,8 +422,8 @@ async function compileTextBox(component: TextBoxComponent, measure: Measure): Pr
   return [element];
 }
 
-async function compileLabelGrid(component: LabelGridComponent, measure: Measure, naturalRows = false): Promise<PPTElement[]> {
-  const box = componentBox(component, 'labelGrid');
+async function compileLabelGrid(component: LabelGridComponent, measure: Measure, naturalRows = false, options: TextLayoutDiagnostics = {}): Promise<PPTElement[]> {
+  const box = componentBox(component, 'labelGrid', options);
   if (!Array.isArray(component.rows) || component.rows.length === 0) {
     throw new TextLayoutError('labelGrid needs at least one row');
   }
@@ -421,7 +435,7 @@ async function compileLabelGrid(component: LabelGridComponent, measure: Measure,
   if (component.rows.some((row) => !row || !Array.isArray(row.cells) || row.cells.length !== columnCount || row.cells.some((cell) => typeof cell !== 'string' || !cell.trim()) || (hasHeaders && (typeof row.header !== 'string' || !row.header.trim())))) {
     throw new TextLayoutError('labelGrid rows need equal, nonempty cells and consistent headers');
   }
-  const style = styleOf(component, 20);
+  const style = styleOf(component, 20, options);
   const gapX = component.gapX ?? 12;
   const gapY = component.gapY ?? 12;
   if (finiteNumber(gapX, 'labelGrid.gapX') < 0 || finiteNumber(gapY, 'labelGrid.gapY') < 0) {
@@ -458,14 +472,14 @@ async function compileLabelGrid(component: LabelGridComponent, measure: Measure,
         const totalDeficit = naturalTotal - minimumTotal;
         return minimum + (availableWidth - minimumTotal) * (totalDeficit === 0 ? 1 / totalColumns : deficit / totalDeficit);
       });
-  const fittedRows = await Promise.all(rows.map(async (row) => Promise.all(row.map((cell, column) => fitLabel(cell.text, widths[column], cell.style, measure)))));
+  const fittedRows = await Promise.all(rows.map(async (row) => Promise.all(row.map((cell, column) => fitLabel(cell.text, widths[column], cell.style, measure, options)))));
   const naturalRowHeights = fittedRows.map((row) => Math.max(...row.map((cell) => cell.measurement.height)));
   const availableHeight = box.height - (rows.length - 1) * gapY;
   const neededHeight = naturalRowHeights.reduce((sum, value) => sum + value, 0);
   if (!naturalRows && neededHeight > availableHeight + EPSILON) {
-    throw new TextLayoutError(`labelGrid needs ${neededHeight + (rows.length - 1) * gapY}px but container is ${box.height}px high`);
+    qualityIssue(`labelGrid needs ${neededHeight + (rows.length - 1) * gapY}px but container is ${box.height}px high`, options);
   }
-  const extraPerRow = naturalRows ? 0 : (availableHeight - neededHeight) / rows.length;
+  const extraPerRow = naturalRows ? 0 : Math.max(0, (availableHeight - neededHeight) / rows.length);
   const elements: PPTElement[] = [];
   let top = box.top;
   for (let rowIndex = 0; rowIndex < rows.length; rowIndex += 1) {
@@ -489,15 +503,58 @@ async function compileLabelGrid(component: LabelGridComponent, measure: Measure,
 }
 
 /** Intermediate flow measurement, before pagination; all rows share the full table's column widths. */
-export async function measureLabelGrid(component: LabelGridComponent, textMeasure: TextMeasure): Promise<PPTElement[]> {
-  return compileLabelGrid(component, createMeasurer(textMeasure), true);
+export async function measureLabelGrid(component: LabelGridComponent, textMeasure: TextMeasure, options: TextLayoutDiagnostics = {}): Promise<PPTElement[]> {
+  try { return await compileLabelGrid(component, createMeasurer(textMeasure), true, options); }
+  catch (error) {
+    if (!options.onDiagnostic || error instanceof Error && error.name === 'AbortError') throw error;
+    const elements = compileUnmeasuredTextComponent(component, options);
+    options.onDiagnostic(`Label measurement could not complete; retaining authored boxes: ${error instanceof Error ? error.message : String(error)}`);
+    return elements;
+  }
+}
+
+/** Renderer fallback without claiming a measured fit. All original text stays editable. */
+function compileUnmeasuredTextComponent(component: TextLayoutComponent, options: TextLayoutDiagnostics): PPTElement[] {
+  const top = finiteNumber(component.top ?? component.y, 'component.top/y');
+  const height = component.kind === 'textBox' ? component.height ?? component.maxHeight
+    ?? (component.role === 'title' ? (component.fontSize ?? 34) * TEXT_LAYOUT_LINE_HEIGHT + TEXT_LAYOUT_PADDING * 2 : Math.max(1, SAFE_BOTTOM - top)) : component.height;
+  const box = componentBox({ ...component, height }, component.kind, options);
+  const style = styleOf(component, component.kind === 'textBox' ? component.role === 'title' ? 34 : 24 : 20, options);
+  if (component.kind === 'textBox') {
+    const paragraphs = component.paragraphs ?? (component.text === undefined ? undefined : [component.text]);
+    if (!Array.isArray(paragraphs) || !paragraphs.length || paragraphs.some((paragraph) => typeof paragraph !== 'string')) {
+      throw new TextLayoutError('textBox needs plain text or a nonempty string paragraph array');
+    }
+    const element = textElement(component.id ?? 'text-box', box, paragraphs, style);
+    element.vAlign = 'top';
+    element.textType = component.role === 'title' ? 'title' : 'content';
+    return [element];
+  }
+  const hasHeaders = component.rows?.some((row) => row.header !== undefined);
+  const columns = component.rows?.[0]?.cells?.length;
+  if (!Array.isArray(component.rows) || !component.rows.length || !columns
+    || component.rows.some((row) => !Array.isArray(row.cells) || row.cells.length !== columns
+      || row.cells.some((cell) => typeof cell !== 'string') || hasHeaders && typeof row.header !== 'string')) {
+    throw new TextLayoutError('labelGrid requires complete text rows and consistent headers');
+  }
+  const width = box.width / (columns + (hasHeaders ? 1 : 0));
+  const rowHeight = box.height / component.rows.length;
+  return component.rows.flatMap((row, rowIndex) => [...(hasHeaders ? [row.header!] : []), ...row.cells].flatMap((text, column) => {
+    const cell = { left: box.left + width * column, top: box.top + rowHeight * rowIndex, width, height: rowHeight };
+    const id = `${component.id ?? 'label-grid'}-${rowIndex}-${column}`;
+    const shape = shapeElement(`${id}-shape`, cell, hasHeaders && !column ? component.headerFill ?? '#E8EEF6' : component.cellFill ?? '#F4F7FA');
+    const label = textElement(`${id}-text`, cell, [text], style);
+    shape.groupId = id;
+    label.groupId = id;
+    return [shape, label];
+  }));
 }
 
 /** Compile generation-only layout components into ordinary editable PPT elements. */
 export async function compileTextComponents(
   components: readonly TextLayoutComponent[],
   textMeasure: TextMeasure,
-  options: { authoringContent?: readonly AuthoringContentItem[] } = {},
+  options: TextLayoutDiagnostics & { authoringContent?: readonly AuthoringContentItem[] } = {},
 ): Promise<PPTElement[]> {
   if (!Array.isArray(components)) throw new TextLayoutError('components must be an array');
   if (typeof textMeasure !== 'function') throw new TextLayoutError('textMeasure is required');
@@ -506,15 +563,145 @@ export async function compileTextComponents(
   const resolved = options.authoringContent ? resolveAuthoringContent(components, options.authoringContent) : components;
   for (const [index, rawComponent] of resolved.entries()) {
     const component = { ...rawComponent, id: rawComponent.id ?? `component-${index}` };
-    if (component?.kind === 'textBox') {
-      elements.push(...(await compileTextBox(component, measure)));
-    } else if (component?.kind === 'labelGrid') {
-      elements.push(...(await compileLabelGrid(component, measure)));
-    } else {
-      throw new TextLayoutError(`unsupported component kind ${JSON.stringify((component as { kind?: unknown } | null)?.kind)}`);
+    try {
+      if (component?.kind === 'textBox') {
+        elements.push(...(await compileTextBox(component, measure, options)));
+      } else if (component?.kind === 'labelGrid') {
+        elements.push(...(await compileLabelGrid(component, measure, false, options)));
+      } else {
+        throw new TextLayoutError(`unsupported component kind ${JSON.stringify((component as { kind?: unknown } | null)?.kind)}`);
+      }
+    } catch (error) {
+      if (!options.onDiagnostic || error instanceof Error && error.name === 'AbortError') throw error;
+      if (component.kind !== 'textBox' && component.kind !== 'labelGrid') throw error;
+      let fallback: PPTElement[];
+      try { fallback = compileUnmeasuredTextComponent(component, options); }
+      catch { throw error; }
+      options.onDiagnostic(`Text measurement could not complete; retaining authored boxes: ${error instanceof Error ? error.message : String(error)}`);
+      elements.push(...fallback);
     }
   }
   return elements;
+}
+
+export interface MeasuredNativeTextStack {
+  headers: PPTElement[];
+  top: number;
+  gap: number;
+  capacity: number;
+  groups: Array<{ id: string; elements: PPTElement[]; height: number; loadArea: number; teachingText: string[] }>;
+}
+
+/** Reuse measured text layout for an independent vertical stack. Only the
+ * author's originally disjoint text rows and their unambiguous panels move.
+ * Diagrams, tables, media and connectors keep their own layout contracts. */
+export async function measureNativeTextStack(
+  nativeElements: readonly PPTElement[],
+  components: readonly unknown[],
+  measure: TextMeasure,
+): Promise<MeasuredNativeTextStack | undefined> {
+  if (!components.length || components.some((component) => !component || typeof component !== 'object'
+    || (component as TextBoxComponent).kind !== 'textBox' || (component as TextBoxComponent).role === 'title')) return;
+  const rows = components.map((component) => component as TextBoxComponent)
+    .sort((first, second) => (first.top ?? first.y ?? 0) - (second.top ?? second.y ?? 0));
+  const authored = rows.map((row) => ({ left: row.left ?? row.x!, top: row.top ?? row.y!, width: row.width, height: row.height! }));
+  if (authored.some((box) => Object.values(box).some((value) => !Number.isFinite(value))
+    || box.left < SAFE_LEFT || box.top < SAFE_TOP || box.width <= 2 * TEXT_LAYOUT_PADDING || box.height <= 0
+    || box.left + box.width > SAFE_RIGHT || box.top + box.height > SAFE_BOTTOM)
+    || authored.some((box) => Math.abs(box.left - authored[0]!.left) > EPSILON
+      || Math.abs(box.width - authored[0]!.width) > EPSILON)
+    || authored.some((box, index) => index > 0 && box.top < authored[index - 1]!.top + authored[index - 1]!.height - EPSILON)) return;
+  const contains = (outer: Box, inner: Box) => outer.left <= inner.left + EPSILON && outer.top <= inner.top + EPSILON
+    && outer.left + outer.width >= inner.left + inner.width - EPSILON
+    && outer.top + outer.height >= inner.top + inner.height - EPSILON;
+  const decorations: PPTShapeElement[][] = rows.map(() => []);
+  const headers: Array<PPTTextElement | PPTShapeElement> = [];
+  const headerBottom = authored[0]!.top;
+  for (const element of nativeElements) {
+    if (!element || (element.type !== 'text' && element.type !== 'shape')
+      || Object.values({ left: element.left, top: element.top, width: element.width, height: element.height })
+        .some((value) => !Number.isFinite(value))
+      || element.width <= 0 || element.height <= 0 || (element.rotate ?? 0) !== 0) return;
+    if (element.top + element.height <= headerBottom + EPSILON) {
+      headers.push(element);
+      continue;
+    }
+    if (element.type !== 'shape' || element.text) return;
+    const owned = authored.flatMap((box, index) => contains(element, box) ? [index] : []);
+    if (owned.length === 1) decorations[owned[0]!]!.push(element);
+    else if (owned.length) return;
+    else {
+      // An adjacent accent bar belongs to the unique row sharing its vertical
+      // allocation. Never guess ownership of large peer regions or connections.
+      const accents = authored.flatMap((box, index) => element.width <= 12
+        && Math.abs(element.top - box.top) <= 12
+        && element.top + element.height >= box.top + box.height - EPSILON
+        && Math.abs(element.left - box.left) <= 24 ? [index] : []);
+      if (accents.length !== 1) return;
+      decorations[accents[0]!]!.push(element);
+    }
+  }
+  const units = authored.map((box, index) => {
+    const elements = decorations[index]!;
+    const left = Math.min(box.left, ...elements.map((element) => element.left));
+    const top = Math.min(box.top, ...elements.map((element) => element.top));
+    const right = Math.max(box.left + box.width, ...elements.map((element) => element.left + element.width));
+    const bottom = Math.max(box.top + box.height, ...elements.map((element) => element.top + element.height));
+    return { left, top, width: right - left, height: bottom - top,
+      paddingLeft: box.left - left, paddingRight: right - box.left - box.width,
+      paddingTop: box.top - top, paddingBottom: bottom - box.top - box.height };
+  });
+  if (units.some((box, index) => index > 0 && box.top < units[index - 1]!.top + units[index - 1]!.height - EPSILON)) return;
+  const top = units[0]!.top;
+  if (headers.some((element) => element.top + element.height > top + EPSILON)) return;
+  const gap = units.length > 1 ? Math.max(0, Math.min(...units.slice(1)
+    .map((box, index) => box.top - units[index]!.top - units[index]!.height))) : 12;
+  const capacity = SAFE_BOTTOM - top;
+  if (capacity <= 0) return;
+  const measureRows = async (allocation: 'original' | 'panel' | 'wide'): Promise<MeasuredNativeTextStack> => {
+    const groups: MeasuredNativeTextStack['groups'] = [];
+    for (const [index, row] of rows.entries()) {
+      const box = authored[index]!, unit = units[index]!;
+      const left = allocation === 'wide' ? SAFE_LEFT : unit.left;
+      const width = allocation === 'wide' ? SAFE_RIGHT - SAFE_LEFT - unit.paddingLeft - unit.paddingRight
+        : allocation === 'panel' ? Math.min(SAFE_RIGHT, unit.left + unit.width) - box.left : box.width;
+      if (width < box.width - EPSILON) throw new TextLayoutError('native text stack has no lossless width allocation');
+      // Measure at a local safe origin, before deciding which physical page
+      // owns the complete row. The authored height is an estimate, not a cap.
+      const { x: _x, y: _y, maxHeight: _maximum, ...style } = row;
+      const compiled = await compileTextComponents([{ ...style, left: SAFE_LEFT, top: SAFE_TOP, width }], measure);
+      const [text] = await compileNativeTextLayout(compiled, measure);
+      if (!text || text.type !== 'text') throw new TextLayoutError('native text stack did not compile to editable text');
+      const height = Math.max(unit.height, text.height + unit.paddingTop + unit.paddingBottom);
+      const growth = height - unit.height;
+      const widthGrowth = allocation === 'wide' ? width - box.width : 0;
+      const elements = decorations[index]!.map((element): PPTElement => ({ ...element,
+        left: left + element.left - unit.left, top: element.top - unit.top,
+        width: element.width + (element.width > 12 ? widthGrowth : 0),
+        height: element.height + growth,
+      }));
+      elements.push({ ...text, left: left + unit.paddingLeft, top: unit.paddingTop });
+      groups.push({ id: text.id, elements, height, loadArea: text.width * text.height,
+        teachingText: row.paragraphs ?? (row.text === undefined ? [] : [row.text]) });
+    }
+    return { headers, top, gap, capacity, groups };
+  };
+  const original = await measureRows('original');
+  const occupied = (plan: MeasuredNativeTextStack) => plan.groups.reduce((sum, group) => sum + group.height, 0)
+    + plan.gap * Math.max(0, plan.groups.length - 1);
+  if (occupied(original) <= capacity + EPSILON) return original;
+  // A narrow authored estimate can wrap an entire extra line even though its
+  // existing panel has spare horizontal room. Use that real room first, keeping
+  // every original panel, accent and row position when the measured text fits.
+  const panel = await measureRows('panel');
+  if (occupied(panel) <= capacity + EPSILON) return panel;
+  // Try the full available width at the same author-selected font before
+  // using the existing continuation paginator. Original HTML/text stays intact.
+  if (units.every((unit) => SAFE_RIGHT - SAFE_LEFT - unit.paddingLeft - unit.paddingRight >= authored[0]!.width - EPSILON)) {
+    const expanded = await measureRows('wide');
+    if (occupied(expanded) < Math.min(occupied(original), occupied(panel)) - EPSILON) return expanded;
+  }
+  return occupied(panel) < occupied(original) - EPSILON ? panel : original;
 }
 
 /** Native slides retain their authored HTML, styles, geometry, and semantic paragraphs. */
@@ -550,6 +737,7 @@ async function measureNativeHtml(
   spec: Omit<TextMeasureInput, 'html' | 'text' | 'width'>,
   measure: TextMeasure,
   maxHeightGrowth = 0,
+  options: TextLayoutDiagnostics = {},
 ): Promise<{ content: string; requiredHeight: number }> {
   const text = nativeHtmlText(html);
   if (!text) return { content: html, requiredHeight: allocation.height };
@@ -561,7 +749,7 @@ async function measureNativeHtml(
   const preservedBreaks = /<(?:pre|code)\b|white-space\s*:\s*(?:pre(?:-wrap|-line)?|break-spaces)\b/i.test(html);
   const orphan = !preservedBreaks && measured.lines.length > 1 && measured.lines.some(isOrphanTextLine);
   if (!orphan) {
-    if (!fits(measured)) throw new TextLayoutError(`native text ${allocation.id} exceeds its authored ${allocation.width}×${allocation.height}px allocation (visible bounds ${measured.inkRight ?? measured.naturalWidth}×${measured.inkBottom ?? measured.height}px)`);
+    if (!fits(measured)) qualityIssue(`native text ${allocation.id} exceeds its authored ${allocation.width}×${allocation.height}px allocation (visible bounds ${measured.inkRight ?? measured.naturalWidth}×${measured.inkBottom ?? measured.height}px)`, options);
     return { content: html, requiredHeight: measured.inkBottom ?? measured.height };
   }
   for (const candidate of nativeBreakCandidates(html)) {
@@ -571,11 +759,12 @@ async function measureNativeHtml(
       return { content: candidate, requiredHeight: result.inkBottom ?? result.height };
     }
   }
-  throw new TextLayoutError(`native text ${allocation.id} has a single-character wrapped line that cannot fit its authored allocation; widen the label without changing its text or font size`);
+  qualityIssue(`native text ${allocation.id} has a single-character wrapped line that cannot fit its authored allocation; widen the label without changing its text or font size`, options);
+  return { content: html, requiredHeight: measured.inkBottom ?? measured.height };
 }
 
 /** Measure native foreground text once, making only lossless short-label break edits. */
-export async function compileNativeTextLayout(elements: PPTElement[], measure: TextMeasure): Promise<PPTElement[]> {
+export async function compileNativeTextLayout(elements: PPTElement[], measure: TextMeasure, options: TextLayoutDiagnostics = {}): Promise<PPTElement[]> {
   const compiled = await Promise.all(elements.map(async (element): Promise<PPTElement> => {
     if (element.type === 'text' || (element.type === 'shape' && element.text)) {
       const text = element.type === 'text' ? element : element.text!;
@@ -593,7 +782,13 @@ export async function compileNativeTextLayout(elements: PPTElement[], measure: T
         result = await measureNativeHtml(html, element, spec, measure, maxHeightGrowth);
       } catch (error) {
         if (element.type !== 'text' || element.rotate !== 0 || !(error instanceof TextLayoutError)
-          || !/single-character wrapped line/.test(error.message)) throw error;
+          || !/single-character wrapped line/.test(error.message)) {
+          if (!options.onDiagnostic || !(error instanceof TextLayoutError)
+            || !/exceeds its authored|single-character wrapped line/.test(error.message)) throw error;
+          result = await measureNativeHtml(html, element, spec, measure, maxHeightGrowth, options);
+          return element.type === 'text' ? { ...element, content: result.content,
+            height: Math.max(element.height, Math.ceil(result.requiredHeight)) } : element;
+        }
         let repaired: Awaited<ReturnType<typeof measureNativeHtml>> | undefined;
         const overlapsForeground = (width: number, height: number) => elements.some((other) => {
           if (other === element || other.type === 'line') return false;
@@ -622,7 +817,10 @@ export async function compileNativeTextLayout(elements: PPTElement[], measure: T
             if (!(candidateError instanceof TextLayoutError)) throw candidateError;
           }
         }
-        if (!repaired) throw error;
+        if (!repaired) {
+          if (!options.onDiagnostic) throw error;
+          repaired = await measureNativeHtml(html, element, spec, measure, maxHeightGrowth, options);
+        }
         result = repaired;
       }
       if (element.type === 'text') return {
@@ -658,7 +856,7 @@ export async function compileNativeTextLayout(elements: PPTElement[], measure: T
         const text = await measureNativeHtml(cell.text, { width, height, id: `${element.id}:${cell.id}` }, spec, async (input) => {
           cellMeasurement = await measure(input);
           return cellMeasurement;
-        });
+        }, 0, options);
         if (cellMeasurement) {
           const required = Math.max(cellMeasurement.height, cellMeasurement.inkBottom ?? 0) + 2 * (element.outline?.width ?? 1);
           if (required > spanningHeight) rowHeights[Math.min(rowIndex + rowspan - 1, rowHeights.length - 1)] += required - spanningHeight;
@@ -677,7 +875,7 @@ export async function compileNativeTextLayout(elements: PPTElement[], measure: T
     const original = elements[index]!;
     if (element.type !== 'text' || original.type !== 'text' || element.height <= original.height) continue;
     if (element.top + element.height > 562.5) {
-      throw new TextLayoutError(`native text ${element.id} needs ${element.height}px but exceeds the slide canvas`);
+      qualityIssue(`native text ${element.id} needs ${element.height}px but exceeds the slide canvas`, options);
     }
     const originalBottom = original.top + original.height;
     const obstruction = compiled.find((other, otherIndex) => {
@@ -690,7 +888,7 @@ export async function compileNativeTextLayout(elements: PPTElement[], measure: T
         && element.top + element.height > Math.max(originalBottom, other.top) + 0.5;
     });
     if (obstruction) {
-      throw new TextLayoutError(`native text ${element.id} needs ${element.height}px but would overlap ${obstruction.id}`);
+      qualityIssue(`native text ${element.id} needs ${element.height}px but would overlap ${obstruction.id}`, options);
     }
   }
   return compiled;

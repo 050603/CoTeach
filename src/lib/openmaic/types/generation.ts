@@ -241,7 +241,9 @@ export type VisualResourceReference = {
   resourceId: string;
   kind: 'source-image' | 'generated-image' | 'generated-video';
   required: boolean;
+  /** Internal selection rationale; never an authored learner-visible claim. */
   reason: string;
+  /** Actual visible features or relationship learners need to observe. */
   observationGoal?: string;
 };
 
@@ -418,6 +420,8 @@ import type { QuizQuestion } from './stage';
  * AI-generated slide content
  */
 export interface GeneratedSlideContent {
+  /** Teacher-private quality findings; usable slide elements remain renderable. */
+  qualityDiagnostics?: string[];
   /** Compiler-owned pagination metadata; stripped before scene assembly. */
   continuationPages?: GeneratedSlideContent[];
   sourceGroupIds?: string[];

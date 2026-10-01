@@ -13,12 +13,20 @@ import type {
 } from '@/lib/session/types';
 import type { TeachingResourceNeed } from '@/lib/course-quality-review/types';
 import { projectTeachingPageContent } from '@/lib/course-design/teaching-page-content';
+import { pageSourceSequenceUses, scopeSourceSequenceContracts, usesSourceSequence } from './source-sequence-use';
+import { hasExplicitFigureScope, selectedFigureIds, type FigureUsePage } from './figure-use';
+import { compactSourceSequenceText as compact, findSourceSequenceLabelPosition,
+  hasSourceSequenceLabel, sourceSequenceLabelKey } from './source-sequence-label';
+export { hasSourceSequenceLabel, sourceSequenceLabelKey } from './source-sequence-label';
 
 export type FigureSequenceContract = {
   resourceId: string;
   required: boolean;
   knowledgePointIds: readonly string[];
-  orderedSteps?: readonly { label: string }[];
+  orderedSteps?: readonly { label: string; sourceBlockId?: string }[];
+  coveragePolicy?: 'authored-scope';
+  /** Selected source facts; the original whole list still determines counts and true process order. */
+  requiredStepLabels?: readonly string[];
   scope?: 'single-page' | 'knowledge-point';
   sequenceSemantics?: 'ordered-steps' | 'enumerated-items';
 };
@@ -31,32 +39,8 @@ type SequenceContentGroup = {
 type SequenceDefinition = Pick<FigureSequenceContract, 'orderedSteps' | 'sequenceSemantics'>;
 
 const CHINESE_COUNT: Record<string, number> = {
-  一: 1, 二: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7, 八: 8, 九: 9, 十: 10,
+  一: 1, 二: 2, 两: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7, 八: 8, 九: 9, 十: 10,
 };
-
-function compact(value: string): string {
-  return value.normalize('NFKC').replace(/[\s，。！？、；：,.!?;:'“”‘’()（）【】\[\]《》<>—_-]+/gu, '');
-}
-
-// Only a source's entire “进行 + quoted term” label licenses the shorter term.
-// Do not strip meaningful verbs, modifiers, or conditions from ordinary labels.
-export function sourceSequenceLabelKey(value: string): string {
-  const quotedAction = value.trim().match(/^进行\s*[“「『"‘']([^“”「」『』"‘']+)[”」』"’']$/u);
-  return compact(quotedAction?.[1] ?? value);
-}
-
-export function hasSourceSequenceLabel(text: string, label: string): boolean {
-  const normalized = compact(text);
-  const full = compact(label);
-  if (normalized.includes(full)) return true;
-  const short = sourceSequenceLabelKey(label);
-  if (short === full) return false;
-  // Naming an entire method (抛锚式教学法) does not teach its 抛锚 step.
-  for (let start = normalized.indexOf(short); start >= 0; start = normalized.indexOf(short, start + 1)) {
-    if (!/^[式型法]/u.test(normalized.slice(start + short.length))) return true;
-  }
-  return false;
-}
 
 /** Match an entire diagram label against spellings licensed by its source.
  * A quoted action may retain its verb without quotes or use the quoted term;
@@ -88,24 +72,61 @@ function missingSequenceLabels(text: string, steps: readonly { label: string }[]
   return steps.filter((step) => !hasSourceSequenceLabel(text, step.label)).map((step) => step.label);
 }
 
-/** A measured split keeps an original's obligation on the first sibling that
- * actually teaches its complete sequence. Unrelated pages and raw authoring
- * never move a required original away from its first teaching page. */
+/** Bind a sequence figure to its first complete, actually owned explanation.
+ * An earlier concept overview sharing the knowledge ID does not own a later
+ * procedure. Measured plans may move that duty only among their own siblings. */
 function firstSequenceTeachingCandidate<T>(
   candidates: readonly T[],
-  pageOf: (candidate: T) => { sectionPlanVersion?: string; sourcePageIds?: readonly string[] },
+  pageOf: (candidate: T) => { sectionPlanVersion?: string; sourcePageIds?: readonly string[];
+    introducesNodeIds?: readonly string[]; deepensNodeIds?: readonly string[];
+    teachingBrief?: { teachingPlan?: { introduces?: readonly string[]; deepens?: readonly string[] } };
+    resourceNeeds?: readonly { kind: string; assetId?: string }[];
+    caseObservation?: { kind?: string; resourceIds?: readonly string[] };
+    suggestedImageIds?: readonly string[];
+    visualIntent?: { resourceRefs?: readonly { resourceId: string; kind: string }[] } },
   contentOf: (candidate: T) => readonly SequenceContentGroup[],
   orderedSteps?: readonly { label: string }[],
+  resourceId?: string,
 ): T | undefined {
-  const first = candidates[0];
-  if (!first || !orderedSteps?.length) return first;
+  const first = resourceId ? candidates.find((candidate) => {
+    const page = pageOf(candidate);
+    return page.resourceNeeds?.some((need) => need.kind === 'source-image' && need.assetId === resourceId)
+      || page.caseObservation?.kind === 'source-image' && page.caseObservation.resourceIds?.includes(resourceId)
+      || page.suggestedImageIds?.includes(resourceId)
+      || page.visualIntent?.resourceRefs?.some((reference) => reference.kind === 'source-image' && reference.resourceId === resourceId);
+  }) ?? candidates[0] : candidates[0];
+  if (!first) return first;
   const original = pageOf(first);
-  if (!original.sectionPlanVersion || !original.sourcePageIds?.length) return first;
-  const sourceIds = new Set(original.sourcePageIds);
+  if (!orderedSteps?.length) {
+    // Native pagination moves a concept's full owned explanation and original
+    // together. A preceding text-only fragment is not a new first concept page.
+    // Preserve that actual measured responsibility, not merely a media receipt.
+    if (original.sectionPlanVersion) {
+      const hasOwnedContent = (candidate: T) => {
+        const page = pageOf(candidate);
+        const owned = page.introducesNodeIds ?? page.teachingBrief?.teachingPlan?.introduces ?? [];
+        const deepens = page.deepensNodeIds ?? page.teachingBrief?.teachingPlan?.deepens ?? [];
+        return Boolean((owned.length || deepens.length) && contentOf(candidate).slice(1)
+          .some((group) => group.statements.some((statement) => statement.trim())));
+      };
+      if (hasOwnedContent(first)) return first;
+      const sourceIds = new Set(original.sourcePageIds ?? []);
+      const actualOwner = candidates.find((candidate) => {
+        const page = pageOf(candidate);
+        return page.sectionPlanVersion === original.sectionPlanVersion
+          && page.sourcePageIds?.some((id) => sourceIds.has(id)) && hasOwnedContent(candidate);
+      });
+      if (actualOwner) return actualOwner;
+    }
+    return candidates[0];
+  }
+  const sourceIds = new Set(original.sourcePageIds ?? []);
   return candidates.find((candidate) => {
     const page = pageOf(candidate);
-    if (page.sectionPlanVersion !== original.sectionPlanVersion
-      || !page.sourcePageIds?.some((id) => sourceIds.has(id))) return false;
+    if (original.sectionPlanVersion) {
+      if (page.sectionPlanVersion !== original.sectionPlanVersion
+        || !page.sourcePageIds?.some((id) => sourceIds.has(id))) return false;
+    } else if (page.sectionPlanVersion) return false;
     // The second group is the actual page brief and visible teaching content.
     // Titles, objectives, evidence quotes and unused unit prose cannot make a
     // partial measured page count as a complete teaching page.
@@ -202,7 +223,7 @@ function countSpansSeveralGroups(prefix: string): boolean {
   // child list. The exact-item gate continues to check every adopted source.
   const group = '(?:阶段|方面|维度|类别|组|类|清单|列表|流程)';
   const multiple = prefix.match(new RegExp(`(?:各|不同|所有|多个|全部)${group}[^，,。；;]{0,24}$`, 'u'));
-  const numbered = prefix.match(new RegExp(`([一二三四五六七八九十]|\\d{1,2})\\s*(?:个|种)?${group}[^，,。；;]{0,24}$`, 'u'));
+  const numbered = prefix.match(new RegExp(`([一二两三四五六七八九十]|\\d{1,2})\\s*(?:个|种)?${group}[^，,。；;]{0,24}$`, 'u'));
   const count = numbered ? CHINESE_COUNT[numbered[1]!] ?? Number(numbered[1]) : 0;
   return Boolean(multiple || count > 1);
 }
@@ -292,6 +313,8 @@ export function inspectFigureSequence(input: {
   statements: readonly string[];
   diagramLabels?: readonly string[];
   requireCompleteText?: boolean;
+  requiredStepLabels?: readonly string[];
+  allowPartialDiagram?: boolean;
   contentGroups?: readonly SequenceContentGroup[];
   relatedSequences?: readonly SequenceDefinition[];
   sequenceSemantics?: FigureSequenceContract['sequenceSemantics'];
@@ -303,8 +326,8 @@ export function inspectFigureSequence(input: {
   const problems: string[] = [];
   const enumeration = input.sequenceSemantics === 'enumerated-items';
   const quantity = enumeration
-    ? /(?<!第)([一二三四五六七八九十]|\d{1,2})\s*(?:个|条|项)\s*(?:基本|主要)?\s*(?:原则|建议|策略|要点|特征|特点)/gu
-    : /(?<!第)([一二三四五六七八九十]|\d{1,2})\s*个\s*(?:基本|主要)?\s*(?:流程(?:环节|阶段|步骤)?|环节|阶段|步骤)/gu;
+    ? /(?<!第)([一二两三四五六七八九十]|\d{1,2})\s*(?:个|条|项)\s*(?:基本|主要)?\s*(?:原则|建议|策略|要点|特征|特点)/gu
+    : /(?<!第)([一二两三四五六七八九十]|\d{1,2})\s*个\s*(?:基本|主要)?\s*(?:流程(?:环节|阶段|步骤)?|环节|阶段|步骤)/gu;
   for (const group of groups) for (const statement of group.statements) {
     for (const sentence of statement.split(/[。！？!?；;\n]/u)) {
       const claims = [...sentence.matchAll(quantity)];
@@ -320,8 +343,10 @@ export function inspectFigureSequence(input: {
       }
     }
   }
-  if (input.requireCompleteText) {
-    const missing = missingSequenceLabels(text, input.orderedSteps);
+  if (input.requireCompleteText || input.requiredStepLabels) {
+    const requiredSteps = input.requiredStepLabels
+      ? input.orderedSteps.filter((step) => input.requiredStepLabels!.includes(step.label)) : input.orderedSteps;
+    const missing = missingSequenceLabels(text, requiredSteps);
     if (missing.length) problems.push(`${enumeration ? '遗漏教材条目' : '遗漏教材步骤'}：${missing.join('、')}`);
   }
   if (!enumeration) {
@@ -329,7 +354,8 @@ export function inspectFigureSequence(input: {
       .flatMap((value) => value.split(/[。！？!?；;\n]/u))) {
       if (!/(?:流程|步骤|环节)(?:分别|依次)?(?:是|为|包括|分为|由)|(?:首先|然后|随后|接着|依次)|[→⇒]/u.test(statement)) continue;
       const normalized = orderedStatementText(statement);
-      const positions = labels.map((label, index) => ({ index, position: normalized.indexOf(label) }))
+      const positions = input.orderedSteps.map((step, index) => ({ index,
+        position: findSourceSequenceLabelPosition(normalized, step.label) }))
         .filter((entry) => entry.position >= 0).sort((left, right) => left.position - right.position);
       if (positions.some((entry, index) => index > 0 && entry.index < positions[index - 1]!.index)) {
         problems.push(`正文流程未保留教材的 ${labels.length} 个步骤顺序`);
@@ -347,7 +373,7 @@ export function inspectFigureSequence(input: {
     const related = diagrams.map((diagram) => diagram.filter((label) => labels.includes(label)));
     const shown = new Set(related.flat());
     if (shown.size >= 2) {
-      if (labels.some((label) => !shown.has(label))) problems.push(`辅助顺序图未完整保留教材的 ${labels.length} 个步骤`);
+      if (!input.requiredStepLabels && !input.allowPartialDiagram && labels.some((label) => !shown.has(label))) problems.push(`辅助顺序图未完整保留教材的 ${labels.length} 个步骤`);
       const firstAppearances = [...shown];
       if ([...related, firstAppearances].some((diagram) => diagram.some((label, index) => index > 0
         && labels.indexOf(label) < labels.indexOf(diagram[index - 1]!)))) {
@@ -396,8 +422,8 @@ export function findKnowledgeSourceSequenceIssues(
       .filter((value): value is string => typeof value === 'string' && Boolean(value))
       .map((value) => value
         .replace(/两(?=\s*(?:个|条|项|步))/gu, '二')
-        .replace(/(?<!第)([一二三四五六七八九十]|\d{1,2})\s*个\s*(?:教学设计|教学|设计)\s*(步骤|环节|阶段)/gu, '$1个$2')
-        .replace(/(?<!第)([一二三四五六七八九十]|\d{1,2})\s*步(?=流程|教学|设计)/gu, '$1个步骤'));
+        .replace(/(?<!第)([一二两三四五六七八九十]|\d{1,2})\s*个\s*(?:教学设计|教学|设计)\s*(步骤|环节|阶段)/gu, '$1个$2')
+        .replace(/(?<!第)([一二两三四五六七八九十]|\d{1,2})\s*步(?=流程|教学|设计)/gu, '$1个步骤'));
     // A lesson summary may name representative responsibilities or use short
     // names. Its adopted references carry the entire canonical list upstream;
     // they are never substituted for the executed page/narration gates below.
@@ -419,7 +445,7 @@ export function findKnowledgeSourceSequenceIssues(
           if (!completeEnumeration.test(statement) && !/(?:首先|先|然后|随后|接着|再|最后|依次)/u.test(statement)) continue;
           const normalized = orderedStatementText(statement);
           const namedSteps = sequence.orderedSteps.map((step, sourceIndex) => ({
-            sourceIndex, position: normalized.indexOf(sourceSequenceLabelKey(step.label)),
+            sourceIndex, position: findSourceSequenceLabelPosition(normalized, step.label),
           })).filter((step) => step.position >= 0).sort((left, right) => left.position - right.position);
           if (namedSteps.some((step, index) => index > 0 && step.sourceIndex < namedSteps[index - 1]!.sourceIndex)) {
             issues.push(`摘要步骤未保留教材的 ${sequence.orderedSteps.length} 个步骤顺序`);
@@ -436,17 +462,34 @@ export function findBlueprintFigureSequenceIssues(
   contracts: readonly FigureSequenceContract[],
 ): Array<{ resourceId: string; pageId: string; sectionIndex: number; pageIndex: number; detail: string;
   missingCanonicalLabels?: string[] }> {
-  return contracts.flatMap((contract) => {
+  const scoped = scopeSourceSequenceContracts(contracts, blueprint.sections.flatMap((section) => section.pages));
+  const undeclared = blueprint.sections.flatMap((section, sectionIndex) => section.pages.flatMap((page, pageIndex) => {
+    if (page.sourceSequenceUses === undefined && page.teachingBrief?.teachingPlan?.sourceSequenceUses === undefined) return [];
+    const projection = projectTeachingPageContent(section, page);
+    if (!projection.ownedNodes.some((node) => node.provenance === 'course-source')) return [];
+    const text = [...projection.explanation, ...projection.reasoningSteps].join('\n');
+    const usedIds = new Set(pageSourceSequenceUses(page).map((use) => use.resourceId));
+    const signature = (source: FigureSequenceContract) => source.orderedSteps?.map((step) => sourceSequenceLabelKey(step.label)).sort().join('|');
+    return contracts.filter((contract) => contract.coveragePolicy === 'authored-scope'
+      && contract.knowledgePointIds.some((id) => page.knowledgePointIds.includes(id))
+      && (contract.orderedSteps?.length ?? 0) >= 2
+      && contract.orderedSteps!.every((step) => hasSourceSequenceLabel(text, step.label))
+      && !contracts.some((chosen) => usedIds.has(chosen.resourceId) && signature(chosen) === signature(contract)))
+      .map((contract) => ({ resourceId: contract.resourceId, pageId: page.outlineId ?? page.id,
+        sectionIndex, pageIndex, detail: '实际原文解释已使用完整来源清单，须声明 sourceSequenceUses；可选任一真实采用的教材版本，来源元数据不能规避事实检查' }));
+  }));
+  return [...undeclared, ...scoped.flatMap((contract) => {
     if (!contract.required || !contract.orderedSteps?.length) return [];
     const candidates = blueprint.sections.flatMap((section, sectionIndex) =>
       section.pages.flatMap((page, pageIndex) => page.type === 'slide'
+        && usesSourceSequence(page, contract)
         && page.knowledgePointIds.some((id) => contract.knowledgePointIds.includes(id))
         ? [{ section, sectionIndex, page, pageIndex }] : []));
     if (!candidates.length) return [{ resourceId: contract.resourceId, pageId: '',
       sectionIndex: -1, pageIndex: -1, detail: contract.scope === 'knowledge-point'
         ? '缺少承接教材完整步骤的知识讲解页' : '缺少承接教材原图完整步骤的知识讲解页' }];
     const firstTeachingPage = firstSequenceTeachingCandidate(candidates, (candidate) => candidate.page,
-      (candidate) => blueprintSequenceContent(candidate.section, candidate.page), contract.orderedSteps);
+      (candidate) => blueprintSequenceContent(candidate.section, candidate.page), contract.orderedSteps, contract.resourceId);
     const matches = contract.scope === 'knowledge-point' ? candidates : firstTeachingPage ? [firstTeachingPage] : [];
     const projectedMatches = matches.map((match) => {
       const contentGroups = blueprintSequenceContent(match.section, match.page);
@@ -461,17 +504,18 @@ export function findBlueprintFigureSequenceIssues(
       : projectedMatches[0]!;
     return inspectFigureSequence({ orderedSteps: contract.orderedSteps, statements: [], contentGroups,
       sequenceSemantics: contract.sequenceSemantics,
-      relatedSequences: contracts.filter((related) => related.required
+      relatedSequences: scoped.filter((related) => related.required
         && matches.some(({ page }) => page.knowledgePointIds.some((id) => related.knowledgePointIds.includes(id)))),
-      requireCompleteText: true }).map((detail) => ({
+      requireCompleteText: true, requiredStepLabels: contract.requiredStepLabels }).map((detail) => ({
       resourceId: contract.resourceId, pageId: target.page.outlineId ?? target.page.id,
       sectionIndex: target.sectionIndex, pageIndex: target.pageIndex, detail,
       ...(/^(?:遗漏教材条目|遗漏教材步骤)：/u.test(detail) ? {
         missingCanonicalLabels: missingSequenceLabels(
-          contentGroups.flatMap((group) => group.statements).join('\n'), contract.orderedSteps!),
+          contentGroups.flatMap((group) => group.statements).join('\n'), contract.requiredStepLabels
+            ? contract.orderedSteps!.filter((step) => contract.requiredStepLabels!.includes(step.label)) : contract.orderedSteps!),
       } : {}),
     }));
-  });
+  })];
 }
 
 type SequencePageContent = Pick<SceneOutline,
@@ -485,12 +529,20 @@ type SequencePageContent = Pick<SceneOutline,
 function outlineSequenceContent(outline: SequencePageContent): SequenceContentGroup[] {
   return [{ statements: [outline.description, outline.teachingObjective,
     ...(outline.teachingBrief?.teachingPlan?.visibleContent ?? outline.keyPoints ?? []),
-    outline.visualIntent?.observationGoal, outline.visualIntent?.rationale,
+    // Selection reasons explain this page's media choice to the author. They
+    // are neither spoken source assertions nor rendered teaching content.
+    outline.visualIntent?.observationGoal,
     outline.visualIntent?.diagram?.annotation].filter((value): value is string => Boolean(value)),
   diagramLabels: outline.visualIntent?.diagram?.nodes.map((node) => node.label) },
   { statements: [outline.teachingBrief?.explanation,
     ...(outline.teachingBrief?.teachingPlan?.visibleContent ?? [])]
     .filter((value): value is string => Boolean(value)) }];
+}
+
+export function firstSourceSequenceTeachingOutline<T extends SceneOutline>(
+  candidates: readonly T[], orderedSteps?: readonly { label: string }[], resourceId?: string,
+): T | undefined {
+  return firstSequenceTeachingCandidate(candidates, (outline) => outline, outlineSequenceContent, orderedSteps, resourceId);
 }
 
 function blueprintSequenceContent(
@@ -513,7 +565,7 @@ function blueprintSequenceContent(
     visualIntent: {
       representation: page.visualRelationship?.diagram ? 'native-diagram' : 'text',
       observationGoal: page.visualRelationship?.description
-        || page.resourceNeeds?.map((need) => need.purpose).join('；')
+        || page.caseObservation?.observableDifference
         || page.teachingObjective,
       diagram: page.visualRelationship?.diagram,
       rationale: page.visualRelationship?.rationale,
@@ -530,7 +582,7 @@ export function assertRequiredFigureSequencesInOutlines(
     const candidates = outlines.filter((page) => page.type === 'slide'
       && page.generationPurpose === 'knowledge-teaching'
       && page.knowledgePointIds?.some((id) => resource.knowledgePointIds.includes(id)));
-    const outline = firstSequenceTeachingCandidate(candidates, (page) => page, outlineSequenceContent, resource.orderedSteps);
+    const outline = firstSourceSequenceTeachingOutline(candidates, resource.orderedSteps, resource.id);
     if (!outline) throw new Error(`教材原图 ${resource.figureId} 缺少对应知识讲解页`);
     const problems = inspectFigureSequence({ orderedSteps: resource.orderedSteps!, statements: [],
       contentGroups: outlineSequenceContent(outline),
@@ -545,17 +597,19 @@ export function assertSourceSequencesInOutlines(
   contracts: readonly FigureSequenceContract[],
   relatedSequences: readonly SequenceDefinition[] = [],
 ): void {
-  for (const contract of contracts.filter((item) => item.required && item.orderedSteps?.length)) {
+  const scoped = scopeSourceSequenceContracts(contracts, outlines);
+  for (const contract of scoped.filter((item) => item.required && item.orderedSteps?.length)) {
     const pages = outlines.filter((page) => page.type === 'slide'
+      && usesSourceSequence(page, contract)
       && page.generationPurpose === 'knowledge-teaching'
       && page.knowledgePointIds?.some((id) => contract.knowledgePointIds.includes(id)));
     if (!pages.length) throw new Error(`教材完整步骤 ${contract.resourceId} 缺少知识讲解页`);
     const contentGroups = pages.flatMap(outlineSequenceContent);
     const problems = inspectFigureSequence({ orderedSteps: contract.orderedSteps!, statements: [], contentGroups,
       sequenceSemantics: contract.sequenceSemantics,
-      relatedSequences: [...contracts.filter((related) => related.required
+      relatedSequences: [...scoped.filter((related) => related.required
         && pages.some((page) => page.knowledgePointIds?.some((id) => related.knowledgePointIds.includes(id)))),
-      ...relatedSequences], requireCompleteText: true });
+      ...relatedSequences], requireCompleteText: true, requiredStepLabels: contract.requiredStepLabels });
     if (problems.length) throw new Error(`教材完整步骤 ${contract.resourceId} 与课程大纲不一致：${problems.join('；')}`);
   }
 }
@@ -596,42 +650,79 @@ function requiredNeed(resource: CourseTextbookFigureResource): TeachingResourceN
     purpose: resource.description ?? `观察《${resource.sourceTitle}》中的教材原图。` };
 }
 
+function withRequiredNeed(
+  needs: readonly TeachingResourceNeed[] | undefined, resource: CourseTextbookFigureResource,
+): TeachingResourceNeed[] {
+  const matches = (need: TeachingResourceNeed) => need.kind === 'source-image'
+    && (need.assetId === resource.id || Boolean(resource.assetId && need.assetId === resource.assetId));
+  const prior = needs?.find(matches);
+  return [...(needs ?? []).filter((need) => !matches(need)),
+    prior ? { ...prior, assetId: resource.id, required: true } : requiredNeed(resource)];
+}
+
+/** Preserve authored media placement, including repeated observations and
+ * multipart figures. A measured page's actual image choice outranks a later
+ * search for a page containing the book's whole procedure. */
+function authoredFigureTargets<T extends FigureUsePage>(
+  pages: readonly T[], resource: CourseTextbookFigureResource,
+  resources: readonly CourseTextbookFigureResource[],
+): T[] {
+  const ids = new Set([resource.id, ...(resource.assetId ? [resource.assetId] : [])]);
+  const direct = pages.filter((page) => selectedFigureIds(page).some((id) => ids.has(id)));
+  if (direct.length || !resource.groupKey) return direct;
+  const groupIds = new Set(resources.filter((part) => part.groupKey === resource.groupKey)
+    .flatMap((part) => [part.id, ...(part.assetId ? [part.assetId] : [])]));
+  return pages.filter((page) => selectedFigureIds(page).some((id) => groupIds.has(id)));
+}
+
 /** Persist the same obligation in the source of every later outline rebuild. */
 export function bindRequiredTextbookFiguresToBlueprint(
   blueprint: TeachingBlueprint,
   resources: readonly CourseTextbookFigureResource[],
   sourceSequences: readonly FigureSequenceContract[] = [],
+  options: { reviewContent?: boolean } = {},
 ): TeachingBlueprint {
   const result = structuredClone(blueprint);
   const ownedPages = result.sections.flatMap((section) => section.pages.map((page) => ({ section, page })));
   const pages = ownedPages.map(({ page }) => page);
+  const explicitScope = hasExplicitFigureScope(pages);
   for (const resource of resources.filter((candidate) => candidate.required)) {
     const candidates = ownedPages.filter(({ page }) => page.type === 'slide'
       && page.knowledgePointIds.some((id) => resource.knowledgePointIds.includes(id)));
-    const target = firstSequenceTeachingCandidate(candidates, (candidate) => candidate.page,
-      (candidate) => blueprintSequenceContent(candidate.section, candidate.page), resource.orderedSteps)?.page;
-    if (!target) throw new Error(`必用教材原图 ${resource.figureId} 没有可绑定的首次知识讲解页。`);
+    const targets = explicitScope
+      ? authoredFigureTargets(pages.filter((page) => page.type === 'slide'), resource, resources)
+      : [firstSequenceTeachingCandidate(candidates, (candidate) => candidate.page,
+        (candidate) => blueprintSequenceContent(candidate.section, candidate.page), resource.orderedSteps, resource.id)?.page]
+        .filter((page): page is TeachingBlueprintPage => Boolean(page));
+    if (!targets.length) {
+      if (options.reviewContent) throw new Error(`必用教材原图 ${resource.figureId} 没有可绑定的首次知识讲解页。`);
+      continue;
+    }
     for (const page of pages) {
-      page.resourceNeeds = page.resourceNeeds?.filter((need) =>
-        !(need.kind === 'source-image' && need.assetId === resource.id));
-      if (page !== target) continue;
-      page.resourceNeeds = [...(page.resourceNeeds ?? []), requiredNeed(resource)];
-      if (page.teachingBrief) page.teachingBrief.resourceNeeds = [...(page.teachingBrief.resourceNeeds ?? [])
-        .filter((need) => !(need.kind === 'source-image' && need.assetId === resource.id)), requiredNeed(resource)];
+      if (explicitScope && !targets.includes(page)) continue;
+      if (targets.includes(page)) {
+        page.resourceNeeds = withRequiredNeed(page.resourceNeeds, resource);
+      } else {
+        page.resourceNeeds = page.resourceNeeds?.filter((need) =>
+          !(need.kind === 'source-image' && need.assetId === resource.id));
+      }
+      if (!targets.includes(page)) continue;
+      if (page.teachingBrief) page.teachingBrief.resourceNeeds = withRequiredNeed(page.teachingBrief.resourceNeeds, resource);
       page.caseObservation = {
         ...page.caseObservation,
         kind: 'source-image', imageWouldHelp: true,
         subjects: [...new Set([...(page.caseObservation?.subjects ?? []), resource.description ?? resource.sourceTitle])],
-        resourceIds: unique([...(page.caseObservation?.resourceIds ?? []), resource.id]),
+        resourceIds: unique([...(page.caseObservation?.resourceIds ?? [])
+          .map((id) => id === resource.assetId ? resource.id : id), resource.id]),
         observableDifference: page.caseObservation?.observableDifference || resource.description || '观察教材原图的关键结构。',
-        reason: resource.description ?? `本知识点使用《${resource.sourceTitle}》的原图。`,
+        reason: page.caseObservation?.reason || resource.description || `本知识点使用《${resource.sourceTitle}》的原图。`,
       };
     }
   }
-  const sequenceIssues = findBlueprintFigureSequenceIssues(result, [...resources.map((resource) => ({
+  const sequenceIssues = options.reviewContent ? findBlueprintFigureSequenceIssues(result, [...resources.map((resource) => ({
     resourceId: resource.id, required: resource.required,
     knowledgePointIds: resource.knowledgePointIds, orderedSteps: resource.orderedSteps,
-  })), ...sourceSequences]);
+  })), ...sourceSequences]) : [];
   if (sequenceIssues.length) throw new Error(`教材原图步骤与教学蓝图不一致：${sequenceIssues.map((issue) => issue.detail).join('；')}`);
   return result;
 }
@@ -640,20 +731,24 @@ function bindResource(
   outline: SceneOutline,
   resource: CourseTextbookFigureResource,
 ): SceneOutline {
+  const existingRefs = outline.visualIntent?.resourceRefs ?? [];
+  const isThisSource = (candidate: VisualResourceReference) => candidate.kind === 'source-image'
+    && (candidate.resourceId === resource.id || candidate.resourceId === resource.assetId);
+  const prior = existingRefs.find(isThisSource);
   const reference: VisualResourceReference = {
-    resourceId: resource.id,
     kind: 'source-image',
-    required: true,
     reason: resource.description ?? `Use the original figure from ${resource.sourceTitle}.`,
     observationGoal: resource.description,
+    ...prior,
+    resourceId: resource.id,
+    required: true,
   };
-  const existingRefs = outline.visualIntent?.resourceRefs ?? [];
   return {
     ...outline,
-    suggestedImageIds: unique([...(outline.suggestedImageIds ?? []), resource.id]),
+    suggestedImageIds: unique([...(outline.suggestedImageIds ?? [])
+      .map((id) => id === resource.assetId ? resource.id : id), resource.id]),
     ...(outline.teachingBrief ? { teachingBrief: { ...outline.teachingBrief,
-      resourceNeeds: [...(outline.teachingBrief.resourceNeeds ?? [])
-        .filter((need) => !(need.kind === 'source-image' && need.assetId === resource.id)), requiredNeed(resource)],
+      resourceNeeds: withRequiredNeed(outline.teachingBrief.resourceNeeds, resource),
     } } : {}),
     visualIntent: {
       observationGoal: outline.visualIntent?.observationGoal
@@ -662,7 +757,7 @@ function bindResource(
       ...outline.visualIntent,
       representation: representationWithRequiredSource(outline.visualIntent),
       resourceRefs: [
-        ...existingRefs.filter((candidate) => candidate.resourceId !== resource.id),
+        ...existingRefs.filter((candidate) => !isThisSource(candidate)),
         reference,
       ],
       rationale: outline.visualIntent?.rationale
@@ -672,16 +767,17 @@ function bindResource(
 }
 
 /**
- * Place each required textbook figure exactly on the first complete slide for
- * its linked knowledge point. The model still chooses optional visuals, while
- * this direct evidence contract cannot be silently moved to a review page.
+ * Keep the actual authored image choices stable through compilation and
+ * measured allocation. Legacy accepted plans retain their first-owner rule.
  */
 export function bindRequiredTextbookFiguresToOutlines<T extends SceneOutline>(
   outlines: readonly T[],
   resources: readonly CourseTextbookFigureResource[],
   sourceSequences: readonly SequenceDefinition[] = [],
+  options: { reviewContent?: boolean } = {},
 ): T[] {
   let result = outlines.map((outline) => ({ ...outline })) as T[];
+  const explicitScope = hasExplicitFigureScope(result);
   for (const resource of resources.filter((candidate) => candidate.required)) {
     const knowledgePointIds = new Set(resource.knowledgePointIds);
     const candidates = result.filter((outline) => (
@@ -689,14 +785,19 @@ export function bindRequiredTextbookFiguresToOutlines<T extends SceneOutline>(
       && outline.generationPurpose === 'knowledge-teaching'
       && (outline.knowledgePointIds ?? []).some((id) => knowledgePointIds.has(id))
     ));
-    const target = firstSequenceTeachingCandidate(candidates, (page) => page, outlineSequenceContent, resource.orderedSteps);
-    const targetIndex = target ? result.indexOf(target) : -1;
-    if (targetIndex < 0) {
-      throw new Error(`必用教材原图 ${resource.figureId} 没有可绑定的首次知识讲解页。`);
+    const targets = explicitScope
+      ? authoredFigureTargets(result.filter((page) => page.type === 'slide'), resource, resources)
+      : [firstSourceSequenceTeachingOutline(candidates, resource.orderedSteps, resource.id)]
+        .filter((page): page is T => Boolean(page));
+    const targetIndices = new Set(targets.map((target) => result.indexOf(target)));
+    if (!targetIndices.size) {
+      if (options.reviewContent) throw new Error(`必用教材原图 ${resource.figureId} 没有可绑定的首次知识讲解页。`);
+      continue;
     }
 
     result = result.map((outline, index) => {
-      if (index === targetIndex) return bindResource(outline, resource) as T;
+      if (targetIndices.has(index)) return bindResource(outline, resource) as T;
+      if (explicitScope) return outline;
       const suggestedImageIds = outline.suggestedImageIds?.filter((id) => id !== resource.id);
       const visualIntent = withoutResource(outline.visualIntent, resource.id);
       const teachingBrief = outline.teachingBrief ? { ...outline.teachingBrief,
@@ -711,6 +812,6 @@ export function bindRequiredTextbookFiguresToOutlines<T extends SceneOutline>(
       } as T;
     });
   }
-  assertRequiredFigureSequencesInOutlines(result, resources, sourceSequences);
+  if (options.reviewContent) assertRequiredFigureSequencesInOutlines(result, resources, sourceSequences);
   return result;
 }

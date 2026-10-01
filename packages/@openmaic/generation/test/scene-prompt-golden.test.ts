@@ -43,5 +43,9 @@ it('pins representative system and user prompts for every scene kind', async () 
   expect(captured).toMatchSnapshot();
   expect(captured.slide.system).toContain('Instructional Slide Title Contract');
   expect(captured.slide.user).toContain('render `Dependency Injection` verbatim as the visible primary heading');
+  expect(captured.slide.system).toContain('Select the core content learners need to see');
+  expect(captured.slide.system).toContain('independently source-grounded narration');
+  expect(captured.slide.user).toContain('does not require displaying its complete spoken definition');
+  expect(captured.slide.user).not.toContain('display its complete basic meaning');
   expect(`${captured.slide.system}\n${captured.slide.user}`).not.toContain('{{snippet:slide-title-guidelines}}');
 });

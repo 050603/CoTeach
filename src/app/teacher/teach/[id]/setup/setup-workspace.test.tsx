@@ -27,6 +27,23 @@ beforeEach(() => {
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 
 describe("original classroom setup integration", () => {
+  it("keeps timing diagnostics visible and allows starting a reviewed classroom", async () => {
+    mocks.readiness.mockReturnValue([{ id: "timing", label: "讲授时长", ok: false, message: "实际时长与教案预算有偏差。" }]);
+    render(<TeachSetupWorkspace {...props} />);
+    expect(screen.getByText(/实际时长与教案预算有偏差/)).toBeVisible();
+    expect(screen.getByRole("button", { name: "开始上课" })).toBeEnabled();
+    fireEvent.click(screen.getByRole("button", { name: "开始上课" }));
+    await waitFor(() => expect(mocks.start).toHaveBeenCalledOnce());
+  });
+
+  it("still blocks starting when the actual classroom is unavailable", () => {
+    mocks.readiness.mockReturnValue([{ id: "ai-classroom", label: "知识讲授课堂", ok: false, message: "课堂页面尚未生成。" }]);
+    render(<TeachSetupWorkspace {...props} />);
+    expect(screen.getByText(/课堂页面尚未生成/)).toBeVisible();
+    expect(screen.getByRole("button", { name: "开始上课" })).toBeDisabled();
+    expect(mocks.start).not.toHaveBeenCalled();
+  });
+
   it("saves the current run's configuration without starting or navigating", async () => {
     render(<TeachSetupWorkspace {...props} />);
     fireEvent.change(screen.getByLabelText("班级总人数"), { target: { value: "36" } });

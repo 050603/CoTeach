@@ -78,6 +78,8 @@ export function QuickGenerationStage({
   onPreviewGenerated,
   onRetry,
   onReview,
+  onViewOutline,
+  outlineDetailsAvailable = false,
 }: {
   activeArtifactId?: string;
   artifacts: CourseDesignGenerationArtifact[];
@@ -106,6 +108,8 @@ export function QuickGenerationStage({
   previewScenesCount?: number;
   onRetry?: () => void;
   onReview: () => void;
+  onViewOutline?: () => void;
+  outlineDetailsAvailable?: boolean;
 }) {
   const reducedMotion = useReducedMotion();
   const artifactIds = artifacts.map((item) => item.id).join("|");
@@ -241,6 +245,17 @@ export function QuickGenerationStage({
                 <span className="grid size-6 place-items-center rounded-full bg-white text-violet-600 shadow-sm"><Sparkles className="size-3" /></span>
                 <span className="leading-tight"><span className="block text-[8px] font-semibold tracking-[.08em] text-[var(--pbl-text-subtle)]">AI 用量</span><strong className="mt-0.5 block font-semibold tabular-nums text-[var(--pbl-text)]">{formatTokenUsage(tokenUsage, completed)}</strong></span>
               </span>
+              {onViewOutline ? (
+                <button
+                  className="inline-flex min-h-11 shrink-0 items-center gap-2 rounded-[var(--radius-md)] border border-[var(--pbl-border)] bg-white px-3.5 text-[11px] font-semibold text-[var(--pbl-text-muted)] transition hover:border-blue-300 hover:text-[var(--pbl-teacher)] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 disabled:cursor-default disabled:opacity-50"
+                  disabled={!outlineDetailsAvailable}
+                  onClick={onViewOutline}
+                  title={outlineDetailsAvailable ? "查看已保存的页面大纲和教学蓝图" : "页面大纲或教学蓝图生成后可查看"}
+                  type="button"
+                >
+                  <BookOpenCheck className="size-3.5" />查看大纲与蓝图
+                </button>
+              ) : null}
               {!completed && !failed ? (
                 <button
                   className="inline-flex h-10 shrink-0 items-center gap-2 rounded-[var(--radius-md)] border border-[var(--pbl-teacher-border)] bg-[var(--pbl-teacher-soft)] px-3.5 text-[11px] font-semibold text-[var(--pbl-teacher)] transition hover:border-blue-300 hover:bg-blue-100/70 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 disabled:cursor-default disabled:border-[var(--pbl-border-soft)] disabled:bg-white disabled:text-[var(--pbl-text-subtle)] disabled:opacity-70"
@@ -375,6 +390,12 @@ export function QuickGenerationStage({
                             {reviewCountdown > 0 ? `${reviewCountdown} 秒后自动继续` : "正在自动继续"}
                           </span>
                         ) : null}
+                      </div>
+                    ) : displayed.kind === "pages" && onViewOutline && outlineDetailsAvailable && !failed && !recovering ? (
+                      <div className="absolute bottom-5 left-5 z-20 sm:left-7">
+                        <button className="inline-flex min-h-11 items-center gap-2 rounded-[var(--radius-xs)] border border-[var(--pbl-teacher-border)] bg-white px-4 text-xs font-semibold text-[var(--pbl-teacher)] transition hover:bg-[var(--pbl-teacher-soft)] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500" onClick={onViewOutline} type="button">
+                          查看详细大纲与蓝图 <ArrowRight className="size-3.5" />
+                        </button>
                       </div>
                     ) : null}
                   </motion.article>

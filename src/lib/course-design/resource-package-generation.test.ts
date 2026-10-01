@@ -149,6 +149,66 @@ describe("confirmed resource package generation", () => {
     }
   });
 
+  it("continues a completed test lesson when the course retains the full outline and split pages", async () => {
+    const { promoteTestLessonToFullCourse } = await import("./job-runner");
+    const { contentGenerationJobs, designGenerationJobs, resourcePackageJobs } = await import("@/lib/course-generation/job-storage");
+    const courseStore = await import("@/lib/session/server-store");
+    const resourcePackage = confirmedPackage();
+    const fullOutlines = [
+      { id: "s1-page", title: "讲解", type: "slide", lectureSectionId: "s1", targetDurationSec: 120 },
+      { id: "s1-quiz", title: "检测", type: "quiz", lectureSectionId: "s1", targetDurationSec: 60 },
+      { id: "s2-page", title: "其余讲解", type: "slide", lectureSectionId: "s2", targetDurationSec: 120 },
+      { id: "s2-quiz", title: "其余检测", type: "quiz", lectureSectionId: "s2", targetDurationSec: 60 },
+    ];
+    const acceptedPages = [
+      { ...fullOutlines[0]!, targetDurationSec: 60, sourcePageIds: ["s1-page"], sectionPlanVersion: "plan-v2" },
+      { ...fullOutlines[0]!, id: "s1-page--capacity-2", title: "后续讲解", targetDurationSec: 60,
+        sourcePageIds: ["s1-page"], sectionPlanVersion: "plan-v2" },
+      fullOutlines[1]!,
+    ];
+    const testLesson = { sectionId: "s1", sectionTitle: "第一节", sceneOutlineIds: ["s1-page", "s1-quiz"], durationSeconds: 180 };
+    const course = createPblTemplateCourse("course-1");
+    Object.assign(course.content, {
+      resourcePackage,
+      _openmaicSceneOutlines: [...acceptedPages, { ...fullOutlines[2], title: "非本次验收页面" }, fullOutlines[3]],
+      classroomGenerationRun: { scope: "test-lesson", status: "completed", testLesson,
+        generatedOutlineIds: acceptedPages.map((page) => page.id), fullOutlineCount: 4 },
+    });
+    const designJob = { id: "design-1", courseId: course.id, status: "completed",
+      request: { courseId: course.id, teacherBrief: "", generationScope: "test-lesson", resourcePackage,
+        generationModelString: "original:model", generationContractVersion: 3 } };
+    const contentJob = { id: "content-1", courseId: course.id, version: 12, status: "completed",
+      request: { courseId: course.id, generationScope: "test-lesson", sceneOutlines: fullOutlines, fullSceneCount: 4, testLesson } };
+    const spies = [
+      vi.spyOn(designGenerationJobs, "findUnique").mockResolvedValue(designJob as never),
+      vi.spyOn(resourcePackageJobs, "findUnique").mockResolvedValue({ status: "ready" } as never),
+      vi.spyOn(courseStore, "getCourse").mockResolvedValue(course),
+      vi.spyOn(contentGenerationJobs, "findUnique").mockResolvedValueOnce(contentJob as never)
+        .mockResolvedValueOnce(contentJob as never).mockResolvedValue({ ...contentJob, status: "queued" } as never),
+      vi.spyOn(designGenerationJobs, "update").mockResolvedValue(designJob as never),
+    ];
+    const save = vi.spyOn(courseStore, "updateCourse").mockResolvedValue(undefined as never);
+    const enqueue = vi.spyOn(contentGenerationJobs, "replace").mockResolvedValue({ ...contentJob, status: "queued" } as never);
+    try {
+      const result = await promoteTestLessonToFullCourse(course.id);
+      expect(result.contentJob.status).toBe("queued");
+      expect(enqueue).toHaveBeenCalledOnce();
+      expect(enqueue).toHaveBeenCalledWith(expect.objectContaining({
+        where: { id: "content-1", version: 12, status: "completed" },
+        checkpointPolicy: "prepared-outlines",
+        data: expect.objectContaining({ request: expect.objectContaining({
+          generationScope: "full-course", fullSceneCount: 4,
+          sceneOutlines: [...acceptedPages, ...fullOutlines.slice(2)].map((page) => expect.objectContaining(page)),
+        }) }),
+      }));
+      const restored = save.mock.calls[0]![1](course);
+      expect(restored.content._openmaicSceneOutlines).toEqual([...acceptedPages, ...fullOutlines.slice(2)]);
+      expect(modelCall).not.toHaveBeenCalled();
+    } finally {
+      [...spies, save, enqueue].forEach((spy) => spy.mockRestore());
+    }
+  }, 15_000);
+
   it("preserves teacher facts and required subpoints without asking the model to infer them", async () => {
     const { applyResourcePackageGenerationInput, inferCourseSeed } = await import("./job-runner");
     const resourcePackage = confirmedPackage();
@@ -223,7 +283,7 @@ describe("confirmed resource package generation", () => {
     }
   });
 
-  it("keeps consumed attempt checkpoints and recovery count during automatic infrastructure recovery", async () => {
+  it("keeps the failed first draft without an automatic whole-job infrastructure replay", async () => {
     const { resumeRecoverableCourseDesignJob } = await import("./job-runner");
     const { designGenerationJobs, resourcePackageJobs } = await import("@/lib/course-generation/job-storage");
     const job = {
@@ -241,14 +301,8 @@ describe("confirmed resource package generation", () => {
     const replace = vi.spyOn(designGenerationJobs, "replace").mockResolvedValue({ ...job, status: "queued" } as never);
     const packageFind = vi.spyOn(resourcePackageJobs, "findUnique").mockResolvedValue(null);
     try {
-      await resumeRecoverableCourseDesignJob("course-1");
-      expect(replace).toHaveBeenCalledWith(expect.objectContaining({
-        where: { id: "recoverable-design", status: "failed", version: 7 },
-        checkpointPolicy: {},
-        data: expect.objectContaining({
-          request: expect.objectContaining({ transientRecoveryCount: 2 }),
-        }),
-      }));
+      expect(await resumeRecoverableCourseDesignJob("course-1")).toEqual(job);
+      expect(replace).not.toHaveBeenCalled();
     } finally {
       find.mockRestore();
       replace.mockRestore();

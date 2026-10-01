@@ -1,16 +1,15 @@
 /** Shared visible-content contract and measured, pre-authoring page capacity. */
 import { createHash } from 'node:crypto';
 import { measureDiagramAllocations, type DiagramAllocation, type TextMeasure, type TextMeasureInput } from '@openmaic/generation';
-import type { TeachingExplanationNode } from '@/lib/session/types';
+import type { TeachingExplanationNode, TeachingPresentationItem } from '@/lib/session/types';
 import type { SceneOutline } from '@/lib/openmaic/types/generation';
 import { measureAuthoredSlideText, isSpatialMeasurementUnavailableError } from './slide-spatial-measurement';
+import { compactSourceSequenceText, sourceSequenceLabelKey } from '@/lib/textbook/source-sequence-label';
+import { hasReferenceLectureTypography, slideBodyFontSizes, slideTitleFontSizes } from './slide-presentation-typography';
 
-export const SEMANTIC_PAGE_CAPACITY_VERSION = 'semantic-page-capacity-v1' as const;
+export const SEMANTIC_PAGE_CAPACITY_VERSION = 'semantic-page-capacity-v2' as const;
 const BODY = { width: 900, bottom: 512.5 } as const;
 const TITLE = { width: 900, top: 50, height: 128 } as const;
-const BODY_FONT = 24;
-const MIN_BODY_FONT = 22;
-const TITLE_FONT = 32;
 const GAP = 12;
 const VERTICAL_RESERVE = 10;
 
@@ -89,7 +88,12 @@ export type SemanticCapacityGroup = {
   visibleText: string;
   narrationExpansion: string[];
   sourcePageId: string;
+  /** Actual introduces/deepens responsibility, distinct from display source references. */
   sourceNodeIds: string[];
+  /** Already-established sources used by this display, never new ownership. */
+  referencedNodeIds?: string[];
+  /** Authored display responsibility survives bounded section redistribution. */
+  presentationItems?: TeachingPresentationItem[];
   /** Directed teaching prerequisites; earlier pages may satisfy them. */
   prerequisiteNodeIds?: string[];
   knowledgePointIds: string[];
@@ -129,7 +133,7 @@ export type SemanticCapacityUnit = {
 
 export type SemanticPageCapacityAssessment = {
   schemaVersion: 1;
-  planningVersion: typeof SEMANTIC_PAGE_CAPACITY_VERSION;
+  planningVersion: typeof SEMANTIC_PAGE_CAPACITY_VERSION | 'semantic-page-capacity-v1';
   outlineId: string;
   sourcePageId: string;
   decision: 'fits' | 'optimize-layout' | 'page-overflow' | 'section-overload' | 'measurement-unavailable';
@@ -148,6 +152,8 @@ export type SemanticPageCapacityOptions = {
   explanationNodes?: readonly TeachingExplanationNode[];
   /** Immutable dimensions of source images selected for this generation. */
   resourceDimensions?: Readonly<Record<string, { width: number; height: number }>>;
+  /** Canonical source steps; a page's reading instructions are not step names. */
+  resourceSequences?: Readonly<Record<string, readonly { label: string }[]>>;
 };
 
 function stableGroupId(text: string): string {
@@ -231,10 +237,13 @@ function authoredRegionConflict(outline: SceneOutline): boolean {
   return false;
 }
 
-function semanticGroups(outline: SceneOutline, sourcePageId: string, nodes: readonly TeachingExplanationNode[]): SemanticCapacityGroup[] {
+function semanticGroups(outline: SceneOutline, sourcePageId: string, nodes: readonly TeachingExplanationNode[],
+  resourceSequences?: SemanticPageCapacityOptions['resourceSequences']): SemanticCapacityGroup[] {
   const plan = outline.teachingBrief?.teachingPlan;
-  const hasPresentationProjection = Boolean(plan?.presentationContent?.length);
-  const required = hasPresentationProjection
+  const hasPresentationProjection = Boolean(plan?.presentationItems?.length || plan?.presentationContent?.length);
+  const required = plan?.presentationItems?.length
+    ? [...new Set(plan.presentationItems.map((item) => item.text.trim()).filter(Boolean))]
+    : hasPresentationProjection
     ? canonicalVisibleContent({ proposed: plan!.presentationContent })
     : canonicalVisibleContent({ inherited: plan?.visibleContent, proposed: outline.keyPoints });
   const groups: SemanticCapacityGroup[] = [];
@@ -283,7 +292,8 @@ function semanticGroups(outline: SceneOutline, sourcePageId: string, nodes: read
     if (outline.visualIntent?.diagram?.annotation
       && normalizedClaim(text) === normalizedClaim(outline.visualIntent.diagram.annotation)) continue;
     if (outline.keyPoints.some((point, index) => coveredKeyPointIndexes.has(index) && equivalentVisibleClaim(point, text))) continue;
-    if (groups.some((group) => group.visibleText.split('\n').some((part) => equivalentVisibleClaim(part, text)))) continue;
+    if (groups.some((group) => normalizedClaim(group.visibleText) === normalizedClaim(text)
+      || group.visibleText.split('\n').some((part) => equivalentVisibleClaim(part, text)))) continue;
     const preserved = outline.semanticSourceClaims?.find((claim) => claim.parts.some((part) => part.trim() === text));
     const parts = explicitTeachingListParts(text);
     const claim = preserved ?? (parts ? { id: stableGroupId(`${sourcePageId}:${text}`), sourcePageId, text, parts } : undefined);
@@ -328,11 +338,17 @@ function semanticGroups(outline: SceneOutline, sourcePageId: string, nodes: read
   const explicitOwnership = plan && (Array.isArray(plan.introduces) || Array.isArray(plan.deepens));
   const ownedNodes = explicitOwnership ? nodes.filter((node) => ownerNodeIds.has(node.id)) : nodes;
   const relationship = plan?.visualRelationship;
-  const sequenceLabels = relationship && ['sequence', 'process'].includes(relationship.kind)
-    ? relationship.readingOrder.map(normalizedClaim).filter(Boolean) : [];
+  const requiredReferences = outline.visualIntent?.resourceRefs?.filter((ref) => ref.required) ?? [];
+  const requiredSourceFigures = requiredReferences.filter((reference) => reference.kind === 'source-image');
+  const sourceFigure = requiredSourceFigures.length === 1 ? requiredSourceFigures[0] : undefined;
+  const sourceSteps = sourceFigure ? resourceSequences?.[sourceFigure.resourceId] : undefined;
+  const sequenceLabels = sourceSteps?.length
+    ? sourceSteps.map((step) => sourceSequenceLabelKey(step.label))
+    : relationship && ['sequence', 'process'].includes(relationship.kind)
+      ? relationship.readingOrder.map(normalizedClaim).filter(Boolean) : [];
   const hasWholeSequence = (text: string): boolean => {
     if (sequenceLabels.length < 2 || new Set(sequenceLabels).size !== sequenceLabels.length) return false;
-    const normalized = normalizedClaim(text);
+    const normalized = sourceSteps?.length ? compactSourceSequenceText(text) : normalizedClaim(text);
     let cursor = 0;
     for (const label of sequenceLabels) {
       const index = normalized.indexOf(label, cursor);
@@ -344,22 +360,53 @@ function semanticGroups(outline: SceneOutline, sourcePageId: string, nodes: read
   // A direct original figure and its complete already-adopted flow statement
   // are one observation. Do not replace that statement with a generic caption
   // or infer a multi-image/source scope from shared knowledge-point IDs.
-  const requiredReferences = outline.visualIntent?.resourceRefs?.filter((ref) => ref.required) ?? [];
-  const wholeSequenceGroups = groups.filter((group) => group.kind === 'text' && hasWholeSequence(group.visibleText));
-  const sourceFlowAnchor = outline.visualIntent?.representation === 'source-image'
-    && !outline.visualIntent.diagram && !relationship?.diagram && requiredReferences.length === 1
-    && requiredReferences[0]!.kind === 'source-image' && wholeSequenceGroups.length === 1
+  const wholeSequenceGroups = groups.filter((group) => (group.kind === 'text' || group.kind === 'diagram')
+    && hasWholeSequence(group.visibleText));
+  // A source figure beside prose or a comparison is legitimately "mixed".
+  // Its real resource identity and complete ordered statement own the anchor;
+  // a display preference cannot turn that statement into a second caption.
+  const directSourceFigure = Boolean(sourceFigure) && !outline.visualIntent?.diagram && !relationship?.diagram;
+  // A second native flow cannot cancel the original figure's canonical source
+  // identity. Legacy reading instructions alone cannot identify that source
+  // when another diagram is present.
+  const sourceFlowAnchor = sourceFigure && (sourceSteps?.length || directSourceFigure) && wholeSequenceGroups.length === 1
     ? wholeSequenceGroups[0] : undefined;
   const wholeSequenceNodes = sourceFlowAnchor ? ownedNodes.filter((node) => hasWholeSequence(node.content)) : [];
   const pinnedNode = wholeSequenceNodes.length === 1 ? wholeSequenceNodes[0] : undefined;
   const pinnedNarration = pinnedNode && sourceFlowAnchor ? new Map([[pinnedNode.content, sourceFlowAnchor]]) : new Map<string, SemanticCapacityGroup>();
+  // The compiled page also runs without the global node catalog. Its adopted
+  // full flow paragraph must travel with the same overview and original image,
+  // rather than a lexically similar individual step on another continuation.
+  const adoptedFlowParagraphs = sourceFlowAnchor ? [...new Set([
+    ...(plan?.narrationFocus ?? []),
+    ...(plan?.visibleContent ?? []),
+    ...(outline.teachingBrief?.explanation.split('\n') ?? []),
+  ].map((text) => text.trim()).filter((text) => hasWholeSequence(text)
+    && !sourceFlowAnchor.visibleText.split('\n').some((part) => equivalentVisibleClaim(part, text))))] : [];
+  if (sourceFlowAnchor && adoptedFlowParagraphs.length === 1 && wholeSequenceNodes.length <= 1) {
+    pinnedNarration.set(adoptedFlowParagraphs[0]!, sourceFlowAnchor);
+  }
+  const explicitlyPresentedNodeIds = new Set(plan?.presentationItems?.flatMap((item) => item.nodeIds) ?? []);
   for (const group of groups) {
     const parts = group.visibleText.split('\n').filter(Boolean);
+    const items = plan?.presentationItems?.filter((item) => {
+      const itemParts = item.text.split('\n').map(normalizedClaim).filter(Boolean);
+      return itemParts.length > 0 && parts.some((_, start) => itemParts.every((part, index) =>
+        part === normalizedClaim(parts[start + index] ?? '')));
+    }) ?? [];
+    if (items.length) group.presentationItems = items.map((item) => ({ ...item, nodeIds: [...item.nodeIds] }));
+    const displayNodeIds = [...new Set(items.flatMap((item) => item.nodeIds))];
+    if (explicitOwnership && displayNodeIds.some((id) => !ownerNodeIds.has(id))) {
+      group.referencedNodeIds = displayNodeIds.filter((id) => !ownerNodeIds.has(id));
+    }
+    const explicitNodeIds = new Set(items.flatMap((item) => item.nodeIds)
+      .filter((id) => !explicitOwnership || ownerNodeIds.has(id)));
     const matching = ownedNodes.filter((node) => node === pinnedNode
       ? group === sourceFlowAnchor
-      : [node.content, ...(explicitTeachingListParts(node.content) ?? [])]
+      : explicitlyPresentedNodeIds.has(node.id) ? explicitNodeIds.has(node.id)
+        : [node.content, ...(explicitTeachingListParts(node.content) ?? [])]
         .some((content) => parts.some((part) => equivalentVisibleClaim(content, part))));
-    group.sourceNodeIds = matching.map((node) => node.id);
+    group.sourceNodeIds = [...new Set([...explicitNodeIds, ...matching.map((node) => node.id)])];
     for (const node of matching) {
       group.knowledgePointIds.push(...(node.knowledgePointIds ?? []).filter((id) => !group.knowledgePointIds.includes(id)));
     }
@@ -464,35 +511,82 @@ function semanticGroups(outline: SceneOutline, sourcePageId: string, nodes: read
   const firstConcept = ownedNodes.find((node) => ['concept', 'term'].includes(node.kind)
     && (plan?.introduces ?? []).includes(node.id));
   const sourceConceptAnchor = (!relationship || !['sequence', 'process'].includes(relationship.kind)) && firstConcept
-    && outline.visualIntent?.representation === 'source-image'
-    && !outline.visualIntent.diagram && !relationship?.diagram && requiredReferences.length === 1
-    && requiredReferences[0]!.kind === 'source-image' ? groupByNode.get(firstConcept.id) : undefined;
+    && directSourceFigure ? groupByNode.get(firstConcept.id) : undefined;
   const sourceImageAnchor = sourceFlowAnchor ?? sourceConceptAnchor;
   // A required picture or diagram is useful only with the statement students
   // must observe in it. Keep that statement on the same continuation page.
   for (const visual of groups.filter((group) => group.kind === 'media' || group.kind === 'diagram')) {
-    if (visual.visibleText.trim() || !textGroups.length) continue;
+    if (!textGroups.length || visual.visibleText.trim() && !hasReferenceLectureTypography(outline)) continue;
+    const authoredTextGroups = textGroups.filter((group) => group !== visual && group.presentationItems?.length);
+    if (hasReferenceLectureTypography(outline) && visual.kind === 'diagram' && authoredTextGroups.length) {
+      // The annotation is measured inside the complete diagram. Keep an
+      // already-authored, source-backed display item beside it, rather than
+      // letting a visual-only continuation lose its actual node references.
+      const labels = outline.visualIntent?.diagram?.nodes.map((node) => normalizedClaim(node.label)).filter(Boolean) ?? [];
+      const scopedNodeIds = new Set(plan?.presentationItems?.flatMap((item) => item.nodeIds) ?? []);
+      const diagramSourceIds = new Set(nodes.filter((node) => scopedNodeIds.has(node.id)
+        && labels.length && labels.every((label) => normalizedClaim(node.content).includes(label))).map((node) => node.id));
+      const sourced = authoredTextGroups.filter((group) => group.presentationItems!.some((item) =>
+        item.nodeIds.some((id) => diagramSourceIds.has(id))));
+      const nonHeading = (sourced.length ? sourced : authoredTextGroups).filter((group) =>
+        group.presentationItems!.some((item) => item.role !== 'heading'));
+      const observation = closest(visual.visibleText || outline.visualIntent?.observationGoal || outline.title,
+        nonHeading.length ? nonHeading : sourced.length ? sourced : authoredTextGroups);
+      if (observation) {
+        visual.indivisibleWith.push(observation.id);
+        if (!observation.indivisibleWith.includes(visual.id)) observation.indivisibleWith.push(visual.id);
+        continue;
+      }
+    }
     const reference = outline.visualIntent?.resourceRefs?.find((item) => visual.resourceIds.includes(item.resourceId));
-    const resourceCue = reference?.observationGoal || reference?.reason;
+    // Selection reasons explain an author's media choice, not an observable
+    // fact. Only the separately authored observation can become a caption.
+    const resourceCue = reference?.observationGoal;
     // Historical source references include an operational provenance message.
     // Use the actual teaching observation supplied by the page in that case.
     const cue = visual.kind === 'diagram' ? outline.visualIntent?.observationGoal
       : resourceCue && !/^知识点首次完整讲解必须使用的教材原图/.test(resourceCue)
         ? resourceCue : outline.visualIntent?.observationGoal;
-    let observation = sourceImageAnchor && visual.resourceIds.includes(requiredReferences[0]!.resourceId)
-      ? sourceImageAnchor
-      : cue && textGroups.find((group) => group.visibleText.split('\n')
-        .some((part) => equivalentVisibleClaim(part, cue)));
-    if (!observation && cue?.trim()) {
-      observation = { id: stableGroupId(cue), kind: 'text', visibleText: cue.trim(), narrationExpansion: [],
+    let observations = sourceImageAnchor && sourceFigure && visual.resourceIds.includes(sourceFigure.resourceId)
+      ? [sourceImageAnchor]
+      : [];
+    if (!observations.length && hasReferenceLectureTypography(outline)) {
+      // These observations were independently written and source-checked for
+      // this exact page. The old long selection cue is not a second display
+      // responsibility just because its wording differs from that catalog.
+      observations = authoredTextGroups.filter((group) => group.presentationItems!.some((item) => item.role === 'case-observation'));
+    }
+    if (!observations.length && cue?.trim()) {
+      // A page observation may concatenate several already adopted claims.
+      // Keep those exact claims and their order instead of measuring them again
+      // as an extra caption. Distinct conditions or added words still need one.
+      const target = normalizedClaim(cue);
+      for (let start = 0; start < textGroups.length && !observations.length; start += 1) {
+        let combined = '';
+        for (let end = start; end < textGroups.length; end += 1) {
+          combined += normalizedClaim(textGroups[end]!.visibleText);
+          if (combined === target) { observations = textGroups.slice(start, end + 1); break; }
+          if (!target.startsWith(combined)) break;
+        }
+      }
+    }
+    if (!observations.length && cue) observations = textGroups.filter((group) => group.visibleText.split('\n')
+      .some((part) => equivalentVisibleClaim(part, cue)));
+    if (!observations.length && cue?.trim()) {
+      const observation: SemanticCapacityGroup = { id: stableGroupId(cue), kind: 'text', visibleText: cue.trim(), narrationExpansion: [],
         sourcePageId, sourceNodeIds: [], knowledgePointIds: [...visual.knowledgePointIds], resourceIds: [], indivisibleWith: [] };
       groups.push(observation);
       textGroups.push(observation);
+      observations = [observation];
     }
-    observation ||= closest(outline.description, textGroups);
-    if (!observation) continue;
-    if (!visual.indivisibleWith.includes(observation.id)) visual.indivisibleWith.push(observation.id);
-    if (!observation.indivisibleWith.includes(visual.id)) observation.indivisibleWith.push(visual.id);
+    if (!observations.length) {
+      const observation = closest(outline.description, textGroups);
+      if (observation) observations = [observation];
+    }
+    for (const observation of observations) {
+      if (!visual.indivisibleWith.includes(observation.id)) visual.indivisibleWith.push(observation.id);
+      if (!observation.indivisibleWith.includes(visual.id)) observation.indivisibleWith.push(visual.id);
+    }
   }
   // Outline-only media has no authored reading position. Place it immediately
   // beside its observation, without changing the order of any teaching claim.
@@ -500,10 +594,11 @@ function semanticGroups(outline: SceneOutline, sourcePageId: string, nodes: read
   if (!regions.length) {
     const adjacent = new Map<string, SemanticCapacityGroup[]>();
     const movable = new Set<string>();
-    for (const visual of groups.filter((group) => !group.visibleText.trim()
+    for (const visual of groups.filter((group) => (!group.visibleText.trim() || hasReferenceLectureTypography(outline))
       && (group.kind === 'media' || group.kind === 'diagram'))) {
-      if (visual.indivisibleWith.length !== 1) continue;
-      const anchor = visual.indivisibleWith[0]!;
+      const linked = groups.filter((group) => visual.indivisibleWith.includes(group.id) && group.kind !== 'media' && group.kind !== 'diagram');
+      if (!linked.length) continue;
+      const anchor = linked.at(-1)!.id;
       adjacent.set(anchor, [...(adjacent.get(anchor) ?? []), visual]);
       movable.add(visual.id);
     }
@@ -518,14 +613,15 @@ async function measureTextHeight(text: string, width: number, font: number, meas
 }
 
 async function measureGroupHeight(group: SemanticCapacityGroup, width: number, font: number, measure: TextMeasure): Promise<number> {
+  const heading = Boolean(group.presentationItems?.length && group.presentationItems.every((item) => item.role === 'heading'));
   const parts: number[] = [];
   if (group.richTextHtml) {
     const spec = measurementInput(visibleRichText(group.richTextHtml), width, font);
     parts.push((await measure({ ...spec, html: group.richTextHtml, preserveRichText: true })).height);
   }
-  if (group.nonRichText) parts.push(await measureTextHeight(group.nonRichText, width, font, measure));
+  if (group.nonRichText) parts.push(await measureTextHeight(group.nonRichText, width, font, measure, heading));
   if (!group.tableCells?.length) {
-    if (!parts.length) return measureTextHeight(group.visibleText, width, font, measure);
+    if (!parts.length) return measureTextHeight(group.visibleText, width, font, measure, heading);
     return parts.reduce((sum, height) => sum + height, 0) + GAP * (parts.length - 1);
   }
   const tableFont = Math.min(20, font);
@@ -559,8 +655,71 @@ function indivisibleTextBlocks(groups: readonly SemanticCapacityGroup[]): Semant
   return blocks;
 }
 
-async function packedTextHeight(blocks: readonly SemanticCapacityGroup[][], widths: readonly number[], font: number, measure: TextMeasure): Promise<number> {
+function isHeading(group: SemanticCapacityGroup): boolean {
+  return Boolean(group.presentationItems?.length && group.presentationItems.every((item) => item.role === 'heading'));
+}
+
+/** Same editable paragraphs, padding and spacing as the native text compiler.
+ * A catalog item is a semantic claim, not an obligation to add another padded
+ * box. Tables, formulas, authored rich text and heading emphasis stay separate. */
+async function groupedColumnHeight(groups: readonly SemanticCapacityGroup[], width: number, font: number, measure: TextMeasure): Promise<number> {
+  const heights: number[] = [];
+  for (let start = 0; start < groups.length;) {
+    const first = groups[start]!;
+    const canGroup = (group: SemanticCapacityGroup) => group.kind === 'text'
+      && !group.richTextHtml && !group.tableCells?.length && !isHeading(group);
+    if (!canGroup(first)) {
+      heights.push(await measureGroupHeight(first, width, font, measure));
+      start += 1;
+      continue;
+    }
+    let end = start + 1;
+    while (end < groups.length && canGroup(groups[end]!)) end += 1;
+    const paragraphs = groups.slice(start, end).map((group) => group.visibleText);
+    const input = measurementInput(paragraphs.join('\n\n'), width, font);
+    const paragraphStyle = `font-size:${font}px;font-weight:400;text-align:left`;
+    heights.push((await measure({ ...input, html: paragraphs.map((text) =>
+      `<p style="${paragraphStyle}">${escapeHtml(text).replace(/\r\n?|\n/g, '<br>')}</p>`).join('') })).height);
+    start = end;
+  }
+  return heights.reduce((sum, height) => sum + height, 0) + GAP * Math.max(0, heights.length - 1);
+}
+
+async function packedTextHeight(blocks: readonly SemanticCapacityGroup[][], widths: readonly number[], font: number, measure: TextMeasure,
+  groupParagraphs = false): Promise<number> {
   if (!blocks.length) return 0;
+  if (groupParagraphs) {
+    if (!widths.length) return Infinity;
+    if (widths.length === 1) return groupedColumnHeight(blocks.flat(), widths[0]!, font, measure);
+    // Authored headings span the composition, as they do in native feasibility
+    // candidates. Content below each heading may use contiguous columns.
+    const headingIndex = blocks.findIndex((block) => block.length === 1 && isHeading(block[0]!));
+    if (headingIndex >= 0) {
+      const before = blocks.slice(0, headingIndex), after = blocks.slice(headingIndex + 1);
+      const bands = [
+        ...(before.length ? [await packedTextHeight(before, widths, font, measure, true)] : []),
+        await measureGroupHeight(blocks[headingIndex]![0]!, BODY.width, font, measure),
+        ...(after.length ? [await packedTextHeight(after, widths, font, measure, true)] : []),
+      ];
+      return bands.reduce((sum, height) => sum + height, 0) + GAP * (bands.length - 1);
+    }
+    const memo = new Map<string, Promise<number>>();
+    const solve = (start: number, column: number): Promise<number> => {
+      if (column === widths.length) return Promise.resolve(start === blocks.length ? 0 : Infinity);
+      const key = `${start}:${column}`;
+      let pending = memo.get(key);
+      if (!pending) {
+        pending = Promise.all(Array.from({ length: blocks.length - start + 1 }, async (_, offset) => {
+          const end = start + offset;
+          const used = await groupedColumnHeight(blocks.slice(start, end).flat(), widths[column]!, font, measure);
+          return Math.max(used, await solve(end, column + 1));
+        })).then((heights) => Math.min(...heights));
+        memo.set(key, pending);
+      }
+      return pending;
+    };
+    return solve(0, 0);
+  }
   const blockHeight = async (block: SemanticCapacityGroup[], width: number) => {
     const heights = await Promise.all(block.map((group) => measureGroupHeight(group, width, font, measure)));
     return heights.reduce((sum, height) => sum + height, 0) + GAP * (heights.length - 1);
@@ -621,6 +780,45 @@ function indivisibleGroupSpans(groups: readonly SemanticCapacityGroup[]): Semant
   return merged.map(({ start, end }) => groups.slice(start, end + 1));
 }
 
+function selectedSemanticLayout(
+  outline: SceneOutline, groups: readonly SemanticCapacityGroup[], layouts: readonly SemanticCapacityLayout[],
+): SemanticCapacityLayout | undefined {
+  const feasible = layouts.filter((layout) => layout.fits);
+  if (!hasReferenceLectureTypography(outline)) return feasible[0];
+  const relationship = outline.teachingBrief?.teachingPlan?.visualRelationship;
+  const visible = groups.filter((group) => group.visibleText.trim() && group.kind !== 'diagram');
+  const hasVisuals = groups.some((group) => group.kind === 'media' || group.kind === 'diagram');
+  const hasTable = groups.some((group) => group.kind === 'table');
+  const items = groups.flatMap((group) => group.presentationItems ?? []);
+  const comparisons = items.filter((item) => item.role === 'comparison');
+  const steps = items.filter((item) => item.role === 'process-label');
+  const isComparison = relationship?.kind === 'comparison' || comparisons.length > 1;
+  const isProcess = relationship && ['sequence', 'process'].includes(relationship.kind);
+  let preference: SemanticCapacityLayout['kind'][];
+  if (hasVisuals) preference = visible.length
+    ? ['media-side', 'semantic-units', 'media-stacked'] : ['media-side', 'semantic-units'];
+  else if (hasTable) preference = ['full-width', 'semantic-units', 'two-column', 'three-column'];
+  else if (isComparison) preference = comparisons.length === 3
+    ? ['three-column', 'two-column', 'full-width', 'semantic-units']
+    : ['two-column', 'three-column', 'full-width', 'semantic-units'];
+  else if (isProcess) preference = steps.length === 2 || steps.length === 3
+    ? [steps.length === 2 ? 'two-column' : 'three-column', 'full-width', 'semantic-units']
+    : ['full-width', 'semantic-units', 'two-column', 'three-column'];
+  else preference = visible.length > 1
+    ? ['two-column', 'full-width', 'three-column', 'semantic-units']
+    : ['full-width', 'semantic-units', 'two-column', 'three-column'];
+  const [bodyFont] = slideBodyFontSizes(outline);
+  const rank = (layout: SemanticCapacityLayout) => {
+    const index = preference.indexOf(layout.kind);
+    return index < 0 ? preference.length : index;
+  };
+  // Prefer a relationship-appropriate construction. Ordinary and compact
+  // fonts are pre-authoring choices within that construction, not repairs.
+  return feasible.sort((left, right) => rank(left) - rank(right)
+    || Math.abs(left.bodyFontSize - bodyFont) - Math.abs(right.bodyFontSize - bodyFont)
+    || (hasVisuals ? Math.abs((left.mediaWidth ?? 440) - 440) - Math.abs((right.mediaWidth ?? 440) - 440) : 0))[0];
+}
+
 async function measureSemanticUnits(
   outline: SceneOutline, groups: readonly SemanticCapacityGroup[], availableHeight: number,
   diagramAllocations: readonly DiagramAllocation[], measure: TextMeasure, dimensions?: SemanticPageCapacityOptions['resourceDimensions'],
@@ -632,7 +830,7 @@ async function measureSemanticUnits(
     const visuals = members.filter((group) => group.kind === 'media' || group.kind === 'diagram');
     const layouts: SemanticCapacityLayout[] = [];
     const add = async (kind: SemanticCapacityLayout['kind'], widths: number[], font: number, visualWidth?: number, mediaColumnWidths?: number[]) => {
-      const textHeight = await packedTextHeight(indivisibleTextBlocks(text), widths, font, measure);
+      const textHeight = await packedTextHeight(indivisibleTextBlocks(text), widths, font, measure, hasReferenceLectureTypography(outline));
       const visualHeight = visuals.length ? mediaFootprint(outline, visuals, visualWidth ?? BODY.width, diagramAllocations, dimensions, mediaColumnWidths) : 0;
       const usedHeight = kind === 'media-stacked' && textHeight && visualHeight
         ? textHeight + visualHeight + GAP : Math.max(textHeight, visualHeight);
@@ -641,7 +839,7 @@ async function measureSemanticUnits(
         ...(visualWidth ? { mediaWidth: visualWidth } : {}), ...(mediaColumnWidths ? { mediaColumnWidths } : {}),
         fits: usedHeight <= availableHeight });
     };
-    for (const font of [BODY_FONT, MIN_BODY_FONT]) {
+    for (const font of slideBodyFontSizes(outline)) {
       if (!visuals.length) {
         await add('full-width', [BODY.width], font);
         // Related conditions and comparison sides may share columns, but the
@@ -653,7 +851,7 @@ async function measureSemanticUnits(
             if (maxHeight > availableHeight) continue;
             // Reuse ordered packing without making same-page links imply the
             // additional, stronger constraint of occupying the same column.
-            const usedHeight = await packedTextHeight(text.map((group) => [group]), widths, font, measure);
+            const usedHeight = await packedTextHeight(text.map((group) => [group]), widths, font, measure, hasReferenceLectureTypography(outline));
             layouts.push({ kind: widths.length === 2 ? 'two-column' : 'three-column', columnWidths: widths,
               bodyFontSize: font, usedHeight, availableHeight, fits: usedHeight <= availableHeight });
           }
@@ -663,7 +861,11 @@ async function measureSemanticUnits(
         for (const visualWidth of [BODY.width, 700, 460, 328, 240, 180]) await add('media-side', [], font, visualWidth);
       } else {
         for (const visualWidth of [440, 328, 240, 180, 600, 700]) {
-          await add('media-side', [BODY.width - visualWidth - GAP], font, visualWidth);
+          const textWidth = BODY.width - visualWidth - GAP;
+          await add('media-side', [textWidth], font, visualWidth);
+          if (hasReferenceLectureTypography(outline) && text.length > 2 && textWidth >= 600) {
+            await add('media-side', [(textWidth - GAP) / 2, (textWidth - GAP) / 2], font, visualWidth);
+          }
         }
         if (visuals.length > 1) {
           for (const visualWidth of [700, 600, 460]) {
@@ -672,11 +874,17 @@ async function measureSemanticUnits(
             await add('media-side', [BODY.width - visualWidth - GAP], font, visualWidth, visuals.map(() => column));
           }
         }
-        for (const visualWidth of [BODY.width, 700, 460, 360, 280]) await add('media-stacked', [BODY.width], font, visualWidth);
+        for (const visualWidth of [BODY.width, 700, 460, 360, 280]) {
+          await add('media-stacked', [BODY.width], font, visualWidth);
+          if (hasReferenceLectureTypography(outline) && text.length > 1) {
+            await add('media-stacked', [444, 444], font, visualWidth);
+            await add('media-stacked', [292, 292, 292], font, visualWidth);
+          }
+        }
       }
-      if (layouts.some((layout) => layout.fits)) break;
+      if (!hasReferenceLectureTypography(outline) && layouts.some((layout) => layout.fits)) break;
     }
-    const selectedLayout = layouts.find((layout) => layout.fits);
+    const selectedLayout = selectedSemanticLayout(outline, members, layouts);
     const measuredHeight = selectedLayout?.usedHeight ?? Math.min(...layouts.map((layout) => layout.usedHeight));
     return { id, groupIds: members.map((group) => group.id), layouts,
       ...(Number.isFinite(measuredHeight) ? { measuredHeight } : {}),
@@ -690,12 +898,27 @@ export async function evaluateSemanticPageCapacity(
   options: SemanticPageCapacityOptions = {},
 ): Promise<SemanticPageCapacityAssessment> {
   const sourcePageId = options.sourcePageId ?? outline.spatialParentId ?? outline.id;
-  const groups = semanticGroups(outline, sourcePageId, options.explanationNodes ?? []);
+  const groups = semanticGroups(outline, sourcePageId, options.explanationNodes ?? [], options.resourceSequences);
   const base = { schemaVersion: 1 as const, planningVersion: SEMANTIC_PAGE_CAPACITY_VERSION,
     outlineId: outline.id, sourcePageId, groups };
-  const measure = options.measure ?? measureAuthoredSlideText;
+  const underlyingMeasure = options.measure ?? measureAuthoredSlideText;
+  const measurementCache = new Map<string, Promise<Awaited<ReturnType<TextMeasure>>>>();
+  const measure: TextMeasure = (input) => {
+    const key = JSON.stringify(input);
+    let pending = measurementCache.get(key);
+    if (!pending) {
+      pending = Promise.resolve(underlyingMeasure(input));
+      measurementCache.set(key, pending);
+    }
+    return pending;
+  };
   try {
-    const titleHeight = await measureTextHeight(outline.title, TITLE.width, TITLE_FONT, measure, true);
+    const [bodyFont] = slideBodyFontSizes(outline);
+    const [titleFont, minimumTitleFont] = slideTitleFontSizes(outline);
+    let titleHeight = await measureTextHeight(outline.title, TITLE.width, titleFont, measure, true);
+    if (titleHeight > TITLE.height && minimumTitleFont !== titleFont) {
+      titleHeight = await measureTextHeight(outline.title, TITLE.width, minimumTitleFont, measure, true);
+    }
     const availableHeight = BODY.bottom - Math.max(130, TITLE.top + titleHeight + GAP) - VERTICAL_RESERVE;
     const textGroups = groups.filter((group) => (group.visibleText.trim() || group.tableCells?.length) && group.kind !== 'diagram');
     const mediaGroups = groups.filter((group) => group.kind === 'media' || group.kind === 'diagram');
@@ -712,7 +935,7 @@ export async function evaluateSemanticPageCapacity(
     const textBlocks = indivisibleTextBlocks(textGroups);
     const layouts: SemanticCapacityLayout[] = [];
     const add = async (kind: SemanticCapacityLayout['kind'], widths: number[], font: number, mediaWidth?: number) => {
-      const textHeight = await packedTextHeight(textBlocks, widths, font, measure);
+      const textHeight = await packedTextHeight(textBlocks, widths, font, measure, hasReferenceLectureTypography(outline));
       const visualHeight = mediaGroups.length ? mediaFootprint(outline, mediaGroups, mediaWidth ?? BODY.width, diagramAllocations, options.resourceDimensions) : 0;
       const usedHeight = kind === 'media-stacked' && mediaGroups.length
         ? textHeight + visualHeight + GAP : Math.max(textHeight, visualHeight);
@@ -721,37 +944,45 @@ export async function evaluateSemanticPageCapacity(
         ...(mediaWidth ? { mediaWidth } : {}),
         availableHeight, fits: usedHeight <= availableHeight && titleHeight <= TITLE.height });
     };
-    for (const font of [BODY_FONT, MIN_BODY_FONT]) {
+    for (const font of slideBodyFontSizes(outline)) {
       if (mediaGroups.length) {
-        for (const mediaWidth of [328, 240, 180]) {
-          await add('media-side', [BODY.width - mediaWidth - GAP], font, mediaWidth);
-          if (layouts.at(-1)?.fits) break;
+        for (const mediaWidth of hasReferenceLectureTypography(outline) ? [440, 328, 240, 180, 600, 700] : [328, 240, 180]) {
+          const textWidth = BODY.width - mediaWidth - GAP;
+          await add('media-side', [textWidth], font, mediaWidth);
+          if (hasReferenceLectureTypography(outline) && textGroups.length > 2 && textWidth >= 600) {
+            await add('media-side', [(textWidth - GAP) / 2, (textWidth - GAP) / 2], font, mediaWidth);
+          }
+          if (!hasReferenceLectureTypography(outline) && layouts.at(-1)?.fits) break;
         }
-        if (!layouts.at(-1)?.fits) {
+        if (hasReferenceLectureTypography(outline) || !layouts.at(-1)?.fits) {
           for (const mediaWidth of [460, 360, 280, BODY.width]) {
             await add('media-stacked', [BODY.width], font, mediaWidth);
-            if (layouts.at(-1)?.fits) break;
+            if (hasReferenceLectureTypography(outline) && textGroups.length > 1) {
+              await add('media-stacked', [444, 444], font, mediaWidth);
+              await add('media-stacked', [292, 292, 292], font, mediaWidth);
+            }
+            if (!hasReferenceLectureTypography(outline) && layouts.at(-1)?.fits) break;
           }
         }
       } else {
         await add('full-width', [BODY.width], font);
-        if (!layouts.at(-1)?.fits) await add('two-column', [444, 444], font);
-        if (!layouts.at(-1)?.fits) await add('three-column', [292, 292, 292], font);
+        if (hasReferenceLectureTypography(outline) || !layouts.at(-1)?.fits) await add('two-column', [444, 444], font);
+        if (hasReferenceLectureTypography(outline) || !layouts.at(-1)?.fits) await add('three-column', [292, 292, 292], font);
       }
-      if (layouts.at(-1)?.fits) break;
+      if (!hasReferenceLectureTypography(outline) && layouts.at(-1)?.fits) break;
     }
     const units = await measureSemanticUnits(outline, groups, availableHeight, diagramAllocations, measure, options.resourceDimensions);
     const unitHeight = units.reduce((sum, unit) => sum + (unit.measuredHeight ?? Infinity), 0) + GAP * Math.max(0, units.length - 1);
     if (Number.isFinite(unitHeight)) layouts.push({ kind: 'semantic-units', columnWidths: [BODY.width],
-      bodyFontSize: Math.min(BODY_FONT, ...units.map((unit) => unit.selectedLayout?.bodyFontSize ?? BODY_FONT)),
+      bodyFontSize: Math.min(bodyFont, ...units.map((unit) => unit.selectedLayout?.bodyFontSize ?? bodyFont)),
       usedHeight: unitHeight, availableHeight, fits: unitHeight <= availableHeight && titleHeight <= TITLE.height,
       unitLayouts: units.flatMap((unit) => unit.selectedLayout ? [{ unitId: unit.id, groupIds: unit.groupIds, layout: unit.selectedLayout }] : []),
     });
-    const best = layouts.find((layout) => layout.fits);
+    const best = selectedSemanticLayout(outline, groups, layouts);
     // A local title problem must not hide an independently overloaded body.
     const bodyFitsNormalTitleSpace = layouts.some((layout) =>
       layout.usedHeight <= BODY.bottom - 130 - VERTICAL_RESERVE);
-    for (const group of textGroups) group.measuredHeight = await measureGroupHeight(group, BODY.width, BODY_FONT, measure);
+    for (const group of textGroups) group.measuredHeight = await measureGroupHeight(group, BODY.width, bodyFont, measure);
     for (const group of mediaGroups) {
       const height = mediaFootprint(outline, [group], BODY.width, diagramAllocations, options.resourceDimensions);
       if (Number.isFinite(height)) group.measuredHeight = height;
@@ -761,8 +992,8 @@ export async function evaluateSemanticPageCapacity(
     const hasBadRegions = outline.spatialBudget?.regions.some((region) => !region.fits) ?? false;
     const currentLayoutFits = !explicitConflicts && !hasBadRegions && !authoredRegionConflict(outline);
     const decision = best
-      ? (best.kind === 'full-width' || best.kind === 'media-side' && best.mediaWidth === 328)
-        && best.bodyFontSize === BODY_FONT && currentLayoutFits ? 'fits' : 'optimize-layout'
+      ? (hasReferenceLectureTypography(outline) || best.kind === 'full-width' || best.kind === 'media-side' && best.mediaWidth === 328)
+        && (hasReferenceLectureTypography(outline) || best.bodyFontSize === bodyFont) && currentLayoutFits ? 'fits' : 'optimize-layout'
       : titleHeight > TITLE.height && bodyFitsNormalTitleSpace ? 'optimize-layout' : 'page-overflow';
     return { ...base, decision, reason: best
       ? decision === 'fits' ? '完整屏显内容按现有字体可在一页容纳'
@@ -771,8 +1002,10 @@ export async function evaluateSemanticPageCapacity(
         : '完整屏显内容及必需视觉资源在测量的单页候选中均无法容纳',
     measurementMode, titleHeight, layouts, units, ...(best ? { selectedLayout: best } : {}) };
   } catch (error) {
-    if (!isSpatialMeasurementUnavailableError(error)) throw error;
-    return { ...base, decision: 'measurement-unavailable', reason: error.message,
+    if (error instanceof Error && error.name === 'AbortError') throw error;
+    const reason = isSpatialMeasurementUnavailableError(error) ? error.message
+      : `页面容量测量未完成：${error instanceof Error ? error.message : String(error)}`;
+    return { ...base, decision: 'measurement-unavailable', reason,
       measurementMode: 'unavailable', layouts: [] };
   }
 }

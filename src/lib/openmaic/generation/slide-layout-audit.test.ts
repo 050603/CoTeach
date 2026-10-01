@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import katex from 'katex';
 import type { PPTElement } from '@openmaic/dsl';
 import type { GeneratedSlideContent, SceneOutline } from '@openmaic/lib/types/generation';
+import { REFERENCE_LECTURE_TYPOGRAPHY } from './slide-presentation-typography';
 import {
   auditAndRepairSlideOnce,
   auditSlideDensity,
@@ -18,6 +19,16 @@ const outline: SceneOutline = {
   id: 'scene-1', type: 'slide', title: '抽样', description: '解释随机抽样',
   keyPoints: ['随机抽样减少选择偏差', '样本必须来自目标总体'], order: 0,
 };
+function lectureOutline(points: string[]): SceneOutline {
+  return { ...outline, generationPurpose: 'knowledge-teaching', keyPoints: points,
+    teachingBrief: { schemaVersion: 1, explanation: points.join('\n'), examples: [], conditions: [], evidence: [],
+      assessmentFocus: '核对概念及条件', teachingPlan: {
+        purpose: '讲解抽样', priorKnowledge: '', newContent: points.join('\n'), learnerQuestion: '',
+        reasoningSteps: [], takeaway: points.at(-1) ?? '', visibleContent: points, narrationFocus: points,
+        presentationContent: points, presentationTypography: REFERENCE_LECTURE_TYPOGRAPHY,
+      } },
+  };
+}
 const text = (
   id: string,
   content: string,
@@ -37,6 +48,54 @@ const goodAudit: SlideLayoutAudit = {
 };
 
 describe('slide layout audit repair policy', () => {
+  it('keeps lecture density measurements diagnostic while enforcing every authored condition and quantity', () => {
+    const points = ['样本至少包含 20 人', '只有来自目标总体，结论才适用于该总体'];
+    const page = lectureOutline(points);
+    const content: GeneratedSlideContent = { elements: [
+      { ...text('title', page.title, 40), height: 48, defaultColor: '#1E3A8A' },
+      { ...text('subtitle', '总体范围与样本量', 110), height: 35, defaultColor: '#64748B' },
+      { ...text('body', points.join('；'), 200), height: 80, defaultColor: '#334155' },
+    ] };
+    const density = auditSlideDensity(page, content);
+    expect(density.visibleTextCharacters).toBeLessThan(150);
+    expect(density.maxBlankBand).toBeGreaterThan(125);
+    expect(density.underrepresentedKeyPoints).toEqual([]);
+    expect(density.issues).toEqual([]);
+    for (const changed of ['样本至少包含 10 人；只有来自目标总体，结论才适用于该总体',
+      '样本至少包含 20 人；结论适用于任何总体']) {
+      const mutated = structuredClone(content);
+      const body = mutated.elements[2]!;
+      if (body.type !== 'text') throw new Error('Expected text');
+      body.content = `<p>${changed}</p>`;
+      expect(auditSlideDensity(page, mutated).issues).toEqual(expect.arrayContaining([
+        expect.stringContaining('关键教学点可见覆盖率'),
+      ]));
+    }
+    const small = structuredClone(content);
+    const body = small.elements[2]!;
+    if (body.type !== 'text') throw new Error('Expected text');
+    body.content = `<p style="font-size:15px">${points.join('；')}</p>`;
+    expect(auditSlideDensity(page, small).underrepresentedKeyPoints.map((item) => item.keyPoint)).toEqual(points);
+  });
+
+  it.each([16, 15])('recognizes complete grouped relation captions only at the lecture minimum (font %s)', (font) => {
+    const points = ['理论：解释教学规律', '模式：组织教学结构', '方法：指导具体操作', '关系：理论 → 模式 → 方法'];
+    const page = lectureOutline(points);
+    page.title = '理论、模式与方法';
+    page.visualIntent = { representation: 'text', observationGoal: '用箭头表示从理论到模式到方法。' };
+    page.teachingBrief!.teachingPlan!.visualRelationship = { kind: 'statement', preferredForm: 'text',
+      description: '用箭头表示从理论到模式到方法。', rationale: '从教学依据到具体操作', readingOrder: ['理论', '模式', '方法'] };
+    const content = { elements: [
+      { ...text('title', page.title, 40), height: 48, defaultColor: '#1E3A8A', content: `<p style="font-size:32px">${page.title}</p>` },
+      { ...text('subtitle', '从解释依据到具体操作', 110), height: 35, defaultColor: '#64748B' },
+      { ...text('group', '', 200), height: 210, defaultColor: '#334155', content: points.map((point) => `<p style="font-size:${font}px">${point}</p>`).join('') },
+    ] };
+    const density = auditSlideDensity(page, content);
+    expect(density.semanticStructureRequired).toBe(true);
+    expect(density.semanticStructureSatisfied).toBe(font >= 16);
+    expect(density.semanticStructures.includes('text-relation-caption')).toBe(font >= 16);
+  });
+
   it('skips a model rewrite when deterministic repair clears the measured defect', async () => {
     const audit = vi.fn().mockResolvedValueOnce(badAudit).mockResolvedValueOnce(goodAudit);
     const regenerate = vi.fn();

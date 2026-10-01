@@ -51,6 +51,8 @@ export interface DiagramAllocationBounds {
 export interface MeasuredDiagramCompilerOptions {
   /** Previously measured choices for this complete plan, including annotation. */
   feasibleAllocations?: readonly DiagramAllocation[];
+  /** Preserve a renderable graph when measured visual preferences cannot fit. */
+  onDiagnostic?: (detail: string) => void;
 }
 
 /** A failed authored rectangle needs repositioning, not omitted graph content. */
@@ -91,6 +93,7 @@ function isDiagramFitError(error: unknown): error is Error {
 const NODE_FONT_SIZE = 20;
 const ANNOTATION_FONT_SIZE = 18;
 const EDGE_FONT_SIZE = 16;
+const EDGE_LABEL_HEIGHT = 40;
 const NODE_PADDING_X = 15;
 const NODE_PADDING_Y = 12;
 const NODE_LINE_HEIGHT = 25;
@@ -680,7 +683,8 @@ function positionBranch(component: DiagramComponent, options: DiagramCompilerOpt
     const levelGap = widestLabel ? (vertical ? 56 : widestLabel + 12) : 32;
     // Fork labels sit between the parent and each child. Keep enough space
     // between sibling branches for those labels at their measured font size.
-    const siblingGap = vertical ? Math.max(28, widestLabel * 2 + 12 - across) : 28;
+    const crossLabelExtent = vertical ? widestLabel : widestLabel ? EDGE_LABEL_HEIGHT : 0;
+    const siblingGap = Math.max(28, crossLabelExtent * 2 + 12 - across);
     const minimumAlong = levels.length * along + (levels.length - 1) * levelGap;
     const maximumAcross = Math.max(...levels.map((level) => level.length * across + (level.length - 1) * siblingGap));
     if (minimumAlong > alongSpace || maximumAcross > acrossSpace) continue;
@@ -779,7 +783,7 @@ function edgeLabel(id: string, label: string, at: Point, bounds: Rect, component
   const availableWidth = 2 * Math.min(at.x - bounds.left, bounds.left + bounds.width - at.x);
   const width = Math.min(availableWidth, edgeLabelWidth(label, options));
   if (measure(label, EDGE_FONT_SIZE, options, 500) > width - 20) fail(`edge label ${JSON.stringify(label)} is too long`);
-  const rect = { left: at.x - width / 2, top: at.y - 20, width, height: 40 };
+  const rect = { left: at.x - width / 2, top: at.y - EDGE_LABEL_HEIGHT / 2, width, height: EDGE_LABEL_HEIGHT };
   if (!within(rect, bounds)) fail('edge label exceeds the diagram container');
   return makeText(id, label, rect, EDGE_FONT_SIZE, component.textColor ?? '#30343A', options.fontName ?? 'Noto Sans SC', { fill: '#FFFFFF' });
 }
@@ -962,12 +966,84 @@ export async function compileMeasuredDiagramComponent(
   try {
     return await compileMeasuredDiagram(component, textMeasure);
   } catch (error) {
-    if (!isDiagramFitError(error)) throw error;
-    throw new DiagramAllocationError(error.message, {
+    if (error instanceof Error && error.name === 'AbortError') throw error;
+    if (!isDiagramFitError(error) && !options.onDiagnostic) throw error;
+    if (options.onDiagnostic) {
+      // The fallback validates real endpoints and retains every original label,
+      // edge and annotation. It does not certify the resulting layout as fitting.
+      const elements = compileDiagramForReview(component);
+      options.onDiagnostic(`${error instanceof Error ? error.message : String(error)}; retaining the complete graph with a basic editable layout`);
+      return elements;
+    }
+    throw new DiagramAllocationError(error instanceof Error ? error.message : String(error), {
       authoredAllocation: { left: component.left, top: component.top, width: component.width, height: component.height },
       feasibleAllocations: options.feasibleAllocations,
     });
   }
+}
+
+function compileDiagramForReview(component: DiagramComponent): PPTElement[] {
+  if (!component || component.type !== 'diagram' || typeof component.id !== 'string' || !component.id.trim()
+    || !['sequence', 'cycle', 'branch'].includes(component.topology)) fail('a renderable diagram needs its type, id and topology');
+  if (![component.left, component.top].every((value) => typeof value === 'number' && Number.isFinite(value))
+    || !finitePositive(component.width) || !finitePositive(component.height)) fail('container coordinates must be finite and positive');
+  if (!Array.isArray(component.nodes) || !component.nodes.length) fail('a renderable diagram needs nodes');
+  const known = new Set<string>();
+  for (const node of component.nodes) {
+    if (!node || typeof node.id !== 'string' || !node.id.trim() || known.has(node.id)
+      || typeof node.label !== 'string' || !node.label.trim()) fail('every node needs a unique id and nonempty label');
+    known.add(node.id);
+  }
+  if (component.edges !== undefined && !Array.isArray(component.edges)) fail('edges must be an array');
+  const edges: Array<{ from: string; to: string; label?: string }> = component.edges ?? (component.topology === 'branch' ? []
+    : component.sequenceGroups?.length ? component.sequenceGroups.flatMap((group) => group.nodeIds.slice(0, -1)
+        .map((from, index) => ({ from, to: group.nodeIds[index + 1]! })))
+    : component.nodes.slice(0, component.topology === 'cycle' ? undefined : -1).map((node, index) => ({
+        from: node.id, to: component.nodes[(index + 1) % component.nodes.length]!.id,
+      })));
+  for (const edge of edges) if (!edge || !known.has(edge.from) || !known.has(edge.to)
+    || edge.label !== undefined && typeof edge.label !== 'string') fail('an edge needs real source and destination nodes');
+  if (component.annotation !== undefined && typeof component.annotation !== 'string') fail('annotation must be text');
+  const columns = component.topology === 'cycle' ? Math.ceil(Math.sqrt(component.nodes.length))
+    : Math.min(3, component.nodes.length);
+  const rows = Math.ceil(component.nodes.length / columns);
+  const captionHeight = component.annotation ? Math.min(60, component.height / 3) : 0;
+  const gap = Math.min(18, component.width / (columns * 4), (component.height - captionHeight) / (rows * 4));
+  const width = (component.width - gap * (columns - 1)) / columns;
+  const height = (component.height - captionHeight - gap * (rows - 1)) / rows;
+  const nodes: PositionedNode[] = component.nodes.map((node, index) => ({ ...node, lines: node.label.split('\n'), rect: {
+    left: component.left + (index % columns) * (width + gap),
+    top: component.top + captionHeight + Math.floor(index / columns) * (height + gap), width, height,
+  } }));
+  const byId = new Map(nodes.map((node) => [node.id, node]));
+  const font = 'Noto Sans SC';
+  const lines: PPTElement[] = [];
+  const labels: PPTElement[] = [];
+  for (const [index, edge] of edges.entries()) {
+    const from = byId.get(edge.from)!.rect, to = byId.get(edge.to)!.rect;
+    const origin = { x: from.left + from.width / 2, y: from.top + from.height / 2 };
+    const destination = { x: to.left + to.width / 2, y: to.top + to.height / 2 };
+    const dx = destination.x - origin.x, dy = destination.y - origin.y;
+    const port = (rect: Rect, center: Point, direction: number) => {
+      const scale = Math.min(dx ? rect.width / (2 * Math.abs(dx)) : Infinity,
+        dy ? rect.height / (2 * Math.abs(dy)) : Infinity);
+      return Number.isFinite(scale) ? { x: center.x + direction * dx * scale, y: center.y + direction * dy * scale } : center;
+    };
+    lines.push(makeLine(`${component.id}-edge-${index}`, port(from, origin, 1), port(to, destination, -1),
+      component.accentColor ?? '#D97706'));
+    if (edge.label) labels.push(makeText(`${component.id}-edge-label-${index}`, edge.label, {
+      left: (origin.x + destination.x) / 2 - 80, top: (origin.y + destination.y) / 2 - 20, width: 160, height: 40,
+    }, EDGE_FONT_SIZE, component.textColor ?? '#30343A', font));
+  }
+  for (const [index, group] of (component.sequenceGroups ?? []).entries()) if (group.label) {
+    const first = byId.get(group.nodeIds[0] ?? '')?.rect;
+    if (first) labels.push(makeText(`${component.id}-group-${index}`, group.label,
+      { ...first, top: first.top - 36, height: 36 }, ANNOTATION_FONT_SIZE, component.textColor ?? '#30343A', font, { weight: 700 }));
+  }
+  return [...lines, ...nodes.map((node) => makeNode(node, component, font)), ...labels,
+    ...(component.annotation ? [makeText(`${component.id}-annotation`, component.annotation,
+      { left: component.left, top: component.top, width: component.width, height: captionHeight },
+      ANNOTATION_FONT_SIZE, component.textColor ?? '#30343A', font, { weight: 700 })] : [])];
 }
 
 async function compileMeasuredDiagram(

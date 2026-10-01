@@ -159,6 +159,97 @@ function choiceAnalysis(options: QuizOption[], answers: string[], original: stri
   return `正确答案为${labels.join('、')}。判断时应回到题目对应的核心概念，说明这些选项为什么符合条件，并辨析其他选项所反映的常见误解。`;
 }
 
+/** Compile the first authored response for the quiz runtime without judging or
+ * rewriting its teaching content. Count, coverage, explanations and requested
+ * formats are first-draft guidance; the final course is reviewed by the teacher. */
+export function compileAuthoredQuizQuestions(input: unknown): QuizQuestion[] {
+  if (!Array.isArray(input) || !input.length) throw new Error('quiz questions must be a nonempty array');
+  const ids = new Set<string>();
+  const reservedIds = new Set(input.flatMap((value) => value && typeof value === 'object'
+    && typeof value.id === 'string' && value.id.trim() ? [value.id.trim()] : []));
+  const stringIds = (value: unknown, field: string): string[] | undefined => {
+    if (value === undefined) return undefined;
+    if (!Array.isArray(value) || value.some((id) => typeof id !== 'string' || !id.trim())) {
+      throw new Error(`quiz ${field} must contain nonempty string ids`);
+    }
+    return [...new Set(value)];
+  };
+  return input.map((value, index): QuizQuestion => {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error(`quiz question ${index + 1} must be an object`);
+    const record = value as Record<string, unknown>;
+    const question = text(record.question) || text(record.prompt) || text(record.title);
+    if (!question) throw new Error(`quiz question ${index + 1} has no displayable stem`);
+    const rawFormat = text(record.format) || text(record.type);
+    if (!/^(?:single(?:_choice)?|multiple(?:_choice)?|multi_choice|matching|true_false|boolean|fill_blank|short_answer|scenario_task)$/iu.test(rawFormat)) {
+      throw new Error(`quiz question ${index + 1} has an unsupported runtime format`);
+    }
+    const format = semanticFormat(rawFormat, rawFormat);
+    let id = text(record.id) || `q_${index + 1}`;
+    if (ids.has(id)) {
+      id = `q_${index + 1}`;
+      let suffix = 2;
+      while (ids.has(id) || reservedIds.has(id)) id = `q_${index + 1}_${suffix++}`;
+    }
+    ids.add(id);
+    const knowledgePointIds = stringIds(record.knowledgePointIds, 'knowledgePointIds');
+    const teachingUnitIds = stringIds(record.teachingUnitIds, 'teachingUnitIds');
+    const analysis = typeof record.analysis === 'string' ? record.analysis
+      : typeof record.explanation === 'string' ? record.explanation : undefined;
+    const base = { id, question, format, ...(knowledgePointIds ? { knowledgePointIds } : {}),
+      ...(teachingUnitIds ? { teachingUnitIds } : {}), ...(analysis !== undefined ? { analysis } : {}),
+      ...(typeof record.points === 'number' && Number.isFinite(record.points) && record.points > 0
+        ? { points: record.points } : {}) };
+    if (format === 'short_answer' || format === 'fill_blank' || format === 'scenario_task') {
+      const authoredRubric = typeof record.commentPrompt === 'string' ? record.commentPrompt : '';
+      const referenceAnswer = typeof record.referenceAnswer === 'string' ? record.referenceAnswer : '';
+      const commentPrompt = [authoredRubric, referenceAnswer ? `参考答案：${referenceAnswer}` : ''].filter(Boolean).join('\n');
+      return { ...base, type: 'short_answer', ...(commentPrompt ? { commentPrompt } : {}), hasAnswer: false };
+    }
+    if (format === 'matching') {
+      const rawPairs = record.matchingPairs ?? record.pairs;
+      if (!Array.isArray(rawPairs) || !rawPairs.length) throw new Error(`quiz question ${index + 1} has no matching pairs`);
+      const matchingPairs = rawPairs.map((value, pairIndex): QuizMatchingPair => {
+        if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('quiz matching pair must be an object');
+        const pair = value as Record<string, unknown>;
+        const left = text(pair.left) || text(pair.term) || text(pair.source) || text(pair.prompt);
+        const right = text(pair.right) || text(pair.definition) || text(pair.target) || text(pair.match);
+        if (!left || !right) throw new Error('quiz matching pair has no displayable text');
+        return { leftId: text(pair.leftId) || `L${pairIndex + 1}`, left,
+          rightId: text(pair.rightId) || `R${pairIndex + 1}`, right };
+      });
+      if (new Set(matchingPairs.map((pair) => pair.leftId)).size !== matchingPairs.length
+        || new Set(matchingPairs.map((pair) => pair.rightId)).size !== matchingPairs.length) {
+        throw new Error('quiz matching pair ids must be unique');
+      }
+      return { ...base, type: 'matching', matchingPairs,
+        answer: matchingPairs.map((pair) => `${pair.leftId}:${pair.rightId}`), hasAnswer: true };
+    }
+    const options: QuizOption[] = format === 'true_false'
+      ? [{ value: 'true', label: '正确' }, { value: 'false', label: '错误' }]
+      : Array.isArray(record.options) ? record.options.map((option, optionIndex): QuizOption => {
+          const fallback = String.fromCharCode(65 + optionIndex);
+          if (typeof option === 'string' && option.trim()) return { value: fallback, label: option };
+          if (!option || typeof option !== 'object' || Array.isArray(option)) throw new Error('quiz option must contain displayable text');
+          const raw = option as Record<string, unknown>;
+          const label = text(raw.label) || text(raw.text) || text(raw.value);
+          if (!label) throw new Error('quiz option must contain displayable text');
+          return { value: text(raw.value) || fallback, label };
+        }) : [];
+    if (!options.length || new Set(options.map((option) => option.value)).size !== options.length) {
+      throw new Error(`quiz question ${index + 1} has missing or ambiguous option ids`);
+    }
+    const answers = answerArray(record).map((answer) => format === 'true_false'
+      ? /^(true|正确|对|是|1)$/iu.test(answer) ? 'true'
+        : /^(false|错误|错|否|0)$/iu.test(answer) ? 'false' : answer
+      : options.find((option) => option.value === answer || option.label === answer)?.value ?? answer);
+    if (answers.some((answer) => !options.some((option) => option.value === answer))) {
+      throw new Error(`quiz question ${index + 1} references an unknown answer option`);
+    }
+    return { ...base, type: format === 'multiple_choice' ? 'multiple' : 'single', options,
+      ...(answers.length ? { answer: answers } : {}), hasAnswer: answers.length > 0 };
+  });
+}
+
 export function normalizeQuizQuestions(
   input: unknown,
   config: {

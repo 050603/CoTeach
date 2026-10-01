@@ -42,6 +42,8 @@ interface OutlinesEditorProps {
   alwaysReview?: boolean;
   onAlwaysReviewChange?: (enabled: boolean) => void;
   isLoading?: boolean;
+  /** Browse saved outlines without changing the generation plan. */
+  readOnly?: boolean;
   /** SSE is still pumping outlines into this editor — render read-only. */
   isStreaming?: boolean;
   /** Collapse the editor back to the preview surface (small streaming card / outline-ready). */
@@ -147,6 +149,7 @@ export function OutlinesEditor({
   alwaysReview = false,
   onAlwaysReviewChange,
   isLoading = false,
+  readOnly = false,
   isStreaming = false,
   onCollapse,
   hideHeader = false,
@@ -166,7 +169,7 @@ export function OutlinesEditor({
   const lastScrollTargetRef = useRef<string | null>(null);
   // 用户是否手动滚动浏览——为 true 时暂停自动跟随，避免打断阅读
   const userScrolledAwayRef = useRef(false);
-  const editingDisabled = isLoading || isStreaming;
+  const editingDisabled = readOnly || isLoading || isStreaming;
   const lastOutlineId = outlines.length > 0 ? outlines[outlines.length - 1].id : null;
   const scriptGroupIds = [...new Set(outlines.map(scriptGroupId))];
 
@@ -405,7 +408,7 @@ export function OutlinesEditor({
           <EmptyState isStreaming={isStreaming} disabled={editingDisabled} onAdd={addOutline} />
         ) : (
           <ol className="flex flex-col py-1">
-            {!scriptWorkspace && !isStreaming && (
+            {!scriptWorkspace && !isStreaming && !readOnly && (
               <InsertDivider
                 onClick={() => insertOutlineAt(0)}
                 disabled={editingDisabled}
@@ -431,7 +434,7 @@ export function OutlinesEditor({
                         <span className="truncate text-sm font-bold text-stone-900">{parentTitle || outline.lectureSectionTitle?.trim() || outline.title?.trim() || outline.stageLabel || '补充内容'}</span>
                       </li>
                     ) : null}
-                    {scriptWorkspace && parentChanged && !isStreaming ? (
+                    {scriptWorkspace && parentChanged && !isStreaming && !readOnly ? (
                       <InsertDivider
                         onClick={() => insertOutlineAt(index, outline)}
                         disabled={editingDisabled}
@@ -473,7 +476,7 @@ export function OutlinesEditor({
                         setDragOverId(null);
                       }}
                     />
-                    {!isStreaming && (
+                    {!isStreaming && !readOnly && (
                       <InsertDivider
                         onClick={() => insertOutlineAt(index + 1, scriptWorkspace ? outline : undefined)}
                         disabled={editingDisabled}
@@ -496,7 +499,7 @@ export function OutlinesEditor({
       </div>
 
       {/* Footer */}
-      {!hideFooter && (
+      {!hideFooter && !readOnly && (
       <div className="relative flex flex-col gap-3 border-t border-stone-200 bg-stone-50/50 px-5 py-4 md:flex-row md:items-center md:justify-between md:px-6 md:py-4">
         <label
           className={cn(

@@ -25,6 +25,7 @@ export type NewSystemReadinessCheck = {
 };
 
 export type NewSystemAiDurationRecommendation = {
+  qualityDiagnostics?: string[];
   durationMin: number;
   rationale: string;
   confidence: PblTimingRecommendationConfidence;

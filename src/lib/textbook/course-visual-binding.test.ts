@@ -14,6 +14,7 @@ import {
 import type { TeachingBlueprint } from '@/lib/session/types';
 import { teachingBlueprintToOutlines } from '@/lib/course-design/teaching-blueprint';
 import realFirstDraft from './__fixtures__/teaching-methods-first-draft.json';
+import { compactSourceSequenceText, findSourceSequenceLabelPosition, hasSourceSequenceLabel } from './source-sequence-label';
 
 const pages: SceneOutline[] = [
   {
@@ -33,6 +34,12 @@ const resource: CourseTextbookFigureResource = {
   required: true, evidenceItemIds: ['evidence-1'], knowledgePointIds: ['kp-1'],
   sourceTitle: '人工智能教学', status: 'available',
 };
+
+function authoredBrief(text: string): NonNullable<SceneOutline['teachingBrief']> {
+  return { schemaVersion: 1, explanation: text, examples: [], conditions: [], evidence: [], assessmentFocus: '',
+    teachingPlan: { purpose: text, priorKnowledge: '', newContent: text, learnerQuestion: '', reasoningSteps: [],
+      takeaway: text, visibleContent: [text], narrationFocus: [text], sourceSequenceUses: [] } };
+}
 
 function sequenceBlueprint(labels: readonly string[]): TeachingBlueprint {
   return {
@@ -66,7 +73,163 @@ function sequenceBlueprint(labels: readonly string[]): TeachingBlueprint {
   };
 }
 
+it('uses the same actual selected textbook framework in blueprints and compiled outlines', () => {
+  const sourceA = { resourceId: 'book-a-flow', required: false, coveragePolicy: 'authored-scope' as const,
+    knowledgePointIds: ['kp-1'], scope: 'knowledge-point' as const,
+    orderedSteps: ['观察', '猜想', '验证'].map((label, index) => ({ label, sourceBlockId: `a${index}` })) };
+  const sourceB = { ...sourceA, resourceId: 'book-b-flow',
+    orderedSteps: ['猜想', '观察', '验证'].map((label, index) => ({ label, sourceBlockId: `b${index}` })) };
+  const blueprint = sequenceBlueprint(['流程包括猜想→观察→验证。']);
+  blueprint.sections[0]!.pages[0]!.sourceSequenceUses = [{ resourceId: sourceB.resourceId, coverage: 'complete' }];
+  expect(findBlueprintFigureSequenceIssues(blueprint, [sourceA, sourceB])).toEqual([]);
+  const outlines = teachingBlueprintToOutlines(blueprint, '简体中文');
+  expect(outlines[0]!.teachingBrief!.teachingPlan!.sourceSequenceUses)
+    .toEqual([{ resourceId: sourceB.resourceId, coverage: 'complete' }]);
+  expect(() => assertSourceSequencesInOutlines(outlines, [sourceA, sourceB])).not.toThrow();
+  const undeclared = structuredClone(blueprint);
+  undeclared.sections[0]!.pages[0]!.sourceSequenceUses = [];
+  expect(findBlueprintFigureSequenceIssues(undeclared, [sourceA, sourceB])[0]?.detail).toContain('须声明 sourceSequenceUses');
+  const incomplete = structuredClone(blueprint);
+  incomplete.sections[0]!.units[0]!.explanationNodes![0]!.content = '流程包括猜想→验证。';
+  incomplete.sections[0]!.pages[0]!.keyPoints = ['流程包括猜想→验证。'];
+  expect(findBlueprintFigureSequenceIssues(incomplete, [sourceA, sourceB])[0]?.missingCanonicalLabels).toEqual(['观察']);
+  expect(() => assertSourceSequencesInOutlines(teachingBlueprintToOutlines(incomplete, '简体中文'), [sourceA, sourceB]))
+    .toThrow('遗漏教材步骤：观察');
+});
+
 describe('required textbook figure binding', () => {
+  it('keeps the measured authored image owner when an earlier sibling also names the complete source flow', () => {
+    const labels = ['观察现象', '收集证据', '解释结果'];
+    const figure = { ...resource, orderedSteps: labels.map((label, index) => ({ label, sourceBlockId: `step-${index}` })) };
+    const measured: SceneOutline[] = [
+      { ...pages[0]!, teachingBrief: authoredBrief(labels.join('→')), sectionPlanVersion: 'accepted-layout', sourcePageIds: ['authored-page'],
+        keyPoints: [labels.join('→')] },
+      { ...pages[1]!, id: 'allocated-image', teachingBrief: authoredBrief('结合原图解释收集证据的作用'), sectionPlanVersion: 'accepted-layout',
+        sourcePageIds: ['authored-page'], keyPoints: ['结合原图解释收集证据的作用'], suggestedImageIds: [figure.id],
+        visualIntent: { representation: 'mixed', observationGoal: '结合原图解释收集证据的作用',
+          resourceRefs: [{ resourceId: figure.id, kind: 'source-image', required: true,
+            observationGoal: '比较图中证据与结论', reason: '这一观察承担本页解释' }] } },
+    ];
+    const bound = bindRequiredTextbookFiguresToOutlines(measured, [figure]);
+    expect(bound[0]).toEqual(measured[0]);
+    expect(bound[1]!.suggestedImageIds).toEqual([figure.id]);
+    expect(bound[1]!.keyPoints).toEqual(measured[1]!.keyPoints);
+    expect(bound[1]!.visualIntent!.resourceRefs![0]!.observationGoal).toBe('比较图中证据与结论');
+    expect(bindRequiredTextbookFiguresToOutlines(bound, [figure])).toEqual(bound);
+  });
+
+  it('preserves repeated authored observations and binds multipart originals to their actual selected pages', () => {
+    const part = { ...resource, groupKey: 'original-composite' };
+    const secondPart = { ...part, id: 'textbook_fig_2', assetId: 'asset-2', figureId: 'figure-2' };
+    const selected = [
+      { ...pages[0]!, teachingBrief: authoredBrief('解释机制'), suggestedImageIds: [] },
+      { ...pages[1]!, teachingBrief: authoredBrief('观察机制'), suggestedImageIds: [part.assetId!] },
+      { ...pages[1]!, id: 'compare-again', teachingBrief: authoredBrief('再次比较机制'), suggestedImageIds: [part.id] },
+    ];
+    const bound = bindRequiredTextbookFiguresToOutlines(selected, [part, secondPart]);
+    expect(bound[0]).toEqual(selected[0]);
+    for (const page of bound.slice(1)) expect(page.suggestedImageIds).toEqual([part.id, secondPart.id]);
+    expect(bindRequiredTextbookFiguresToOutlines(bound, [part, secondPart])).toEqual(bound);
+    expect(bindRequiredTextbookFiguresToOutlines(selected, [])).toEqual(selected);
+  });
+
+  it('keeps explicit blueprint image selection stable when compiling and rebinding a measured plan', () => {
+    const blueprint = sequenceBlueprint(['观察', '收集', '解释']);
+    const section = blueprint.sections[0]!;
+    const overview = section.pages[0]!;
+    overview.sourceSequenceUses = [];
+    overview.sectionPlanVersion = 'accepted-layout';
+    const observation = { ...structuredClone(overview), id: 'authored-observation', introducesNodeIds: [],
+      deepensNodeIds: ['owned-node'], resourceNeeds: [{ kind: 'source-image' as const,
+        assetId: resource.id, required: true, purpose: '比较图中两组证据' }] };
+    section.pages.push(observation);
+    const bound = bindRequiredTextbookFiguresToBlueprint(blueprint, [resource]);
+    expect(bound.sections[0]!.pages[0]).toEqual(overview);
+    expect(bound.sections[0]!.pages[1]!.resourceNeeds![0]!.purpose).toBe('比较图中两组证据');
+    const compiled = teachingBlueprintToOutlines(bound, '简体中文');
+    const rebound = bindRequiredTextbookFiguresToOutlines(compiled, [resource]);
+    expect(rebound[0]!.suggestedImageIds ?? []).toEqual([]);
+    expect(rebound[1]!.suggestedImageIds).toEqual([resource.id]);
+    expect(bindRequiredTextbookFiguresToBlueprint(bound, [resource])).toEqual(bound);
+    expect(bindRequiredTextbookFiguresToOutlines(rebound, [resource])).toEqual(rebound);
+  });
+
+  it('preserves the measured concept and original-image responsibility ahead of a text-only fragment', () => {
+    const blueprint = sequenceBlueprint(['样本是由总体中实际选出的对象组成的集合。']);
+    const section = blueprint.sections[0]!;
+    const original = section.pages[0]!;
+    Object.assign(original, { sectionPlanVersion: 'measured-1', sourcePageIds: ['source-page'],
+      resourceNeeds: [{ kind: 'source-image', assetId: resource.id, required: true, purpose: '观察样本与总体' }] });
+    section.pages.unshift({ ...original, id: 'fragment', introducesNodeIds: [], resourceNeeds: [],
+      keyPoints: ['先观察图上的对象'], caseObservation: { kind: 'none', imageWouldHelp: false,
+        observableDifference: '', reason: '这一文字片段不承担完整概念观察。' } });
+    const bound = bindRequiredTextbookFiguresToBlueprint(blueprint, [resource]);
+    expect(bound.sections[0]!.pages[0]!.resourceNeeds).toEqual([]);
+    expect(bound.sections[0]!.pages[1]!.resourceNeeds?.[0]?.assetId).toBe(resource.id);
+    const compiled = teachingBlueprintToOutlines(bound, '简体中文');
+    const once = bindRequiredTextbookFiguresToOutlines(compiled, [resource]);
+    const twice = bindRequiredTextbookFiguresToOutlines(once, [resource]);
+    expect(once[0]!.visualIntent?.resourceRefs).toBeUndefined();
+    expect(once[1]!.visualIntent?.resourceRefs?.map((ref) => ref.resourceId)).toEqual([resource.id]);
+    expect(twice).toEqual(once);
+    const displaced = once.map((page) => structuredClone(page));
+    displaced[0]!.visualIntent!.resourceRefs = displaced[1]!.visualIntent!.resourceRefs;
+    displaced[0]!.suggestedImageIds = [resource.id];
+    displaced[1]!.visualIntent!.resourceRefs = [];
+    displaced[1]!.suggestedImageIds = [];
+    displaced[1]!.teachingBrief!.resourceNeeds = [];
+    const restored = bindRequiredTextbookFiguresToOutlines(displaced, [resource]);
+    expect(restored[0]!.suggestedImageIds).toBeUndefined();
+    expect(restored[1]!.suggestedImageIds).toEqual([resource.id]);
+    // A measured media receipt without an actual owner cannot move the first
+    // teaching duty away from the earlier complete explanation.
+    const unowned = once.map((page) => structuredClone(page));
+    unowned[1]!.teachingBrief!.teachingPlan!.introduces = [];
+    unowned[1]!.teachingBrief!.teachingPlan!.deepens = [];
+    expect(bindRequiredTextbookFiguresToOutlines(unowned, [resource])[0]!.suggestedImageIds).toEqual([resource.id]);
+  });
+  it('checks a complete paged list against executed content while retaining a private subset selection reason', () => {
+    const labels = ['明确用途', '核对来源', '保留条件', '检查证据', '记录调整'];
+    const contract = { resourceId: 'source-sequence:record-principles', required: true, knowledgePointIds: ['kp-1'],
+      scope: 'knowledge-point' as const, sequenceSemantics: 'enumerated-items' as const,
+      orderedSteps: labels.map((label) => ({ label })) };
+    const blueprint = sequenceBlueprint(labels);
+    const section = blueprint.sections[0]!;
+    const unit = section.units[0]!;
+    unit.explanationNodes![0]!.content = `清单共有五条原则，本页先讲前四条原则：${labels.slice(0, 4).join('、')}。`;
+    unit.explanationNodes!.push({ ...unit.explanationNodes![0]!, id: 'last-principle',
+      content: `第五条原则是${labels[4]}，依据现场证据保留可核对的调整理由。` });
+    const first = section.pages[0]!;
+    first.description = '先讲同一清单前四条原则，剩余第五条由下一页展开。';
+    first.keyPoints = labels.slice(0, 4);
+    first.visualRelationship = { kind: 'statement', preferredForm: 'text', description: '前四条原则的并列要求',
+      readingOrder: [], rationale: `四条原则是并列主张，适合分组文字；${labels[4]}留在下一页展开。` };
+    section.pages.push({ ...first, id: 'last-principle-page', introducesNodeIds: ['last-principle'],
+      description: '继续展开同一清单第五条原则。', keyPoints: [labels[4]!],
+      visualRelationship: { ...first.visualRelationship, description: '第五条原则的含义', rationale: '文字解释便于保留具体条件。' } });
+    const original = structuredClone(blueprint);
+    expect(findBlueprintFigureSequenceIssues(blueprint, [contract])).toEqual([]);
+    expect(blueprint).toEqual(original);
+    const outlines = teachingBlueprintToOutlines(blueprint, '使用简体中文');
+    expect(outlines[0]!.visualIntent?.rationale).toBe(first.visualRelationship.rationale);
+    expect(() => assertSourceSequencesInOutlines(outlines, [contract])).not.toThrow();
+    expect(unit.explanationNodes).toEqual(original.sections[0]!.units[0]!.explanationNodes);
+    for (const location of ['visible', 'owned'] as const) {
+      const wrong = structuredClone(blueprint);
+      if (location === 'visible') wrong.sections[0]!.pages[0]!.keyPoints.unshift('本清单只有四条原则。');
+      else wrong.sections[0]!.units[0]!.explanationNodes![0]!.content = `本清单只有四条原则。${unit.explanationNodes![0]!.content}`;
+      expect(findBlueprintFigureSequenceIssues(wrong, [contract]).map((issue) => issue.detail))
+        .toContain('写成 4 条，教材正文清单为 5 条');
+    }
+    const incomplete = structuredClone(blueprint);
+    incomplete.sections[0]!.units[0]!.explanationNodes![1]!.content = '现场证据需要保留可核对的处理理由。';
+    incomplete.sections[0]!.pages[1]!.keyPoints = ['依据现场证据处理'];
+    // A required name surviving only in the private reason cannot supply the
+    // missing fact to the executed page or narration projection.
+    expect(findBlueprintFigureSequenceIssues(incomplete, [contract]).map((issue) => issue.detail))
+      .toContain(`遗漏教材条目：${labels[4]}`);
+  });
+
   it('accepts the real first draft with an equivalent quoted action and two independent lists sharing an ending', () => {
     const evidence = realFirstDraft.evidence as CourseEvidenceSnapshot;
     expect(findKnowledgeSourceSequenceIssues([realFirstDraft.point], evidence)).toEqual([]);
@@ -113,7 +276,58 @@ describe('required textbook figure binding', () => {
       .toContain('辅助顺序图未完整保留教材的 3 个步骤');
   });
 
-  it('rejects a five-stage diagram when the adopted original and text have six', () => {
+  it.each(['式', '型', '法'])('keeps a licensed action separate from a later %s method name in text and knowledge summaries', (suffix) => {
+    const orderedSteps = ['观察', '进行“归纳”', '验证'].map((label, index) => ({ label, sourceBlockId: `step-${index}` }));
+    const statements = ['流程是观察、归纳、验证。',
+      `第三个环节是验证，归纳${suffix}过程可以用记录帮助核对最终结果。`];
+    const evidence: CourseEvidenceSnapshot = {
+      schemaVersion: 2, version: 1, fingerprint: 'source-process', createdAt: '2026-09-30T00:00:00Z',
+      retrievalMode: 'hybrid', selections: [], mappings: [], warnings: [],
+      items: [{ id: 'source-process', kind: 'source-block', title: '证据核对流程', content: statements.join(''),
+        source: { textbookId: 'source-book', textbookTitle: '证据核对', revisionId: 'source-revision',
+          revisionVersion: 1, sectionPath: ['证据核对流程'] },
+        sourceSequences: [{ kind: 'ordered-steps', anchorSourceBlockId: 'process-anchor', steps: orderedSteps }] }],
+    };
+    const point = { id: 'process', name: '证据核对', description: statements.join(''), evidenceItemIds: ['source-process'] };
+    expect(inspectFigureSequence({ orderedSteps, statements, requireCompleteText: true })).toEqual([]);
+    expect(findKnowledgeSourceSequenceIssues([point], evidence)).toEqual([]);
+
+    // An earlier method name cannot hide a real reversal later in this same
+    // source enumeration, or stand in for a step that is never taught.
+    const reversed = `归纳${suffix}过程的步骤是观察、验证、归纳。`;
+    expect(inspectFigureSequence({ orderedSteps, statements: [reversed], requireCompleteText: true }))
+      .toContain('正文流程未保留教材的 3 个步骤顺序');
+    expect(findKnowledgeSourceSequenceIssues([{ ...point, description: reversed }], evidence).join('；'))
+      .toContain('摘要步骤未保留教材的 3 个步骤顺序');
+    const missing = `流程是观察、验证，归纳${suffix}过程的名称不能代替中间步骤。`;
+    expect(inspectFigureSequence({ orderedSteps, statements: [missing], requireCompleteText: true }))
+      .toContain('遗漏教材步骤：进行“归纳”');
+    expect(findKnowledgeSourceSequenceIssues([{ ...point, description: missing }], evidence).join('；'))
+      .toContain('遗漏教材步骤：进行“归纳”');
+  });
+
+  it('locates the first licensed action across full and short spellings without removing unlicensed modifiers', () => {
+    const label = '进行“归纳”';
+    const cases = [
+      { prefix: '归纳式过程要求先观察，再', action: '归纳', suffix: '，验证后进行归纳。' },
+      { prefix: '归纳法要求先观察，再', action: '进行 归纳', suffix: '，随后验证。' },
+      { prefix: '归纳型流程要求先观察，再', action: '进行“归纳”', suffix: '，随后验证。' },
+    ];
+    for (const { prefix, action, suffix } of cases) {
+      const text = `${prefix}${action}${suffix}`;
+      expect(findSourceSequenceLabelPosition(text, label)).toBe(compactSourceSequenceText(prefix).length);
+      expect(hasSourceSequenceLabel(text, label)).toBe(true);
+    }
+    const methodNames = '归纳式过程、归纳型活动与归纳法不是独立的步骤说明。';
+    expect(findSourceSequenceLabelPosition(methodNames, label)).toBe(-1);
+    expect(hasSourceSequenceLabel(methodNames, label)).toBe(false);
+    for (const unlicensed of ['进行归纳', '独立归纳']) {
+      expect(findSourceSequenceLabelPosition('先观察，然后归纳，最后验证。', unlicensed)).toBe(-1);
+      expect(hasSourceSequenceLabel('先观察，然后归纳，最后验证。', unlicensed)).toBe(false);
+    }
+  });
+
+  it('leaves content completeness to explicit review while binding the authored first draft', () => {
     const sixStages = ['选择项目', '制定计划', '活动探究', '制作作品', '成果交流', '活动评价'];
     const sourceFigure = { ...resource, orderedSteps: sixStages.map((label, index) => ({
       label, sourceBlockId: `block-${index + 1}`,
@@ -126,7 +340,9 @@ describe('required textbook figure binding', () => {
           id: `n-${index}`, label,
         })), edges: [], annotation: '五个环节' } },
     };
-    expect(() => bindRequiredTextbookFiguresToOutlines([fiveStagePage], [sourceFigure]))
+    expect(bindRequiredTextbookFiguresToOutlines([fiveStagePage], [sourceFigure])[0]?.keyPoints)
+      .toEqual(fiveStagePage.keyPoints);
+    expect(() => bindRequiredTextbookFiguresToOutlines([fiveStagePage], [sourceFigure], [], { reviewContent: true }))
       .toThrow(/遗漏教材步骤|写成 5 个环节/);
     const corrected: SceneOutline = { ...fiveStagePage, description: '项目式教学有六个基本流程环节',
       keyPoints: [sixStages.join('、')], visualIntent: { ...fiveStagePage.visualIntent!,
@@ -208,7 +424,7 @@ describe('required textbook figure binding', () => {
       orderedSteps: figure.orderedSteps }];
     expect(findBlueprintFigureSequenceIssues(blueprint, contracts).map((issue) => issue.detail))
       .toEqual(['遗漏教材步骤：形成结论']);
-    expect(() => bindRequiredTextbookFiguresToOutlines(teachingBlueprintToOutlines(blueprint, ''), [figure]))
+    expect(() => bindRequiredTextbookFiguresToOutlines(teachingBlueprintToOutlines(blueprint, ''), [figure], [], { reviewContent: true }))
       .toThrow('形成结论');
     page.deepensNodeIds = ['referenced-node'];
     page.referencesNodeIds = [];
@@ -248,7 +464,10 @@ describe('required textbook figure binding', () => {
     expect(section.pages[0]!.introducesNodeIds).toEqual(['theory-node']);
 
     const figureContract = { ...contracts[0]!, resourceId: 'first-page-figure', scope: 'single-page' as const };
-    expect(findBlueprintFigureSequenceIssues(blueprint, [figureContract])[0]?.pageId).toBe('theory-page');
+    expect(findBlueprintFigureSequenceIssues(blueprint, [figureContract])).toEqual([]);
+    unit.explanationNodes![0]!.content = labels.slice(1).join('，');
+    expect(findBlueprintFigureSequenceIssues(blueprint, [figureContract]).map((issue) => issue.detail).join('；'))
+      .toContain('遗漏教材条目');
   });
 
   it('uses the accepted section brief instead of discarded original nodes or keyPoints', () => {
@@ -664,6 +883,54 @@ describe('required textbook figure binding', () => {
     expect(result[1]?.suggestedImageIds).toBeUndefined();
   });
 
+  it('binds a first-draft sequence figure to its actual procedure page after a separate concept overview', () => {
+    const labels = ['确定检查对象', '核对原始记录', '保存核对结论'];
+    const blueprint = sequenceBlueprint(labels);
+    const section = blueprint.sections[0]!;
+    const overview = section.pages[0]!;
+    section.units[0]!.explanationNodes!.push({ id: 'definition-node', kind: 'concept',
+      content: '记录核对是依据原始证据确认信息一致性的过程。', knowledgePointIds: ['kp-1'],
+      prerequisiteNodeIds: [], provenance: 'course-source' });
+    overview.title = '记录核对';
+    overview.introducesNodeIds = ['definition-node'];
+    overview.keyPoints = ['记录核对依据原始证据确认信息一致性。'];
+    const procedure = { ...structuredClone(overview), id: 'procedure-page', title: '记录核对的步骤',
+      introducesNodeIds: ['owned-node'], keyPoints: [...labels] };
+    section.pages.push(procedure);
+    const figure = { ...resource, orderedSteps: labels.map((label, index) => ({ label, sourceBlockId: `step-${index}` })) };
+    const contract = { resourceId: figure.id, required: true, knowledgePointIds: ['kp-1'],
+      orderedSteps: figure.orderedSteps, scope: 'single-page' as const };
+
+    expect(findBlueprintFigureSequenceIssues(blueprint, [contract])).toEqual([]);
+    const bound = bindRequiredTextbookFiguresToBlueprint(blueprint, [figure]);
+    expect(bound.sections[0]!.pages[0]!.resourceNeeds ?? []).toEqual([]);
+    expect(bound.sections[0]!.pages[1]!.resourceNeeds).toContainEqual(expect.objectContaining({
+      kind: 'source-image', assetId: figure.id, required: true }));
+    const outlines = bindRequiredTextbookFiguresToOutlines(teachingBlueprintToOutlines(bound, ''), [figure]);
+    expect(outlines.find((outline) => outline.id === overview.id)?.suggestedImageIds ?? []).toEqual([]);
+    expect(outlines.find((outline) => outline.id === procedure.id)?.suggestedImageIds).toContain(figure.id);
+
+    const measured = structuredClone(bound);
+    measured.sections[0]!.pages[0]!.sectionPlanVersion = 'section-plan';
+    measured.sections[0]!.pages[0]!.sourcePageIds = [overview.id];
+    measured.sections[0]!.pages[1]!.sectionPlanVersion = 'section-plan';
+    measured.sections[0]!.pages[1]!.sourcePageIds = [procedure.id];
+    const measuredOutlines = bindRequiredTextbookFiguresToOutlines(teachingBlueprintToOutlines(measured, ''), [figure]);
+    expect(measuredOutlines.find((outline) => outline.id === overview.id)?.suggestedImageIds ?? []).toEqual([]);
+    expect(measuredOutlines.find((outline) => outline.id === procedure.id)?.suggestedImageIds).toContain(figure.id);
+
+    const incomplete = structuredClone(blueprint);
+    incomplete.sections[0]!.units[0]!.explanationNodes![0]!.content = labels.slice(0, 2).join('，');
+    incomplete.sections[0]!.pages[1]!.keyPoints = labels.slice(0, 2);
+    expect(findBlueprintFigureSequenceIssues(incomplete, [contract]).map((issue) => issue.detail).join('；'))
+      .toContain('遗漏教材步骤');
+    const reversed = structuredClone(blueprint);
+    reversed.sections[0]!.units[0]!.explanationNodes![0]!.content = `流程是${[...labels].reverse().join(' → ')}`;
+    reversed.sections[0]!.pages[1]!.keyPoints = [`流程是${[...labels].reverse().join(' → ')}`];
+    expect(findBlueprintFigureSequenceIssues(reversed, [contract]).map((issue) => issue.detail).join('；'))
+      .toContain('3 个步骤顺序');
+  });
+
   it('keeps a measured original on the sibling that actually owns its full teaching sequence', () => {
     const labels = ['选择项目', '制定计划', '活动探究', '制作作品', '成果交流', '活动评价'];
     const blueprint = sequenceBlueprint(labels);
@@ -724,8 +991,10 @@ describe('required textbook figure binding', () => {
     });
   });
 
-  it('fails before generation when no teaching slide can own a mandatory original', () => {
-    expect(() => bindRequiredTextbookFiguresToOutlines([{ ...pages[0]!, type: 'interactive' }], [resource]))
+  it('reports a missing teaching-slide owner only during explicit content review', () => {
+    const firstDraft = [{ ...pages[0]!, type: 'interactive' as const }];
+    expect(bindRequiredTextbookFiguresToOutlines(firstDraft, [resource])).toEqual(firstDraft);
+    expect(() => bindRequiredTextbookFiguresToOutlines(firstDraft, [resource], [], { reviewContent: true }))
       .toThrow('没有可绑定的首次知识讲解页');
   });
 

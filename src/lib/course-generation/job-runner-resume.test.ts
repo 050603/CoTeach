@@ -79,14 +79,15 @@ describe('explicit checkpoint recovery lifecycle notification', () => {
     expect(patch.data).not.toHaveProperty('tokenUsageCalls');
   });
 
-  it('stops before spending when an old source failure cannot be attributed to a current page contract', async () => {
-    mocks.findUnique.mockResolvedValue(failed);
+  it('keeps historical content diagnoses from blocking the normal technical resume', async () => {
+    const queued = { ...failed, status: 'queued', version: 8 };
+    mocks.findUnique.mockResolvedValueOnce(failed).mockResolvedValueOnce(queued);
+    mocks.replace.mockResolvedValue(queued);
     mocks.checkpoints.mockResolvedValue({ pages: [], stages: [], stageAttempts: [],
       sourceContents: [{ status: 'infeasible', sectionId: 'old-section', issues: [] }] });
-    await expect(requeueCourseGenerationFromCheckpoints('course', { regenerateFailedStages: true }))
-      .rejects.toMatchObject({ code: 'COURSE_SOURCE_EDIT_REQUIRED' });
-    expect(mocks.replace).not.toHaveBeenCalled();
-    expect(mocks.updateCourse).not.toHaveBeenCalled();
+    await expect(requeueCourseGenerationFromCheckpoints('course', { regenerateFailedStages: true })).resolves.toBe(queued);
+    expect(mocks.replace.mock.calls[0][0].checkpointPolicy.steps).toEqual([]);
+    expect(mocks.updateCourse).toHaveBeenCalledOnce();
   });
 
   it.each(['queued', 'running', 'completed'])('does not write or notify an already %s job', async (status) => {

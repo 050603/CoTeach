@@ -135,6 +135,15 @@ async function main(): Promise<void> {
       const completeEvidence = course.content.courseEvidence ? { ...course.content.courseEvidence,
         items: await hydrateCourseEvidenceFigureReferences(course.content.courseEvidence.items) } : undefined;
       const textbookResources = await resolveCourseTextbookFigures(completeEvidence, course.content.knowledgePoints);
+      const capacityOptions = {
+        explanationNodes: course.content.teachingBlueprint?.sections
+          .flatMap((section) => section.units.flatMap((unit) => unit.explanationNodes ?? [])),
+        resourceDimensions: Object.fromEntries(textbookResources.flatMap((resource) => resource.width && resource.height
+          ? [[resource.id, { width: resource.width, height: resource.height }]] : [])),
+        resourceSequences: Object.fromEntries(textbookResources.flatMap((resource) =>
+          resource.orderedSteps?.length ? [[resource.id, resource.orderedSteps]] : [])),
+      };
+      input.teachingExplanationNodes = capacityOptions.explanationNodes;
       const sourceSequenceContracts = [
         ...textbookResources.filter((resource) => resource.required && resource.orderedSteps?.length).map((resource) => ({
           resourceId: resource.id, required: true, knowledgePointIds: resource.knowledgePointIds,
@@ -145,7 +154,7 @@ async function main(): Promise<void> {
       const selected = sectionId ? source.filter((page) => page.lectureSectionId === sectionId) : source;
       if (!selected.length) throw new Error('快照不含请求的小节');
       const assessments = [];
-      for (const page of selected.filter((page) => page.type === 'slide')) assessments.push(await evaluateSemanticPageCapacity(page));
+      for (const page of selected.filter((page) => page.type === 'slide')) assessments.push(await evaluateSemanticPageCapacity(page, capacityOptions));
       await writeJson(path.join(folder, 'capacity-before.json'), assessments);
       if (!generate) {
         results.push({ jobId: job.id, mode: 'measurement', modelCalls: 0, pagesMeasured: assessments.length,

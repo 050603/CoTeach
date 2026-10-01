@@ -11,6 +11,7 @@ vi.mock('@/lib/course-quality-review/review-service', () => ({
   requiresCourseTeacherReview: () => true,
   freshQualityReport: mocks.freshQuality,
   freshRenderReview: mocks.freshRender,
+  isTechnicalStructureIssue: (issue: { title: string }) => ['课堂页面未生成', '讲授页面缺少实际讲稿'].includes(issue.title),
   confirmCourseTeacherReview: mocks.confirm,
   saveCourseRenderPage: mocks.save,
   startCourseRenderReview: mocks.startRender,
@@ -52,11 +53,12 @@ describe('optional teacher checks', () => {
     expect(body.reviewScope).toEqual({ kind: 'test-lesson', checkedSectionId: 'unit-a', checkedSectionTitle: '方法基础',
       checkedOutlineIds: ['parent-a', 'parent-b'], uncheckedOutlineCount: 6, unreviewedSectionCount: 2 });
   });
-  it('always returns deterministic publication blockers without starting the optional review', async () => {
+  it('reports unsolved knowledge coverage as a diagnostic without starting or blocking on another review', async () => {
     mocks.structureIssues.mockReturnValue([{ id: 'hard', origin: 'structure', severity: 'error', blocking: true, title: '必需知识缺少讲授页面', evidence: '知识点 A', suggestion: '补齐讲授页' }]);
     const response = await GET(new Request(url), context);
     expect(await response.json()).toMatchObject({
-      blockingIssues: [expect.objectContaining({ id: 'hard', blocking: true })],
+      blockingIssues: [],
+      qualityDiagnostics: [expect.objectContaining({ id: 'hard', blocking: false, title: '必需知识缺少讲授页面' })],
     });
     expect(mocks.enqueue).not.toHaveBeenCalled();
   });
@@ -71,13 +73,13 @@ describe('optional teacher checks', () => {
     expect(mocks.enqueue).toHaveBeenCalledExactlyOnceWith('course', { mode: 'retry' });
   });
   it('returns only live structural publication blockers when an optional report is stale', async () => {
-    mocks.structureIssues.mockReturnValue([{ id: 'live', origin: 'structure', severity: 'error', blocking: true, title: '缺少实际讲稿', evidence: '页 A', suggestion: '补齐' }]);
+    mocks.structureIssues.mockReturnValue([{ id: 'live', origin: 'structure', severity: 'error', blocking: true, title: '讲授页面缺少实际讲稿', evidence: '页 A', suggestion: '补齐' }]);
     mocks.freshQuality.mockReturnValue({ status: 'completed', issues: [
       { id: 'live', origin: 'structure', severity: 'error', blocking: true, title: '旧证据', evidence: '', suggestion: '' },
       { id: 'old', origin: 'semantic', severity: 'error', blocking: true, title: '旧规则阻断', evidence: '', suggestion: '' },
     ] });
     const body = await (await GET(new Request(url), context)).json();
-    expect(body.blockingIssues).toEqual([expect.objectContaining({ id: 'live', title: '缺少实际讲稿' })]);
+    expect(body.blockingIssues).toEqual([expect.objectContaining({ id: 'live', title: '讲授页面缺少实际讲稿' })]);
     expect(body.quality.issues).toEqual([expect.objectContaining({ id: 'old', blocking: false, severity: 'suggestion' })]);
   });
   it('never treats saved browser measurements as publication blockers', async () => {

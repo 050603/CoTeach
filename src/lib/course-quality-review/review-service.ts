@@ -4,11 +4,11 @@ import type { Course } from '@/lib/session/types';
 import { getCourse, updateCourse } from '@/lib/session/server-store';
 import { isValidClassroomId, readClassroom, type PersistedClassroomData } from '@/lib/openmaic/server/classroom-storage';
 import { getNewSystemCourseReadiness } from '@/lib/classroom/new-system-course';
-import { auditCourseGeneratedResources } from '@/lib/course-generation/resource-audit-server';
+import { auditCourseGeneratedResources, type CourseResourceIssue } from '@/lib/course-generation/resource-audit-server';
 import { computeCourseQualitySignature } from './signature';
 import { collectCourseStructureIssues } from './semantic-review';
-import { COURSE_QUALITY_REVIEW_POLICY_VERSION, type CourseQualityReport } from './types';
-import { COURSE_RENDER_REVIEW_POLICY_VERSION, unresolvedHardIssues, type CourseRenderPageReview, type CourseRenderReview, type CourseTeacherReview } from './teacher-review';
+import { COURSE_QUALITY_REVIEW_POLICY_VERSION, type CourseQualityIssue, type CourseQualityReport } from './types';
+import { COURSE_RENDER_REVIEW_POLICY_VERSION, isAdvisoryCourseReadinessCheck, isTechnicalCourseResourceIssue, unresolvedHardIssues, type CourseRenderPageReview, type CourseRenderReview, type CourseTeacherReview } from './teacher-review';
 
 export class CourseReviewError extends Error {
   constructor(public readonly code: string, message: string, public readonly status = 409) { super(message); }
@@ -38,7 +38,7 @@ export async function loadCourseReviewContext(courseId: string) {
   const classroomId = course.aiLearningClassroomId || course.content._openmaicClassroomId;
   if (!classroomId || !isValidClassroomId(classroomId)) throw new CourseReviewError('CLASSROOM_NOT_READY', '课堂草稿尚未生成。');
   const classroom = await readClassroom(classroomId);
-  if (!classroom) throw new CourseReviewError('CLASSROOM_NOT_READY', '课堂草稿不存在。');
+  if (!classroom || !classroom.scenes.length) throw new CourseReviewError('CLASSROOM_NOT_READY', '课堂草稿不存在或没有已生成页面。');
   return { course, classroom, signature: computeCourseQualitySignature(course, classroom) };
 }
 
@@ -110,25 +110,33 @@ export async function confirmCourseTeacherReview(courseId: string, teacherId: st
   }
   if (classroom.assetGeneration?.status === 'running') throw new CourseReviewError('ASSETS_RUNNING', '课堂资源仍在生成，请完成后再确认。');
   const readiness = getNewSystemCourseReadiness(course).filter((check) => check.id !== 'teacher-review' && !check.ok);
-  if (readiness.length) throw new CourseReviewError('COURSE_NOT_READY', readiness.map((check) => check.message).join('\n'));
+  const technicalReadiness = readiness.filter((check) => !isAdvisoryCourseReadinessCheck(check.id));
+  if (technicalReadiness.length) throw new CourseReviewError('COURSE_NOT_READY', technicalReadiness.map((check) => check.message).join('\n'));
+  const diagnostics: CourseQualityIssue[] = readiness.filter((check) => !technicalReadiness.includes(check))
+    .map((check) => ({ id: `readiness:${check.id}`, origin: 'structure', severity: 'error', blocking: false,
+      title: check.label, evidence: check.message, suggestion: '按实际课程内容核对；诊断保留，不中断教师确认。' }));
   if (publish) {
     const resources = await auditCourseGeneratedResources(courseId, { course, classroom });
-    if (resources.issues.length) throw new CourseReviewError('RESOURCES_NOT_READY', '部分教学资源尚未就绪，请在预览页补齐后发布。');
+    if (resources.issues.some(isTechnicalCourseResourceIssue)) throw new CourseReviewError('RESOURCES_NOT_READY', '部分教学资源尚未就绪，请在预览页补齐后发布。');
+    diagnostics.push(...resources.issues.map(resourceQualityDiagnostic));
   }
   const quality = freshQualityReport(course, signature);
-  // Auxiliary reports never gate a teacher's confirmation. Validate only the
-  // current required teaching structure, independently of optional reports.
-  const hard = unresolvedHardIssues(collectCourseStructureIssues(course, classroom.scenes, { includePresentation: false }));
+  const structure = collectCourseStructureIssues(course, classroom.scenes, { includePresentation: false });
+  const hard = unresolvedHardIssues(structure.filter(isTechnicalStructureIssue));
   if (hard.length) throw new CourseReviewError('COURSE_HARD_ERRORS', hard.map((issue) => issue.title).join('；'));
+  diagnostics.push(...structure.filter((issue) => !isTechnicalStructureIssue(issue))
+    .map((issue) => ({ ...issue, blocking: false })));
   const render = freshRenderReview(course, signature);
-  const issues = [...(quality?.issues.filter((issue) => issue.blocking !== true) ?? []), ...(render?.pages.flatMap((page) => page.issues.filter((issue) => issue.blocking !== true)) ?? [])];
+  const issues = [...(quality?.issues ?? []), ...(render?.pages.flatMap((page) => page.issues) ?? []), ...diagnostics];
   const accepted = new Set(acceptedIssueIds);
   const unsigned: Omit<CourseTeacherReview, 'seal'> = { schemaVersion: 1, courseId, classroomId: classroom.id,
     signature, teacherId, manualContentReview: quality?.status !== 'completed' || acknowledgeFailedCheck, confirmedAt: new Date().toISOString(), acceptedIssueIds: [...accepted].filter((id) => issues.some((issue) => issue.id === id)).sort() };
   const teacherReview = { ...unsigned, seal: confirmationSeal(unsigned) };
   await updateCourse(courseId, (current) => {
     if (computeCourseQualitySignature(current, classroom) !== signature) throw new CourseReviewError('REVIEW_STALE', '课程已经修改，请重新核对后确认。');
-    return { ...current, ...(publish ? { status: 'ready' as const } : {}), content: { ...current.content, teacherReview } };
+    return { ...current, ...(publish ? { status: 'ready' as const } : {}), content: { ...current.content, teacherReview,
+      ...(diagnostics.length ? { qualityReview: confirmationDiagnosticReport(current, classroom, signature, diagnostics) } : {}),
+    } };
   });
   return teacherReview;
 }
@@ -146,11 +154,34 @@ export async function assertCourseTeacherReview(course: Course, teacherId?: stri
   const classroom = await readClassroom(classroomId);
   // A copied template may retain a valid review of exactly the same teaching
   // content. Its stamp keeps the original authoring course id in the hash.
-  if (!classroom || computeCourseQualitySignature({ ...course, id: review.courseId }, classroom) !== review.signature) throw new CourseReviewError('REVIEW_STALE', '课程内容已变更，请重新进行教师终审。');
-  const hard = unresolvedHardIssues(collectCourseStructureIssues(course, classroom.scenes, { includePresentation: false }));
+  if (!classroom || !classroom.scenes.length || computeCourseQualitySignature({ ...course, id: review.courseId }, classroom) !== review.signature) throw new CourseReviewError('REVIEW_STALE', '课程内容已变更，请重新进行教师终审。');
+  const hard = unresolvedHardIssues(collectCourseStructureIssues(course, classroom.scenes, { includePresentation: false })
+    .filter(isTechnicalStructureIssue));
   if (hard.length) throw new CourseReviewError('COURSE_HARD_ERRORS', hard.map((issue) => issue.title).join('；'));
   const resources = await auditCourseGeneratedResources(course.id, { course, classroom });
-  if (resources.issues.length) {
+  if (resources.issues.some(isTechnicalCourseResourceIssue)) {
     throw new CourseReviewError('RESOURCES_NOT_READY', '部分教学资源尚未就绪，请在预览页补齐后发布。');
   }
+}
+
+export function isTechnicalStructureIssue(issue: CourseQualityIssue): boolean {
+  return ['课堂页面未生成', '讲授页面缺少实际讲稿'].includes(issue.title);
+}
+
+function resourceQualityDiagnostic(issue: CourseResourceIssue): CourseQualityIssue {
+  return { id: issue.id, origin: 'structure', severity: 'error', blocking: false,
+    title: issue.title, evidence: issue.detail, suggestion: '核对实际课程与资源要求；已生成内容保留，教师可以继续确认。' };
+}
+
+function confirmationDiagnosticReport(course: Course, classroom: PersistedClassroomData, signature: string,
+  diagnostics: CourseQualityIssue[]): CourseQualityReport {
+  const previous = freshQualityReport(course, signature);
+  const issues = new Map((previous?.issues ?? []).map((issue) => [issue.id, issue]));
+  for (const issue of diagnostics) issues.set(issue.id, issue);
+  return { ...(previous ?? {
+    schemaVersion: 1, reviewPolicyVersion: COURSE_QUALITY_REVIEW_POLICY_VERSION, runId: randomUUID(), signature,
+    courseId: course.id, classroomId: classroom.id, classroomRevision: classroom.revision ?? 1,
+    status: 'pending', reviewScope: { kind: 'full-course',
+      checkedOutlineIds: course.content.classroomGenerationRun?.generatedOutlineIds ?? [], uncheckedOutlineCount: 0 },
+  }), issues: [...issues.values()] };
 }

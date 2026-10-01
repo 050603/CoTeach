@@ -3,7 +3,7 @@ import type { PPTElement } from '@openmaic/dsl';
 import type { GeneratedSlideContent, SceneOutline } from '@/lib/openmaic/types/generation';
 import type { FigureSequenceContract } from '@/lib/textbook/course-visual-binding';
 import {
-  findSourceContentIssues, findSectionSourceContentIssues, sourceSequenceSlideContent,
+  findSourceContentIssues, findSectionSourceContentIssues, sourceSequenceSlideContent, sourceSequenceTeachingResponsibilities,
   restoreSourceContentCheckpoint, SOURCE_CONTENT_RECOVERY_POLICY,
   type SourceContentRecoveryCheckpoint,
 } from './source-content-acceptance';
@@ -107,6 +107,25 @@ describe('complete source content acceptance', () => {
     expect(findSourceContentIssues([{ outline, content: textContent(labels[0]!) }], [contract])).toHaveLength(1);
   });
 
+  it('keeps full spoken source clauses out of an independently adopted display contract', () => {
+    const outline: SceneOutline = { ...page('spoken-source', ['按学情安排任务，实践中讨论伦理']),
+      teachingBrief: { schemaVersion: 1, explanation: labels.join('。'), examples: [], conditions: [], evidence: [],
+        assessmentFocus: '', teachingPlan: { purpose: '认识课程设计建议', priorKnowledge: '',
+          newContent: labels.join('。'), learnerQuestion: '', reasoningSteps: [], takeaway: '',
+          visibleContent: labels, presentationContent: ['按学情安排任务，实践中讨论伦理'], narrationFocus: [] } } };
+    const actual = { outline, content: textContent(outline.keyPoints[0]!), speech: labels };
+    expect(findSourceContentIssues([actual], [contract], { visibleOnly: true })).toEqual([]);
+    expect(findSourceContentIssues([actual], [contract])).toEqual([]);
+    expect(findSourceContentIssues([{ ...actual, speech: labels.slice(0, 2) }], [contract])[0]?.missingCanonicalLabels)
+      .toEqual([labels[2]]);
+  });
+
+  it('does not let narration satisfy an explicitly adopted visible process item', () => {
+    const outline = page('visible-process', anchoredLabels);
+    expect(findSourceContentIssues([{ outline, content: textContent('自主探索'), speech: [equivalentFlow] }],
+      [anchoredContract], { visibleOnly: true })[0]?.missingCanonicalLabels).toContain('创设情境');
+  });
+
   it('rejects an omitted ethical clause even when a different knowledge point already discussed ethics', () => {
     const target = { outline: page('ai-page', labels), content: textContent(labels.slice(0, 2).join('\n')) };
     const unrelated = { outline: { ...page('ethics-page', labels), knowledgePointIds: ['kp-ethics'] },
@@ -130,6 +149,44 @@ describe('complete source content acceptance', () => {
       content: textContent('概念要点'), speech: labels.slice(0, 2) }], [contract])).toEqual([]);
     expect(findSectionSourceContentIssues([first, second], [{ outline: second,
       content: textContent('实践要点'), speech: [] }], [contract])[0]?.missingCanonicalLabels).toEqual(labels.slice(2));
+  });
+
+  it('shares the original measured-page responsibility and keeps every unassigned source clause', () => {
+    const first = page('first', [labels[0]!]);
+    const continuation = { ...page('continued', [labels[1]!]), spatialParentId: first.id, order: 1 };
+    const later = { ...page('later', [labels[2]!]), lectureSectionId: 'later-section', order: 2 };
+    const responsibility = sourceSequenceTeachingResponsibilities([first, continuation, later], { ...contract, scope: 'single-page' });
+    expect(responsibility.targets.map((outline) => outline.id)).toEqual([first.id, continuation.id]);
+    expect(responsibility.owners.map(({ label, owner }) => ({ label, pageId: owner.id }))).toEqual([
+      { label: labels[0], pageId: first.id }, { label: labels[1], pageId: continuation.id },
+      { label: labels[2], pageId: first.id },
+    ]);
+    expect(findSectionSourceContentIssues([first, continuation, later], [{ outline: first,
+      content: textContent(labels[0]!), speech: [] }], [{ ...contract, scope: 'single-page' }])
+      .map(({ repairOutlineId, missingCanonicalLabels }) => ({ repairOutlineId, missingCanonicalLabels }))).toEqual([
+        { repairOutlineId: continuation.id, missingCanonicalLabels: [labels[1]] },
+        { repairOutlineId: first.id, missingCanonicalLabels: [labels[2]] },
+      ]);
+    expect(sourceSequenceTeachingResponsibilities([first, later], { ...contract, required: false }))
+      .toEqual({ targets: [], owners: [] });
+  });
+
+  it('uses the same first complete procedure page for source authoring and actual content acceptance', () => {
+    const overview = page('overview', ['理解记录核对的含义']);
+    const procedure = { ...page('procedure', labels), order: 1,
+      teachingBrief: { schemaVersion: 1 as const, explanation: labels.join('。'), examples: [],
+        conditions: [], evidence: [], assessmentFocus: '' } };
+    const singlePage = { ...contract, scope: 'single-page' as const };
+    expect(sourceSequenceTeachingResponsibilities([overview, procedure], singlePage).targets)
+      .toEqual([procedure]);
+    const pages = [{ outline: overview, content: textContent('理解记录核对的含义') },
+      { outline: procedure, content: textContent(labels.join('。')) }];
+    expect(findSourceContentIssues(pages, [singlePage])).toEqual([]);
+    expect(findSectionSourceContentIssues([overview, procedure], pages, [singlePage])).toEqual([]);
+    pages[1]!.content = textContent(labels.slice(0, 2).join('。'));
+    expect(findSourceContentIssues(pages, [singlePage])[0]?.missingCanonicalLabels).toEqual([labels[2]]);
+    expect(findSectionSourceContentIssues([overview, procedure], pages, [singlePage])[0]?.missingCanonicalLabels)
+      .toEqual([labels[2]]);
   });
 
   it('keeps separate source lists independent and ignores unadopted candidates', () => {

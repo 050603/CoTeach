@@ -15,8 +15,7 @@
  *
  * All the deterministic hydration (ids / status / order / assignee /
  * thread bootstrap / proficiency re-seat) and post-processing
- * (`normalizeProjectRuntime`, `normalizeSynthesisChecks`, completion
- * gate) is shared with the loop via exported helpers in `./planner.ts`.
+ * (`normalizeProjectRuntime`) uses the same runtime helpers as the loop path.
  */
 
 import type { LanguageModel } from 'ai';
@@ -24,7 +23,7 @@ import type { LanguageModel } from 'ai';
 import { callLLM } from '@openmaic/lib/ai/llm';
 import { createLogger } from '@openmaic/lib/logger';
 import { parseJsonResponse } from '@openmaic/lib/generation/json-repair';
-import { normalizeProjectRuntime, normalizeScenario } from '../operations/progress';
+import { normalizeProjectRuntime } from '../operations/progress';
 import type { ThinkingConfig } from '@openmaic/lib/types/provider';
 import { throwIfAborted, withGenerationRetry } from '@openmaic/lib/generation/generation-retry';
 
@@ -36,8 +35,6 @@ import {
   newId,
   instructorProjectAnchor,
   applyPlannerProficiency,
-  normalizeSynthesisChecks,
-  plannerCompletionGaps,
   type PlannerV2Callbacks,
 } from './planner';
 
@@ -50,6 +47,7 @@ import type {
   PBLScenarioConfig,
   PBLScenarioCharacter,
   PBLSceneVisual,
+  PBLDocument,
 } from '../types';
 
 const log = createLogger('PBL v2 Planner (single-call)');
@@ -79,7 +77,7 @@ function buildSingleCallUserPrompt(scenarioRoleplay: boolean): string {
   return [
     'Design the PBL project now. Output the single JSON object described in the system prompt — no prose, no code fences.',
     '',
-    'Before output, verify it passes this exact structural validator:',
+    'In this first response, author the complete project with these teaching details:',
     checklist,
   ].join('\n');
 }
@@ -136,6 +134,11 @@ interface PlannerLLMOutput {
     coreConcept?: string;
     /** SCENARIO ONLY. Stage role in the prep → roleplay → wrapup skeleton. */
     scenarioStage?: 'prep' | 'roleplay' | 'wrapup';
+    documents?: Array<{
+      title?: string;
+      content?: string;
+      docType?: PBLDocument['docType'];
+    }>;
     microtasks?: Array<{
       title?: string;
       description?: string;
@@ -154,8 +157,8 @@ interface PlannerLLMOutput {
 /** LLM JSON has no runtime type guarantees (`parseJsonResponse` only
  *  confirms it parsed). Trim a parsed value ONLY if it is actually a string;
  *  a non-string scalar (e.g. `title: 123`) becomes '' instead of throwing a
- *  raw `TypeError` from `.trim()` — which would escape the PlannerV2Error /
- *  retry contract. */
+ *  raw `TypeError` from `.trim()`. Wrong field types are rejected before
+ *  hydration; absent authoring fields remain empty. */
 function toText(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
 }
@@ -171,136 +174,130 @@ function toStringList(value: unknown): string[] {
 // Validation (post-parse, pre-hydrate)
 // ---------------------------------------------------------------------------
 
-/** Structural + topic + language checks on the parsed LLM output. Returns
- *  a list of human-readable gaps (empty == valid). Mirrors the per-tool
- *  guards the loop applied inline. */
+/** Reject only shapes the project runtime cannot consume. Missing teaching
+ * prose, gains, cosmetic details, or rubric coverage are left for the teacher
+ * to review; they never commission a corrected model draft. */
 function validateLLMOutput(
   parsed: PlannerLLMOutput | null,
-  project: PBLProjectV2,
   scenarioRoleplay: boolean,
 ): string[] {
+  const isRecord = (value: unknown): value is Record<string, unknown> =>
+    value !== null && typeof value === 'object' && !Array.isArray(value);
+  if (!isRecord(parsed)) return ['response was not a JSON object'];
   const gaps: string[] = [];
-  if (!parsed || typeof parsed !== 'object') {
-    return ['response was not a JSON object'];
-  }
-
-  const info = parsed.projectInfo;
-  const title = toText(info?.title);
-  const description = toText(info?.description);
-  const learningObjective = toText(info?.learningObjective);
-  if (!title) gaps.push('projectInfo.title is empty');
-  if (!description) gaps.push('projectInfo.description is empty');
-  if (!learningObjective) gaps.push('projectInfo.learningObjective is empty');
-  // Parity with the loop's set_project_info schema (`gains` is `.min(3).max(5)`):
-  // gains render on the Hero and feed the topic/language guards below, so a
-  // missing/short list is a real regression, not a cosmetic gap.
-  const gains = toStringList(info?.gains);
-  if (gains.length < 3 || gains.length > 5) {
-    gaps.push('projectInfo.gains must be a list of 3-5 non-empty learner-facing statements');
-  }
-  if (
-    info?.proficiency != null &&
-    !['beginner', 'intermediate', 'advanced'].includes(info.proficiency as string)
-  ) {
-    gaps.push('projectInfo.proficiency must be beginner | intermediate | advanced');
-  }
-  // Parity with the loop's set_project_info: when the learner explicitly
-  // self-reported their level, that tier is authoritative. A different
-  // `proficiency` means the milestones were authored for the wrong
-  // difficulty — `applyPlannerProficiency` would only relabel the tier, not
-  // regenerate the tasks — so reject and let the retry rebuild at the locked
-  // tier (the loop returns ok:false here for the same reason).
-  const assessment = project.proficiencyAssessment;
-  const explicitTierLocked = assessment?.signals[0]?.kind === 'user_level_explicit';
-  if (explicitTierLocked && info?.proficiency && info.proficiency !== assessment!.tier) {
-    gaps.push(
-      `The learner explicitly stated their level as ${assessment!.tier}; set projectInfo.proficiency="${assessment!.tier}" and design the milestones for that tier.`,
-    );
-  }
-
-  if (!toText(parsed.instructorRole?.name)) {
-    gaps.push('instructorRole.name is empty');
-  }
-
-  // `parseJsonResponse` does not type-check: a non-array `milestones`
-  // (object / string from schema drift) would make `.forEach` throw a raw
-  // TypeError, escaping the PlannerV2Error contract and skipping the retry.
-  const milestones = Array.isArray(parsed.milestones) ? parsed.milestones : [];
-  if (milestones.length === 0) {
-    gaps.push('milestones must be a non-empty array');
-  }
-  milestones.forEach((m, i) => {
-    const label = toText(m?.title) || `#${i + 1}`;
-    if (!toText(m?.title)) gaps.push(`milestone ${label}: title is empty`);
-    if (!toText(m?.briefing)) gaps.push(`milestone ${label}: briefing is empty`);
-    if (!toText(m?.completionCriteria))
-      gaps.push(`milestone ${label}: completionCriteria is empty`);
-    if (!toText(m?.debrief)) gaps.push(`milestone ${label}: debrief is empty`);
-    const tasks = Array.isArray(m?.microtasks) ? m.microtasks : [];
-    if (tasks.length === 0) {
-      gaps.push(`milestone ${label}: has no microtasks`);
-    }
-    tasks.forEach((t, j) => {
-      if (!toText(t?.title)) gaps.push(`milestone ${label}: microtask #${j + 1} title is empty`);
-    });
-  });
-
-  // NOTE: topic-alignment and content-language are NOT policed here. Those
-  // are semantic "does the content match the outline" checks, and a lexical /
-  // character-scan heuristic is an unreliable proxy for them (faithful
-  // rephrases of sentence-like Chinese topics false-positive). Forcing a
-  // retry on a brittle heuristic does more harm than good — topic fidelity and
-  // content language are carried by the system prompt's hard rules instead.
-  // Only structural contracts the renderer needs are gated below.
-
-  // SCENARIO ONLY. Structural completeness checks that mirror the loop's
-  // scenario completion gate (cast + sceneVisual + prep→roleplay→wrapup
-  // skeleton + a successWhen on every roleplay beat) so the renderer always
-  // gets a coherent scenario.
-  if (scenarioRoleplay) {
-    const sc = parsed.scenario;
-    if (!sc || typeof sc !== 'object') {
-      gaps.push('scenario block is missing (a role-play project must include a `scenario`)');
-    } else {
-      if (!toText(sc.setting)) gaps.push('scenario.setting is empty');
-      const chars = Array.isArray(sc.characters) ? sc.characters : [];
-      if (chars.length === 0) gaps.push('scenario.characters must have at least one character');
-      chars.forEach((c, i) => {
-        if (!toText(c?.name) || !toText(c?.persona) || !toText(c?.situation)) {
-          gaps.push(`scenario character #${i + 1} needs name, persona, and situation`);
-        }
-      });
-      const sv = sc.sceneVisual;
-      if (!toText(sv?.caption) || toStringList(sv?.motifs).length === 0) {
-        gaps.push('scenario.sceneVisual needs a caption and at least one emoji motif');
+  const textFields = (record: Record<string, unknown>, fields: string[], path: string) => {
+    for (const field of fields) {
+      if (record[field] != null && typeof record[field] !== 'string') {
+        gaps.push(`${path}.${field} must be a string`);
       }
     }
-    const stages = milestones.map((m) => m?.scenarioStage);
-    if (milestones.length < 3) {
-      gaps.push(
-        'scenario needs the three-stage skeleton: prep + ≥1 roleplay + wrapup (≥3 milestones)',
-      );
+  };
+  const stringList = (value: unknown, path: string) => {
+    if (value == null) return;
+    if (!Array.isArray(value) || value.some((entry) => typeof entry !== 'string')) {
+      gaps.push(`${path} must be an array of strings`);
     }
-    if (stages[0] !== 'prep') {
-      gaps.push('scenario: the FIRST milestone must have scenarioStage:"prep"');
+  };
+  for (const field of ['projectInfo', 'instructorRole']) {
+    const value = parsed[field];
+    if (value != null && !isRecord(value)) gaps.push(`${field} must be an object`);
+  }
+  if (isRecord(parsed.projectInfo)) {
+    textFields(parsed.projectInfo, ['title', 'description', 'learningObjective'], 'projectInfo');
+    stringList(parsed.projectInfo.gains, 'projectInfo.gains');
+    if (parsed.projectInfo.proficiency != null &&
+      !['beginner', 'intermediate', 'advanced'].includes(parsed.projectInfo.proficiency as string)) {
+      gaps.push('projectInfo.proficiency must be beginner | intermediate | advanced');
     }
-    if (stages[stages.length - 1] !== 'wrapup') {
-      gaps.push('scenario: the LAST milestone must have scenarioStage:"wrapup"');
-    }
-    if (!stages.some((s) => s === 'roleplay')) {
-      gaps.push('scenario: needs at least one scenarioStage:"roleplay" milestone');
-    }
-    milestones.forEach((m, i) => {
-      if (m?.scenarioStage !== 'roleplay') return;
-      const tasks = Array.isArray(m?.microtasks) ? m.microtasks : [];
-      tasks.forEach((t, j) => {
-        if (!toText(t?.successWhen)) {
-          gaps.push(`roleplay milestone #${i + 1} beat #${j + 1}: successWhen is required`);
-        }
-      });
-    });
+  }
+  if (isRecord(parsed.instructorRole)) {
+    textFields(parsed.instructorRole, ['name', 'description', 'systemPrompt'], 'instructorRole');
   }
 
+  if (!Array.isArray(parsed.milestones) || parsed.milestones.length === 0) {
+    gaps.push('milestones must be a non-empty array');
+  }
+  const milestones = Array.isArray(parsed.milestones) ? parsed.milestones : [];
+  milestones.forEach((milestone, i) => {
+    const path = `milestones[${i}]`;
+    if (!isRecord(milestone)) {
+      gaps.push(`${path} must be an object`);
+      return;
+    }
+    textFields(milestone,
+      ['title', 'description', 'briefing', 'completionCriteria', 'debrief', 'coreConcept'], path);
+    if (milestone.scenarioStage != null &&
+      !['prep', 'roleplay', 'wrapup'].includes(milestone.scenarioStage as string)) {
+      gaps.push(`${path}.scenarioStage must be prep | roleplay | wrapup`);
+    }
+    if (!Array.isArray(milestone.microtasks) || milestone.microtasks.length === 0) {
+      gaps.push(`${path}.microtasks must be a non-empty array`);
+    }
+    const tasks = Array.isArray(milestone.microtasks) ? milestone.microtasks : [];
+    tasks.forEach((task, j) => {
+      const taskPath = `${path}.microtasks[${j}]`;
+      if (!isRecord(task)) {
+        gaps.push(`${taskPath} must be an object`);
+        return;
+      }
+      textFields(task, ['title', 'description', 'successWhen', 'characterObjective',
+        'skillFocus', 'learnerBrief', 'narration', 'completionCriteria'], taskPath);
+      stringList(task.hints, `${taskPath}.hints`);
+    });
+    if (milestone.documents != null) {
+      if (!Array.isArray(milestone.documents)) gaps.push(`${path}.documents must be an array`);
+      else milestone.documents.forEach((document, j) => {
+        const documentPath = `${path}.documents[${j}]`;
+        if (!isRecord(document)) gaps.push(`${documentPath} must be an object`);
+        else {
+          textFields(document, ['title', 'content'], documentPath);
+          if (document.docType != null &&
+            !['markdown', 'reference', 'starter_file'].includes(document.docType as string)) {
+            gaps.push(`${documentPath}.docType must be markdown | reference | starter_file`);
+          }
+        }
+      });
+    }
+  });
+
+  // A live role-play needs a usable cast and an actual stage hosting it.
+  // These are routing requirements, not a prescribed teaching skeleton.
+  if (scenarioRoleplay || parsed.scenario != null) {
+    const scenario = parsed.scenario;
+    if (!isRecord(scenario)) gaps.push('scenario must be an object for a role-play project');
+    else {
+      textFields(scenario, ['setting', 'goal', 'rules', 'learnerRole'], 'scenario');
+      const characters = Array.isArray(scenario.characters) ? scenario.characters : [];
+      if (characters.length === 0) gaps.push('scenario.characters must be a non-empty array');
+      characters.forEach((character, i) => {
+        const path = `scenario.characters[${i}]`;
+        if (!isRecord(character)) gaps.push(`${path} must be an object`);
+        else {
+          textFields(character, ['name', 'persona', 'situation', 'boundaries', 'openingLine'], path);
+          if (!toText(character.name) || !toText(character.persona)) {
+            gaps.push(`${path} needs name and persona for the live character runtime`);
+          }
+        }
+      });
+      if (scenario.sceneVisual != null) {
+        if (!isRecord(scenario.sceneVisual)) gaps.push('scenario.sceneVisual must be an object');
+        else {
+          textFields(scenario.sceneVisual, ['caption', 'bg1', 'bg2', 'accent'], 'scenario.sceneVisual');
+          stringList(scenario.sceneVisual.motifs, 'scenario.sceneVisual.motifs');
+        }
+      }
+    }
+    if (!milestones.some((milestone) => isRecord(milestone) && milestone.scenarioStage === 'roleplay')) {
+      gaps.push('scenario needs a roleplay stage to host its live character');
+    }
+    milestones.forEach((milestone, i) => {
+      if (isRecord(milestone) && milestone.scenarioStage == null) {
+        gaps.push(`milestones[${i}].scenarioStage is needed to route the live scenario`);
+      }
+    });
+  } else if (milestones.some((milestone) => isRecord(milestone) && milestone.scenarioStage != null)) {
+    gaps.push('scenarioStage cannot route a live scenario without a scenario cast');
+  }
   return gaps;
 }
 
@@ -313,8 +310,8 @@ const HEX_RE = /^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/;
 type LLMScenario = NonNullable<PlannerLLMOutput['scenario']>;
 
 /** Build the frozen `scenario` block from the LLM output: assign character
- *  ids, keep only valid hex colours, clamp motifs to 4. `normalizeScenario`
- *  later drops invalid characters / degrades to a plain project if needed. */
+ *  ids and keep only valid hex colours. Authored character facts and motifs
+ *  are retained; validation already guarantees a runnable cast. */
 function hydrateScenario(raw: LLMScenario): PBLScenarioConfig {
   const characters: PBLScenarioCharacter[] = (Array.isArray(raw.characters) ? raw.characters : [])
     .filter((c) => toText(c?.name) && toText(c?.persona))
@@ -325,13 +322,7 @@ function hydrateScenario(raw: LLMScenario): PBLScenarioConfig {
       ...(toText(c.situation) ? { situation: toText(c.situation) } : {}),
       ...(toText(c.boundaries) ? { boundaries: toText(c.boundaries) } : {}),
       ...(toText(c.openingLine) ? { openingLine: toText(c.openingLine) } : {}),
-    }))
-    // HARD CONSTRAINT: this version voices a SINGLE character (runtime
-    // `speakingCharacter` only ever uses characters[0]). Deterministically keep
-    // just the first, so a model that over-produces a cast can never leak extra
-    // characters into the package (dead data / wrong-name bubbles). The prompt
-    // also asks for exactly one; this guarantees it regardless.
-    .slice(0, 1);
+    }));
 
   const scenario: PBLScenarioConfig = { setting: toText(raw.setting), characters };
   if (toText(raw.goal)) scenario.goal = toText(raw.goal);
@@ -342,7 +333,7 @@ function hydrateScenario(raw: LLMScenario): PBLScenarioConfig {
   if (sv && (toText(sv.caption) || toStringList(sv.motifs).length > 0)) {
     const visual: PBLSceneVisual = {
       caption: toText(sv.caption),
-      motifs: toStringList(sv.motifs).slice(0, 4),
+      motifs: toStringList(sv.motifs),
     };
     if (typeof sv.bg1 === 'string' && HEX_RE.test(sv.bg1.trim())) visual.bg1 = sv.bg1.trim();
     if (typeof sv.bg2 === 'string' && HEX_RE.test(sv.bg2.trim())) visual.bg2 = sv.bg2.trim();
@@ -354,14 +345,12 @@ function hydrateScenario(raw: LLMScenario): PBLScenarioConfig {
 }
 
 function hydrateProject(project: PBLProjectV2, parsed: PlannerLLMOutput): void {
-  const info = parsed.projectInfo!;
-  const isScenario = !!parsed.scenario;
+  const info = parsed.projectInfo ?? {};
 
   // Project info — set title/description/objective BEFORE building the
   // instructor anchor (which reads them) and before proficiency re-seat.
-  // All text reads go through `toText` (validation guarantees the required
-  // ones are non-empty strings; the coercion keeps optional / unvalidated
-  // fields type-safe too).
+  // All text reads go through `toText`; absent authoring fields remain empty
+  // rather than being replaced with invented teaching content.
   project.title = toText(info.title);
   project.description = toText(info.description);
   project.learningObjective = toText(info.learningObjective) || undefined;
@@ -370,7 +359,7 @@ function hydrateProject(project: PBLProjectV2, parsed: PlannerLLMOutput): void {
   applyPlannerProficiency(project, info.proficiency ?? fallbackTier);
 
   // Instructor role.
-  const llmRole = parsed.instructorRole!;
+  const llmRole = parsed.instructorRole ?? {};
   const anchoredSystemPrompt = [toText(llmRole.systemPrompt), instructorProjectAnchor(project)]
     .filter(Boolean)
     .join('\n\n');
@@ -384,8 +373,7 @@ function hydrateProject(project: PBLProjectV2, parsed: PlannerLLMOutput): void {
   project.roles.push(role);
 
   // Milestones (+ nested microtasks). Array shapes are coerced defensively
-  // (hints are not pre-validated, and the LLM JSON carries no runtime type
-  // guarantees).
+  // after validation; the author's task text and hints are retained.
   project.milestones = (Array.isArray(parsed.milestones) ? parsed.milestones : []).map(
     (m, i): PBLMilestone => {
       const microtasks: PBLMicrotask[] = (Array.isArray(m.microtasks) ? m.microtasks : []).map(
@@ -400,8 +388,7 @@ function hydrateProject(project: PBLProjectV2, parsed: PlannerLLMOutput): void {
             order: j,
           };
           // SCENARIO ONLY beat fields — attached only when present (ordinary
-          // microtasks carry none). normalizeScenario degrades the project if
-          // the scenario turns out invalid, dropping these along with it.
+          // microtasks carry none). Their authored text is not revised.
           const successWhen = toText(t.successWhen);
           if (successWhen) mt.successWhen = successWhen;
           const characterObjective = toText(t.characterObjective);
@@ -433,10 +420,13 @@ function hydrateProject(project: PBLProjectV2, parsed: PlannerLLMOutput): void {
         briefing: toText(m.briefing),
         completionCriteria: toText(m.completionCriteria),
         debrief: toText(m.debrief),
-        // Scenario stages never carry a synthesisCheck (the wrapup stage is
-        // the integrative reflection) — guard even if the LLM leaks a
-        // coreConcept onto a scenario milestone.
-        ...(coreConcept && !isScenario ? { synthesisCheck: { coreConcept } } : {}),
+        ...(coreConcept ? { synthesisCheck: { coreConcept } } : {}),
+        ...(Array.isArray(m.documents) ? { documents: m.documents.map((document): PBLDocument => ({
+          id: newId('doc'),
+          title: toText(document.title),
+          content: toText(document.content),
+          docType: document.docType ?? 'markdown',
+        })) } : {}),
         ...(scenarioStage ? { scenarioStage } : {}),
       };
     },
@@ -444,8 +434,7 @@ function hydrateProject(project: PBLProjectV2, parsed: PlannerLLMOutput): void {
 
   // SCENARIO ONLY. Freeze the cast/premise/visual onto the project and stamp
   // the scenario schema version (parity with the loop's set_scenario).
-  // normalizeScenario (run by the caller) assigns any gaps + degrades to a
-  // plain project if the cast/roleplay turn out invalid.
+  // Executable routing and cast shapes were checked before hydration.
   if (parsed.scenario) {
     project.scenario = hydrateScenario(parsed.scenario);
     project.schemaVersion = SCENARIO_SCHEMA_VERSION;
@@ -469,11 +458,9 @@ function hydrateProject(project: PBLProjectV2, parsed: PlannerLLMOutput): void {
  * Single-call variant of `generatePBLV2Project`. Same signature and same
  * `PBLProjectV2` output / `PlannerV2Error` failure contract.
  *
- * Strategy: one `callLLM` (no tools) → `parseJsonResponse` → validate
- * (structure + topic + language) without quality regeneration → hydrate
- * → deterministic post-processing → completion-gate. Throws
- * `PlannerV2Error` if the model never produces a usable project; the
- * caller falls back (to the loop, then v1).
+ * One authoring call → JSON/runtime-shape validation → hydration. Teaching
+ * completeness and presentation preferences never reject or rewrite the draft.
+ * `PlannerV2Error` is reserved for a response the runtime cannot execute.
  */
 export async function generatePBLV2ProjectSingleCall(
   input: PBLPlannerV2Input,
@@ -519,7 +506,7 @@ export async function generatePBLV2ProjectSingleCall(
   };
 
   const parsed = await callModel(basePrompt);
-  const gaps = validateLLMOutput(parsed, project, scenarioRoleplay);
+  const gaps = validateLLMOutput(parsed, scenarioRoleplay);
 
   if (!parsed || gaps.length > 0) {
     throw new PlannerV2Error(
@@ -544,21 +531,9 @@ export async function generatePBLV2ProjectSingleCall(
     }
   }
 
-  // Shared deterministic post-processing (identical order to the loop path).
+  // Hydrate learner/runtime state without adding, removing, or judging any
+  // authored teaching content. Final content review belongs to the teacher.
   normalizeProjectRuntime(project);
-  normalizeSynthesisChecks(project);
-  // SCENARIO ONLY safety net: assign any missing character ids, or degrade to
-  // a plain project if the cast / roleplay stage turned out invalid. No-op for
-  // ordinary projects.
-  normalizeScenario(project);
-
-  const finalGaps = plannerCompletionGaps(project, { scenarioRoleplay });
-  if (finalGaps.length > 0) {
-    throw new PlannerV2Error(
-      `Planner v2 (single-call) output failed validation: ${finalGaps.join('; ')}`,
-      project,
-    );
-  }
 
   const microtaskCount = project.milestones.reduce((acc, m) => acc + m.microtasks.length, 0);
   callbacks?.onProgress?.({

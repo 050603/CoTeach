@@ -114,6 +114,14 @@ describe('test lesson asset promotion', () => {
     expect(promoted.content).toMatchObject({ canvas: { id: 'accepted-canvas', elements: [{ src: '/api/openmaic/classroom-media/test/media/gen_img_1.png' }] } });
     expect(restored.actions?.[0]).not.toHaveProperty('audioUrl');
     expect(reusePersistedSceneAssets(restored, { ...previous, id: 'different-page' })).toBe(restored);
+    const resource = 'generated_a222fccbed05fcdddcb2';
+    restored.content = { type: 'slide', canvas: { elements: [{ id: 'image', type: 'image', src: resource }] } } as never;
+    previous.content = { type: 'slide', canvas: { elements: [{ id: 'image', type: 'image',
+      src: `/api/openmaic/classroom-media/test/media/${resource}.png` }] } } as never;
+    expect(reusePersistedSceneAssets(restored, previous).content).toEqual(previous.content);
+    previous.content = { type: 'slide', canvas: { elements: [{ id: 'image', type: 'image',
+      src: '/api/openmaic/classroom-media/test/media/generated_00000000000000000000.png' }] } } as never;
+    expect(reusePersistedSceneAssets(restored, previous).content).toEqual(restored.content);
   });
 
   it('keeps a changed image resource pending even when its element slot is unchanged', () => {
@@ -122,6 +130,14 @@ describe('test lesson asset promotion', () => {
     const previous = structuredClone(restored);
     previous.content = { type: 'slide', canvas: { elements: [{ id: 'same-slot', type: 'image', resourceId: 'gen_img_A', src: '/api/openmaic/classroom-media/test/media/A.png' }] } } as never;
     expect(reusePersistedSceneAssets(restored, previous).content).toMatchObject({ canvas: { elements: [{ src: 'gen_img_B' }] } });
+    const resource = 'generated_a222fccbed05fcdddcb2';
+    restored.content = { type: 'slide', canvas: { elements: [{ id: resource, type: 'image', src: resource }] } } as never;
+    previous.content = { type: 'slide', canvas: { elements: [{ id: resource, type: 'image',
+      src: '/api/openmaic/classroom-media/test/media/generated_00000000000000000000.png' }] } } as never;
+    expect(reusePersistedSceneAssets(restored, previous).content).toEqual(restored.content);
+    previous.content = { type: 'slide', canvas: { elements: [{ id: resource, type: 'image', resourceId: resource,
+      src: '/api/openmaic/classroom-media/test/media/generated_00000000000000000000.png' }] } } as never;
+    expect(reusePersistedSceneAssets(restored, previous).content).toEqual(restored.content);
   });
 
   it('does not resurrect checkpoint audio invalidated in the durable classroom', () => {

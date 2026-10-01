@@ -31,6 +31,19 @@ const renderReview = (runId: string, pages: unknown[] = []) => ({
 });
 
 describe('optional course review panel', () => {
+  it('shows live quality diagnostics while keeping teacher confirmation available', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(respond({ ...snapshot, qualityDiagnostics: [{
+      id: 'source-coverage', origin: 'structure', severity: 'error', blocking: false,
+      title: '教材清单需要核对', evidence: '当前页仍有来源覆盖提示。', suggestion: '按原始资料核对。',
+    }] })));
+    const onDecisionChange = vi.fn();
+    const view = render(<CourseQualityReview courseId="course" onDecisionChange={onDecisionChange} onOpenPage={vi.fn()} />);
+    expect(await screen.findByText('教材清单需要核对')).toBeTruthy();
+    expect(screen.getByText('当前页仍有来源覆盖提示。')).toBeTruthy();
+    await waitFor(() => expect(onDecisionChange).toHaveBeenLastCalledWith(expect.objectContaining({ canConfirm: true })));
+    view.unmount();
+  });
+
   it('shows unchecked status, allows confirmation and mounts measurement only after a click', async () => {
     const fetchMock = vi.fn().mockImplementation(async (_url, options) => options?.method === 'POST'
       ? respond({ renderReview: renderReview('run-new') }) : respond(snapshot));

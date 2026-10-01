@@ -21,6 +21,7 @@ export interface ChartOptionPayload {
   lineColor?: string;
   lineSmooth?: boolean;
   stack?: boolean;
+  fontSize?: number;
 }
 
 export const getChartOption = ({
@@ -31,11 +32,15 @@ export const getChartOption = ({
   lineColor,
   lineSmooth,
   stack,
+  fontSize,
 }: ChartOptionPayload): EChartOption | null => {
-  const textStyle = textColor ? { color: textColor } : {};
+  const selectedFont = typeof fontSize === 'number' && Number.isFinite(fontSize) && fontSize > 0 ? fontSize : undefined;
+  const fontStyle = selectedFont === undefined ? {} : { fontSize: selectedFont, fontFamily: 'Noto Sans SC' };
+  const textStyle = { ...(textColor ? { color: textColor } : {}), ...fontStyle };
 
   const axisLine = textColor ? { lineStyle: { color: textColor } } : {};
-  const axisLabel = textColor ? { color: textColor } : {};
+  const axisLabel = { ...(textColor ? { color: textColor } : {}), ...fontStyle };
+  const axisName = selectedFont === undefined ? {} : { nameTextStyle: textStyle };
   const splitLine = lineColor ? { lineStyle: { color: lineColor } } : {};
 
   if (!Array.isArray(data?.series) || data.series.length === 0) {
@@ -56,14 +61,14 @@ export const getChartOption = ({
       textStyle,
       legend,
       grid,
-      xAxis: { type: 'category', data: data.labels, axisLine, axisLabel },
-      yAxis: { type: 'value', axisLine, axisLabel, splitLine },
+      xAxis: { type: 'category', data: data.labels, axisLine, axisLabel, ...axisName },
+      yAxis: { type: 'value', axisLine, axisLabel, splitLine, ...axisName },
       series: data.series.map((item, index) => {
         const seriesItem: BarSeriesOption = {
           data: item,
           name: data.legends[index],
           type: 'bar',
-          label: { show: true },
+          label: { show: true, ...fontStyle },
           itemStyle: { borderRadius: [2, 2, 0, 0] },
         };
         if (stack) seriesItem.stack = 'A';
@@ -77,14 +82,14 @@ export const getChartOption = ({
       textStyle,
       legend,
       grid,
-      yAxis: { type: 'category', data: data.labels, axisLine, axisLabel },
-      xAxis: { type: 'value', axisLine, axisLabel, splitLine },
+      yAxis: { type: 'category', data: data.labels, axisLine, axisLabel, ...axisName },
+      xAxis: { type: 'value', axisLine, axisLabel, splitLine, ...axisName },
       series: data.series.map((item, index) => {
         const seriesItem: BarSeriesOption = {
           data: item,
           name: data.legends[index],
           type: 'bar',
-          label: { show: true },
+          label: { show: true, ...fontStyle },
           itemStyle: { borderRadius: [0, 2, 2, 0] },
         };
         if (stack) seriesItem.stack = 'A';
@@ -98,15 +103,15 @@ export const getChartOption = ({
       textStyle,
       legend,
       grid,
-      xAxis: { type: 'category', data: data.labels, axisLine, axisLabel },
-      yAxis: { type: 'value', axisLine, axisLabel, splitLine },
+      xAxis: { type: 'category', data: data.labels, axisLine, axisLabel, ...axisName },
+      yAxis: { type: 'value', axisLine, axisLabel, splitLine, ...axisName },
       series: data.series.map((item, index) => {
         const seriesItem: LineSeriesOption = {
           data: item,
           name: data.legends[index],
           type: 'line',
           smooth: lineSmooth,
-          label: { show: true },
+          label: { show: true, ...fontStyle },
         };
         if (stack) seriesItem.stack = 'A';
         return seriesItem;
@@ -123,12 +128,12 @@ export const getChartOption = ({
       series: [
         {
           data: series0.map((item, index) => ({ value: item, name: data.labels[index] })),
-          label: textColor ? { color: textColor } : {},
+          label: textStyle,
           type: 'pie',
           radius: '70%',
           emphasis: {
             itemStyle: { shadowBlur: 10, shadowOffsetX: 0, shadowColor: 'rgba(0, 0, 0, 0.5)' },
-            label: { show: true, fontSize: 14, fontWeight: 'bold' },
+            label: { show: true, fontSize: selectedFont ?? 14, fontWeight: 'bold', ...fontStyle },
           },
         },
       ],
@@ -144,13 +149,13 @@ export const getChartOption = ({
       series: [
         {
           data: series0.map((item, index) => ({ value: item, name: data.labels[index] })),
-          label: textColor ? { color: textColor } : {},
+          label: textStyle,
           type: 'pie',
           radius: ['40%', '70%'],
           padAngle: 1,
           avoidLabelOverlap: false,
           itemStyle: { borderRadius: 4 },
-          emphasis: { label: { show: true, fontSize: 14, fontWeight: 'bold' } },
+          emphasis: { label: { show: true, fontSize: selectedFont ?? 14, fontWeight: 'bold', ...fontStyle } },
         },
       ],
     };
@@ -161,15 +166,15 @@ export const getChartOption = ({
       textStyle,
       legend,
       grid,
-      xAxis: { type: 'category', boundaryGap: false, data: data.labels, axisLine, axisLabel },
-      yAxis: { type: 'value', axisLine, axisLabel, splitLine },
+      xAxis: { type: 'category', boundaryGap: false, data: data.labels, axisLine, axisLabel, ...axisName },
+      yAxis: { type: 'value', axisLine, axisLabel, splitLine, ...axisName },
       series: data.series.map((item, index) => {
         const seriesItem: LineSeriesOption = {
           data: item,
           name: data.legends[index],
           type: 'line',
           areaStyle: {},
-          label: { show: true },
+          label: { show: true, ...fontStyle },
         };
         if (stack) seriesItem.stack = 'A';
         return seriesItem;
@@ -185,11 +190,13 @@ export const getChartOption = ({
         indicator: data.labels.map((item) => ({ name: item })),
         splitLine,
         axisLine: lineColor ? { lineStyle: { color: lineColor } } : undefined,
+        ...(selectedFont === undefined ? {} : { axisName: textStyle }),
       },
       series: [
         {
           data: data.series.map((item, index) => ({ value: item, name: data.legends[index] })),
           type: 'radar',
+          ...(selectedFont === undefined ? {} : { label: fontStyle }),
         },
       ],
     };
@@ -205,10 +212,10 @@ export const getChartOption = ({
       color: themeColors,
       textStyle,
       grid: { left: 56, right: 32, top: 24, bottom: 52, containLabel: true },
-      tooltip: { trigger: 'item' },
-      xAxis: { type: 'value', name: data.legends[0] ?? 'X', nameLocation: 'middle', nameGap: 30, axisLine, axisLabel, splitLine },
-      yAxis: { type: 'value', name: data.legends[1] ?? 'Y', nameLocation: 'middle', nameGap: 36, axisLine, axisLabel, splitLine },
-      series: [{ symbolSize: 12, data: points, type: 'scatter' }],
+      tooltip: { trigger: 'item', ...(selectedFont === undefined ? {} : { textStyle }) },
+      xAxis: { type: 'value', name: data.legends[0] ?? 'X', nameLocation: 'middle', nameGap: 30, axisLine, axisLabel, splitLine, ...axisName },
+      yAxis: { type: 'value', name: data.legends[1] ?? 'Y', nameLocation: 'middle', nameGap: 36, axisLine, axisLabel, splitLine, ...axisName },
+      series: [{ symbolSize: 12, data: points, type: 'scatter', ...(selectedFont === undefined ? {} : { label: fontStyle }) }],
     };
   }
 

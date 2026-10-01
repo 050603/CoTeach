@@ -36,6 +36,7 @@ vi.mock('@openmaic/lib/generation/generation-retry', async (original) => {
   return { ...real, withGenerationRetry: <T>(operation: (attempt: number) => Promise<T>, options: import('@openmaic/lib/generation/generation-retry').GenerationRetryOptions<T>) => real.withGenerationRetry(operation, { ...options, sleep: async () => undefined }) };
 });
 import { generateMediaForClassroom, generateTTSForClassroom } from './classroom-media-generation';
+import { SpeechAlignmentError } from './speech-alignment';
 import { prepareVideoTimingRequests } from './video-timing-plan';
 
 beforeEach(() => {
@@ -214,24 +215,56 @@ describe('first-pass media request boundaries', () => {
     expect(classroomScenes[0].actions![1]).toMatchObject({ audioUrl: '/api/openmaic/classroom-media/old/audio/available.wav' });
   });
 
-  it('reports incomplete synchronization and retries alignment without resynthesizing speech', async () => {
+  it.each(['new', 'saved'])('keeps %s audio playable when timing is invalid and retries alignment without resynthesizing speech', async (audioState) => {
     const classroomScenes = scenes();
-    Object.assign(classroomScenes[0].actions![0], { audioUrl: '/api/openmaic/classroom-media/old/audio/available.wav' });
+    const speech = classroomScenes[0].actions![0];
+    const originalText = '基于问题的学习（Problem-Based Learning，PBL）。';
+    Object.assign(speech, { text: originalText });
+    if (audioState === 'saved') {
+      Object.assign(speech, { audioUrl: '/api/openmaic/classroom-media/old/audio/available.wav' });
+    }
     vi.spyOn(fs, 'stat').mockResolvedValue({ isFile: () => true, size: 48 } as never);
-    mocks.alignSpeech.mockRejectedValueOnce(new Error('alignment temporarily unavailable'));
+    mocks.generateTTS.mockResolvedValue({ audio: wavBytes(), format: 'wav' });
+    mocks.alignSpeech.mockRejectedValueOnce(new SpeechAlignmentError(
+      'INVALID_SPANS', 'Speech alignment service returned invalid token spans.', false,
+    ));
 
-    await expect(generateTTSForClassroom(classroomScenes, 'full-course', '')).rejects.toThrow('未完成讲稿与动作对齐');
-    expect(classroomScenes[0].actions![0]).toMatchObject({ speechAlignment: { status: 'failed' } });
+    await expect(generateTTSForClassroom(classroomScenes, 'full-course', '')).resolves.toBeUndefined();
+    expect(speech).toMatchObject({
+      text: originalText,
+      audioUrl: expect.stringContaining('/audio/'),
+      speechAlignment: {
+        status: 'failed', spans: [], error: 'Speech alignment service returned invalid token spans.',
+      },
+    });
+    const audioUrl = speech.type === 'speech' ? speech.audioUrl : undefined;
     await generateTTSForClassroom(classroomScenes, 'full-course', '');
-    expect(mocks.generateTTS).not.toHaveBeenCalled();
-    expect(classroomScenes[0].actions![0]).toMatchObject({ speechAlignment: { status: 'aligned' } });
+    expect(mocks.generateTTS).toHaveBeenCalledTimes(audioState === 'saved' ? 0 : 1);
+    expect(speech).toMatchObject({ text: originalText, audioUrl, speechAlignment: { status: 'aligned' } });
   });
 
-  it('stops wrong-language Chinese-course narration before sending any TTS request', async () => {
-    await expect(generateTTSForClassroom(chineseCourseWithEnglishNarration(), 'test', ''))
-      .rejects.toMatchObject({ name: 'ClassroomNarrationLanguageError', isRetryable: false });
+  it('still fails a real alignment service outage while preserving the existing audio', async () => {
+    const classroomScenes = scenes();
+    const audioUrl = '/api/openmaic/classroom-media/old/audio/available.wav';
+    Object.assign(classroomScenes[0].actions![0], { audioUrl });
+    vi.spyOn(fs, 'stat').mockResolvedValue({ isFile: () => true, size: 48 } as never);
+    mocks.alignSpeech.mockRejectedValueOnce(new SpeechAlignmentError(
+      'SERVICE_UNAVAILABLE', 'Speech alignment service is unavailable.', true,
+    ));
+
+    await expect(generateTTSForClassroom(classroomScenes, 'full-course', '')).rejects.toMatchObject({ code: 'SERVICE_UNAVAILABLE' });
     expect(mocks.generateTTS).not.toHaveBeenCalled();
-    expect(fs.mkdir).not.toHaveBeenCalled();
+    expect(classroomScenes[0].actions![0]).toMatchObject({ audioUrl, speechAlignment: { status: 'failed' } });
+  });
+
+  it('synthesizes the complete first-draft speech without a language-content rejection', async () => {
+    const classroomScenes = chineseCourseWithEnglishNarration();
+    const originalText = classroomScenes[0].actions![0].type === 'speech' ? classroomScenes[0].actions![0].text : '';
+    mocks.generateTTS.mockResolvedValue({ audio: wavBytes(), format: 'wav' });
+    await generateTTSForClassroom(classroomScenes, 'test', '');
+    expect(mocks.generateTTS).toHaveBeenCalledOnce();
+    expect(mocks.generateTTS.mock.calls[0][1]).toBe(originalText);
+    expect(classroomScenes[0].actions![0]).toMatchObject({ text: originalText, speechAlignment: { status: 'aligned' } });
   });
 
   it('retries transient TTS failures at most twice with the same configuration', async () => {

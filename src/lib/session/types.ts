@@ -930,6 +930,13 @@ export type TeachingBlueprintUnit = {
   reviewItems?: import("@/lib/course-quality-review/types").TeacherReviewItem[];
 };
 
+/** Independently authored slide wording, grounded in the page's actual teaching. */
+export type TeachingPresentationItem = {
+  text: string;
+  nodeIds: string[];
+  role: "heading" | "key-point" | "comparison" | "process-label" | "case-observation";
+};
+
 export type TeachingBlueprintPage = {
   id: string;
   /** Stable confirmed source pages when measured section planning redistributes units. */
@@ -944,8 +951,12 @@ export type TeachingBlueprintPage = {
   type: "slide" | "interactive";
   unitIds: string[];
   knowledgePointIds: string[];
+  /** Actual source frameworks selected for this page, separate from available references. */
+  sourceSequenceUses?: import('@/lib/textbook/source-sequence-use').SourceSequenceUse[];
   description: string;
   keyPoints: string[];
+  /** Display wording and its teaching responsibility; legacy pages use keyPoints. */
+  presentationItems?: TeachingPresentationItem[];
   teachingObjective: string;
   /** Chosen during content design; empty is valid for a text/shape explanation page. */
   resourceNeeds?: import("@/lib/course-quality-review/types").TeachingResourceNeed[];
@@ -1005,6 +1016,8 @@ export type TeachingBlueprintSection = {
 
 /** Teacher-private, versioned intermediate artifact used to make classroom pages. */
 export type TeachingBlueprint = {
+  /** Nonblocking review findings; never substitute for actual teaching content. */
+  qualityDiagnostics?: string[];
   /** Older versions remain readable; only the current version is generated. */
   schemaVersion: 1 | 2 | 3;
   inputFingerprint: string;

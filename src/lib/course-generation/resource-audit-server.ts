@@ -24,6 +24,8 @@ import { isMediaPlaceholder } from "@/lib/openmaic/store/media-generation";
 import { resolveDurableCourseSceneOutlines } from "@/lib/course-generation/course-resource-outlines";
 import { resolveCourseTextbookFigures, hydrateCourseEvidenceFigureReferences } from "@/lib/textbook/course-evidence";
 import { resolveCourseSourceSequenceContracts } from "@/lib/textbook/course-evidence-types";
+import { scopeCourseTextbookFigures, type FigureUsePage } from "@/lib/textbook/figure-use";
+import { scopeSourceSequenceContracts, usesSourceSequence } from "@/lib/textbook/source-sequence-use";
 import { findBlueprintFigureSequenceIssues, findKnowledgeSourceSequenceIssues,
   inspectFigureSequence, type FigureSequenceContract } from "@/lib/textbook/course-visual-binding";
 import { sourceSequenceSlideContent } from "./source-content-acceptance";
@@ -41,6 +43,12 @@ export type CourseResourceAuditSnapshot = {
   course: Course;
   /** The classroom paired with that revision and already used for review-signature validation. */
   classroom: PersistedClassroomData;
+};
+
+export type CourseResourceAuditOptions = {
+  /** Automatic generation checks saved resources only. Content checks belong
+   * to an explicit teacher review or publication check. */
+  reviewContent?: boolean;
 };
 
 const MANAGED_MEDIA_PREFIX = "/api/openmaic/classroom-media/";
@@ -297,21 +305,40 @@ function sceneMatchesOutlineIds(scene: PersistedClassroomData["scenes"][number],
       && /^\d+$/.test(sceneOutlineId.slice(`${id}--continuation-`.length))));
 }
 
+function pageUsesSourceImage(page: FigureUsePage, ids: ReadonlySet<string>): boolean {
+  return (page.caseObservation?.kind === "source-image"
+    && page.caseObservation.resourceIds?.some((id) => ids.has(id))) === true
+    || [...(page.resourceNeeds ?? []), ...(page.teachingBrief?.resourceNeeds ?? [])]
+      .some((need) => need.kind === "source-image" && Boolean(need.assetId && ids.has(need.assetId)))
+    || (page.visualIntent?.resourceRefs ?? []).some((reference) =>
+      reference.kind === "source-image" && reference.required && ids.has(reference.resourceId))
+    || (page.suggestedImageIds ?? []).some((id) => ids.has(id));
+}
+
 async function auditRequiredTextbookImages(
   course: Course,
   outlines: NonNullable<Course["content"]["_openmaicSceneOutlines"]>,
   classroom: PersistedClassroomData,
+  options: CourseResourceAuditOptions,
 ): Promise<CourseResourceIssue[]> {
-  const pages = course.content.teachingBlueprint?.sections.flatMap((section) => section.pages) ?? [];
+  const allPages = course.content.teachingBlueprint?.sections.flatMap((section) => section.pages) ?? [];
+  const executedPageIds = new Set(outlines.flatMap((outline) =>
+    [outline.id, outline.spatialParentId, ...(outline.sourcePageIds ?? [])]
+      .filter((id): id is string => typeof id === "string" && Boolean(id))));
+  const pages = course.content.classroomGenerationRun?.scope === "test-lesson"
+    ? allPages.filter((page) => executedPageIds.has(page.outlineId ?? page.id)) : allPages;
+  const scopePages = [...outlines, ...pages];
   const completeEvidence = course.content.courseEvidence
     ? { ...course.content.courseEvidence,
       items: await hydrateCourseEvidenceFigureReferences(course.content.courseEvidence.items) }
     : undefined;
-  const resources = completeEvidence?.items?.some((item) => item.source?.revisionId)
+  const availableResources = completeEvidence?.items?.some((item) => item.source?.revisionId)
     ? await resolveCourseTextbookFigures(completeEvidence, course.content.knowledgePoints)
     : [];
-  const sourceContracts = resolveCourseSourceSequenceContracts(completeEvidence,
-    course.content.knowledgePoints ?? []);
+  const resources = scopeCourseTextbookFigures(availableResources, scopePages);
+  const sourceContracts = options.reviewContent !== false
+    ? scopeSourceSequenceContracts(resolveCourseSourceSequenceContracts(completeEvidence,
+      course.content.knowledgePoints ?? []), scopePages) : [];
   const sequenceContracts: FigureSequenceContract[] = [...resources.map((resource) => ({
     resourceId: resource.id, required: resource.required, knowledgePointIds: resource.knowledgePointIds,
     orderedSteps: resource.orderedSteps,
@@ -322,22 +349,39 @@ async function auditRequiredTextbookImages(
       : []
   )));
   const required = [...declared];
-  const evidenceRequiredIds = new Set(resources.filter((item) => item.required).map((item) => item.id));
   const missingPlacementIssues: CourseResourceIssue[] = [];
   for (const resource of resources.filter((item) => item.required)) {
-    // The source evidence chooses the teaching page. A stale or misplaced
-    // resourceNeed cannot redefine that responsibility during the final audit.
-    const blueprintTarget = pages.find((page) => page.type === "slide"
-      && page.knowledgePointIds.some((id) => resource.knowledgePointIds.includes(id)));
-    const outlineTarget = outlines.find((outline) => outline.type === "slide"
-      && outline.knowledgePointIds?.some((id) => resource.knowledgePointIds.includes(id)));
-    const pageId = blueprintTarget?.outlineId ?? blueprintTarget?.id
-      ?? (outlineTarget ? (typeof outlineTarget.spatialParentId === "string"
-        ? outlineTarget.spatialParentId : outlineTarget.id) : undefined);
-    for (let index = required.length - 1; index >= 0; index -= 1) {
-      if (required[index]?.assetId === resource.id) required.splice(index, 1);
+    const resourceIds = new Set([resource.id, ...(resource.assetId ? [resource.assetId] : [])]);
+    const groupIds = new Set(resources.filter((candidate) => resource.groupKey
+      && candidate.groupKey === resource.groupKey).flatMap((candidate) =>
+      [candidate.id, ...(candidate.assetId ? [candidate.assetId] : [])]));
+    const actualTargets = (ids: ReadonlySet<string>): string[] => {
+      const selectedOutlines = outlines.filter((outline) => outline.type === "slide"
+        && pageUsesSourceImage(outline, ids));
+      if (selectedOutlines.length) return selectedOutlines.map((outline) =>
+        typeof outline.spatialParentId === "string" ? outline.spatialParentId : outline.id);
+      return pages.filter((page) => page.type === "slide" && pageUsesSourceImage(page, ids))
+        .map((page) => page.outlineId ?? page.id);
+    };
+    let targetPageIds = actualTargets(resourceIds);
+    if (!targetPageIds.length && groupIds.size) targetPageIds = actualTargets(groupIds);
+    if (!targetPageIds.length) {
+      // Accepted legacy plans without explicit figure choices retain their
+      // source obligation. New plans are scoped by actual authoring choices.
+      const blueprintTarget = pages.find((page) => page.type === "slide"
+        && page.knowledgePointIds?.some((id) => resource.knowledgePointIds.includes(id)));
+      const outlineTarget = outlines.find((outline) => outline.type === "slide"
+        && outline.knowledgePointIds?.some((id) => resource.knowledgePointIds.includes(id)));
+      const legacyId = blueprintTarget?.outlineId ?? blueprintTarget?.id
+        ?? (outlineTarget ? (typeof outlineTarget.spatialParentId === "string"
+          ? outlineTarget.spatialParentId : outlineTarget.id) : undefined);
+      if (legacyId) targetPageIds = [legacyId];
     }
-    if (pageId) required.push({ pageId, assetId: resource.id });
+    for (let index = required.length - 1; index >= 0; index -= 1) {
+      if (resourceIds.has(required[index]!.assetId)) required.splice(index, 1);
+    }
+    if (targetPageIds.length) required.push(...[...new Set(targetPageIds)]
+      .map((pageId) => ({ pageId, assetId: resource.id })));
     else missingPlacementIssues.push({
       id: `media:source-image:unassigned:${resource.id}`,
       type: "media", title: "指定教材图片",
@@ -367,12 +411,11 @@ async function auditRequiredTextbookImages(
 
   const imageIssues = (await Promise.all(required.map(async ({ pageId, assetId }): Promise<CourseResourceIssue | null> => {
     const outlineIds = outlineIdsByParent.get(pageId);
-    // A source-derived requirement must fail independently when its target
-    // page disappears; older declaration-only plans retain their prior scope.
-    if (!outlineIds?.size) return evidenceRequiredIds.has(assetId) ? {
+    // An actually selected source image still needs its executing page.
+    if (!outlineIds?.size) return {
       id: `media:source-image:${pageId}:${assetId}`, type: "media", title: "指定教材图片",
       detail: "指定教材原图的讲解页不在当前课程大纲中",
-    } : null;
+    };
     const pageScenes = classroom.scenes.filter((scene) => sceneMatchesOutlineIds(scene, outlineIds));
     if (!pageScenes.length) return {
       id: `media:source-image:${pageId}:${assetId}`, type: "media", title: "指定教材图片",
@@ -383,16 +426,20 @@ async function auditRequiredTextbookImages(
     const present = expectedSrc && pageScenes.some((scene) => scene.content?.type === "slide"
       && scene.content.canvas.elements.some((element) => element.type === "image"
         && element.src === expectedSrc));
-    if (present && figure?.status === "AVAILABLE" && (await checkResourceIntegrity(expectedSrc!, "image")).ok) return null;
+    const integrity = present && figure?.status === "AVAILABLE"
+      ? await checkResourceIntegrity(expectedSrc!, "image") : undefined;
+    if (integrity?.ok) return null;
     return {
       id: `media:source-image:${pageId}:${assetId}`,
       type: "media",
       title: "指定教材图片",
       detail: !figure || figure.status !== "AVAILABLE"
         ? "绑定的教材原图记录不可用"
-        : "指定的教材原图未进入对应课堂页面",
+        : !present ? "指定的教材原图未进入对应课堂页面"
+          : integrity && !integrity.ok ? integrity.detail : "指定教材原图文件无法读取",
     };
   }))).filter((issue): issue is CourseResourceIssue => Boolean(issue));
+  if (options.reviewContent === false) return [...missingPlacementIssues, ...imageIssues];
   const sequenceIssues: CourseResourceIssue[] = [];
   const blueprintIssues = course.content.teachingBlueprint
     ? findBlueprintFigureSequenceIssues(course.content.teachingBlueprint, sequenceContracts)
@@ -407,7 +454,10 @@ async function auditRequiredTextbookImages(
     });
   }
   for (const resource of resources.filter((item) => item.required && item.orderedSteps?.length)) {
+    const resourceIds = new Set([resource.id, ...(resource.assetId ? [resource.assetId] : [])]);
     const target = outlines.find((outline) => outline.type === "slide"
+      && outline.generationPurpose === "knowledge-teaching" && pageUsesSourceImage(outline, resourceIds))
+      ?? outlines.find((outline) => outline.type === "slide"
       && outline.generationPurpose === "knowledge-teaching"
       && outline.knowledgePointIds?.some((id) => resource.knowledgePointIds.includes(id)));
     if (!target) continue;
@@ -437,16 +487,20 @@ async function auditRequiredTextbookImages(
     id: `content:source-sequence:knowledge:${index}`,
     type: "source-consistency", title: "教材完整步骤", detail: issue,
   });
-  for (const contract of sourceContracts) {
+  for (const contract of sourceContracts.filter((source) => source.required)) {
+    const orderedSteps = contract.orderedSteps;
+    if (!orderedSteps?.length) continue;
     const targets = outlines.filter((outline) => outline.type === "slide"
       && outline.generationPurpose === "knowledge-teaching"
+      && usesSourceSequence(outline, contract)
       && outline.knowledgePointIds?.some((id) => contract.knowledgePointIds.includes(id)));
     if (!targets.length) continue;
     const relatedSequences = sequenceContracts.filter((related) => related.required
       && targets.some((target) => target.knowledgePointIds?.some((id) => related.knowledgePointIds.includes(id))));
-    const outlineProblems = inspectFigureSequence({ orderedSteps: contract.orderedSteps,
+    const outlineProblems = inspectFigureSequence({ orderedSteps,
       statements: [], contentGroups: targets.flatMap(outlineSequenceContent), relatedSequences,
-      sequenceSemantics: contract.sequenceSemantics, requireCompleteText: true });
+      sequenceSemantics: contract.sequenceSemantics, requireCompleteText: true,
+      requiredStepLabels: contract.requiredStepLabels });
     if (outlineProblems.length) sequenceIssues.push({
       id: `content:source-sequence:${targets[0]!.id}:${contract.resourceId}:outline`,
       type: "source-consistency", title: "教材完整步骤",
@@ -457,9 +511,10 @@ async function auditRequiredTextbookImages(
         ? target.spatialParentId : target.id) ?? []), target.id,
     ]));
     const scenes = classroom.scenes.filter((scene) => sceneMatchesOutlineIds(scene, sceneIds));
-    const sceneProblems = inspectFigureSequence({ orderedSteps: contract.orderedSteps,
+    const sceneProblems = inspectFigureSequence({ orderedSteps,
       statements: [], contentGroups: scenes.map((scene) => sceneSequenceContent(scene)), relatedSequences,
-      sequenceSemantics: contract.sequenceSemantics, requireCompleteText: true });
+      sequenceSemantics: contract.sequenceSemantics, requireCompleteText: true,
+      requiredStepLabels: contract.requiredStepLabels });
     if (sceneProblems.length) sequenceIssues.push({
       id: `content:source-sequence:${targets[0]!.id}:${contract.resourceId}:classroom`,
       type: "source-consistency", title: "教材完整步骤",
@@ -472,6 +527,7 @@ async function auditRequiredTextbookImages(
 export async function auditCourseGeneratedResources(
   courseId: string,
   snapshot?: CourseResourceAuditSnapshot,
+  options: CourseResourceAuditOptions = {},
 ): Promise<{
   classroomId?: string;
   issues: CourseResourceIssue[];
@@ -559,7 +615,7 @@ export async function auditCourseGeneratedResources(
     ? await auditClassroomFiles(classroom, resourceChecks)
     : { tts: [], media: [] };
   const textbookImageIssues = classroom
-    ? await auditRequiredTextbookImages(course, outlines, classroom)
+    ? await auditRequiredTextbookImages(course, outlines, classroom, options)
     : [];
   const adaptiveIssues: CourseResourceIssue[] = [];
   if (course.content.classroomGenerationRun?.scope !== "test-lesson"

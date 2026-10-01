@@ -70,7 +70,11 @@ describe('attachTtsTimingPlans', () => {
     const videoOutline = outline({ mediaGenerations: [{ type: 'video', elementId: 'v1', prompt: '实验' }] });
     expect(() => prepareVideoTimingRequests(videoOutline)).toThrow('未配置可用的视频供应商');
     expect(() => prepareVideoTimingRequests(videoOutline, 'sora')).toThrow('没有可计算的默认视频时长');
-    expect(() => attachTtsTimingPlans([{ ...videoOutline, targetDurationSec: 5 }], selection, 'seedance')).toThrow('没有讲解或活动余量');
+    const diagnostics: string[] = [];
+    const [overBudget] = attachTtsTimingPlans([{ ...videoOutline, targetDurationSec: 5 }], selection, 'seedance',
+      (message) => { diagnostics.push(message); });
+    expect(overBudget.timingPlan).toMatchObject({ videoSec: 5, taskFitsBudget: false });
+    expect(diagnostics[0]).toContain('没有讲解或活动余量');
     expect(() => prepareVideoTimingRequests({ ...videoOutline, mediaGenerations: [{ ...videoOutline.mediaGenerations![0], duration: -1 }] }, 'seedance')).toThrow('时长必须为正数');
   });
 
@@ -220,11 +224,16 @@ describe('attachTtsTimingPlans', () => {
     expect(planned[0]?.teachingStageTiming).toMatchObject({ targetDurationSec: 300, narrationTargetDurationSec: 204 });
   });
 
-  it('rejects a blueprint timing split that does not conserve the page budget', () => {
-    expect(() => attachTtsTimingPlans([outline({
+  it('records a nonconserving timing split while preserving the adopted narration and page budget', () => {
+    const diagnostics: string[] = [];
+    const [planned] = attachTtsTimingPlans([outline({
       targetDurationSec: 300,
       plannedTiming: { narrationSec: 204, learnerActivitySec: 80, transitionSec: 12, role: 'teaching' },
-    })], selection)).toThrow('教学蓝图计时不守恒');
+    })], selection, undefined, (message) => { diagnostics.push(message); });
+    expect(planned.targetDurationSec).toBe(300);
+    expect(planned.timingPlan).toMatchObject({ narrationSec: 204, studentActivitySec: 80, transitionSec: 12, taskFitsBudget: false });
+    expect(diagnostics[0]).toContain('教学蓝图计时不守恒');
+    expect(planned.timingPlan?.timingRationale).toContain(diagnostics[0]);
   });
 
   it('does not add student TTS timing to teacher-only resources', () => {

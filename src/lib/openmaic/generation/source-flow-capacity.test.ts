@@ -19,6 +19,31 @@ const wholeFlow = original.keyPoints[2]!;
 afterAll(() => closeSpatialMeasurementBrowser());
 
 describe('measured original-figure and complete-flow responsibility', () => {
+  it.each(['source-image', 'mixed'] as const)('uses canonical source steps when readingOrder contains instructions, keeping the complete narration with its figure in %s production', async (representation) => {
+    const page = structuredClone(original);
+    page.visualIntent!.representation = representation;
+    const sourceSteps = page.teachingBrief!.teachingPlan!.visualRelationship!.readingOrder.map((label) => ({ label }));
+    page.teachingBrief!.teachingPlan!.visualRelationship!.readingOrder = ['先从第一个环节读到最后一个环节', '再看每个环节的教师与学生任务'];
+    const sourceOptions = { resourceDimensions, resourceSequences: { [figureId]: sourceSteps } };
+    for (const context of [sourceOptions, { ...sourceOptions, explanationNodes }]) {
+      const assessment = await evaluateSemanticPageCapacity(page, context);
+      const anchor = assessment.groups.find((group) => group.visibleText === wholeFlow)!;
+      const image = assessment.groups.find((group) => group.resourceIds.includes(figureId))!;
+      expect(image.indivisibleWith).toEqual([anchor.id]);
+      expect(anchor.narrationExpansion).toContain(flowNode.content);
+      expect(assessment.groups.filter((group) => group.narrationExpansion.includes(flowNode.content))).toEqual([anchor]);
+      expect(assessment.groups.filter((group) => group.visibleText).map((group) => group.visibleText)).toEqual(page.keyPoints);
+    }
+    const result = await replanMeasuredTeachingSection([page], { ...sourceOptions, explanationNodes });
+    expect(result.status).toBe('replanned');
+    if (result.status !== 'replanned') return;
+    const imagePage = result.outlines.find((candidate) => candidate.visualIntent?.resourceRefs?.some((ref) => ref.resourceId === figureId))!;
+    expect(imagePage.keyPoints).toContain(wholeFlow);
+    expect(imagePage.teachingBrief!.teachingPlan!.introduces).toContain(flowId);
+    expect(imagePage.teachingBrief!.explanation).toContain(flowNode.content);
+    const production = await evaluateSemanticPageCapacity(imagePage, sourceOptions);
+    expect(production.selectedLayout?.fits).toBe(true);
+  });
   it('anchors the original figure and full source node to the existing ordered overview, not the similar detailed step', async () => {
     const assessment = await evaluateSemanticPageCapacity(original, options);
     const anchor = assessment.groups.find((group) => group.visibleText === wholeFlow)!;

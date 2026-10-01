@@ -11,7 +11,7 @@ import { resolveModel } from "@/lib/openmaic/server/resolve-model";
 import { findServerDefaultModelString } from "@/lib/openmaic/server/provider-config";
 import { ZH_CN_COURSE_LANGUAGE_DIRECTIVE } from "@/lib/openmaic/generation/course-language";
 import { prepareTeachingPageCapacity, TeachingPagePreflightError } from "@/lib/openmaic/generation/teaching-page-preflight";
-import { assertRequiredTextbookFiguresAvailable, assertSourceSequencesInOutlines,
+import { assertRequiredTextbookFiguresAvailable,
   bindRequiredTextbookFiguresToBlueprint, bindRequiredTextbookFiguresToOutlines } from "@/lib/textbook/course-visual-binding";
 import { generateTeachingBlueprint, legacyTeachingBlueprintInputFingerprint, revalidateStoredTeachingBlueprint,
   teachingBlueprintContentFingerprint, teachingBlueprintInputFingerprint, teachingBlueprintToOutlines,
@@ -116,6 +116,25 @@ export async function assertSavedCourseDesignReplayInput(course: Course, request
 
 const LIVE_STATUSES = ["queued", "running", "review_available", "paused"];
 
+async function queueSavedCourseDesignReplay(job: CourseDesignGenerationJob, replayRequest: ReplayRequest) {
+  try {
+    return await designGenerationJobs.replace({ where: { id: job.id, status: "failed", version: job.version },
+      checkpointPolicy: {}, data: { status: "queued", step: "lessonOutline",
+        message: "正在复用已保存首稿继续课程设计", request: replayRequest as unknown as Prisma.InputJsonValue,
+        error: null, completedAt: null, currentCall: null, retryAt: null,
+        executionId: null, executionOwner: null, leaseExpiresAt: null, lastHeartbeatAt: new Date(),
+        version: { increment: 1 } } });
+  } catch (error) {
+    if (!(error instanceof Error) || error.message !== "GENERATION_JOB_NOT_FOUND") throw error;
+    const current = await designGenerationJobs.findUnique({ where: { courseId: job.courseId } });
+    const currentRequest = current?.request as unknown as ReplayRequest | undefined;
+    if (current?.id === job.id && currentRequest && currentRequest.authoringRequestId === replayRequest.authoringRequestId
+      && fingerprintGenerationValue(currentRequest.savedFirstDraftReplay) === fingerprintGenerationValue(replayRequest.savedFirstDraftReplay)
+      && [...LIVE_STATUSES, "completed"].includes(current.status)) return current;
+    stopped("SAVED_FIRST_DRAFT_JOB_CONFLICT", "任务已被其他操作更新，未覆盖当前任务。");
+  }
+}
+
 /** Recheck an existing complete blueprint without buying another response.
  * No accepted projection, raw response, attempt, media or receipt is reset. */
 export async function resumeSavedCourseDesignFirstDraft(
@@ -136,6 +155,28 @@ export async function resumeSavedCourseDesignFirstDraft(
   const knowledge = record(saved.knowledgeStructure), duration = record(saved.aiDuration);
   const checkpoint = record(saved.teachingBlueprint), attempt = record(saved.teachingBlueprintAttempt);
   const storedResponse = record(rawRow?.state) ?? checkpoint;
+  // A first-draft replay can finish the outline and later fail at handoff or
+  // after teacher confirmation. Continue that accepted plan, including the
+  // teacher's selected test section, instead of rejecting it as a new draft.
+  if (knowledge?.status === "validated" && duration?.status === "validated"
+    && checkpoint?.schemaVersion === 1 && checkpoint.status === "validated"
+    && request.savedFirstDraftReplay && course.content.teachingBlueprint
+    && course.content._openmaicSceneOutlines?.length
+    && (hasAcceptedSavedCourseDesignOutline(course, checkpoint)
+      || request.resumeFromOutlineReview && request.resumeReviewKind === "outline")) {
+    const currentCourse = await getCourse(courseId);
+    if (!currentCourse) stopped("SAVED_FIRST_DRAFT_COURSE_MISSING", "课程不存在。");
+    await assertSavedCourseDesignReplayInput(currentCourse, request);
+    await saveGenerationCheckpoint(job.id, `course-design:local-blueprint-replay:${randomUUID()}`, {
+      schemaVersion: 1, status: "validated", originalJobVersion: job.version,
+      authoringRequestId: request.authoringRequestId, originalJobError: job.error,
+      ...request.savedFirstDraftReplay, providerCalls: 0, authorCalls: 0,
+      preservedAcceptedBlueprintFingerprint: fingerprintGenerationValue(currentCourse.content.teachingBlueprint),
+      preservedOutlineFingerprint: fingerprintGenerationValue(currentCourse.content._openmaicSceneOutlines),
+      createdAt: new Date().toISOString(), ...(actorId ? { actorId } : {}),
+    });
+    return queueSavedCourseDesignReplay(job, { ...request, resumeFromOutlineReview: true, resumeReviewKind: "outline" });
+  }
   if (knowledge?.status !== "validated" || duration?.status !== "validated"
     || checkpoint?.schemaVersion !== 1 || !["invalid-output", "response-complete"].includes(String(checkpoint.status))) {
     stopped("SAVED_FIRST_DRAFT_NOT_SUPPORTED", "仅支持知识与时长已验收、蓝图首稿尚未通过的设计任务。");
@@ -179,7 +220,10 @@ export async function resumeSavedCourseDesignFirstDraft(
       legacyFingerprint, modelFingerprint, [legacyFingerprints.contentFingerprint], input);
     const blueprint = await generateTeachingBlueprint(input, async () => {
       stopped("SAVED_FIRST_DRAFT_AUTHORING_FORBIDDEN", "首稿恢复禁止新的模型创作请求。");
-    }, { repairFrom: source ?? { response: rawResponse, issues: [] }, resourceCapabilities: {
+    }, { repairFrom: source ?? { response: rawResponse, issues: [] },
+      firstAuthoringContract: source?.firstAuthoringContract
+        ?? (checkpoint.firstAuthoringContract === 'blueprint-v5' || storedResponse?.firstAuthoringContract === 'blueprint-v5'
+          ? 'blueprint-v5' : undefined), resourceCapabilities: {
       imageGenerationEnabled: request.options?.enableImageGeneration === true,
       videoGenerationEnabled: request.options?.enableVideoGeneration === true,
     } });
@@ -192,6 +236,8 @@ export async function resumeSavedCourseDesignFirstDraft(
     const capacity = await prepareTeachingPageCapacity(outlines, {
       lockedOutlineIds: locked ? outlines.map((outline) => outline.id) : [],
       explanationNodes: boundBlueprint.sections.flatMap((section) => section.units.flatMap((unit) => unit.explanationNodes ?? [])),
+      resourceSequences: Object.fromEntries(textbookFigureResources.flatMap((resource) =>
+        resource.orderedSteps?.length ? [[resource.id, resource.orderedSteps]] : [])),
       resourceDimensions: Object.fromEntries(textbookFigureResources.flatMap((resource) => resource.width && resource.height
         ? [[resource.id, { width: resource.width, height: resource.height }]] : [])),
     });
@@ -200,11 +246,11 @@ export async function resumeSavedCourseDesignFirstDraft(
       boundBlueprint = contentRunner.applyVersionedOutlinePlanToCourseContent({ ...course.content,
         teachingBlueprint: boundBlueprint, _openmaicSceneOutlines: outlines }, capacity.outlines).teachingBlueprint as TeachingBlueprint;
     }
-    const rechecked = revalidateStoredTeachingBlueprint(boundBlueprint, input);
-    if (!rechecked.blueprint) stopped("SAVED_FIRST_DRAFT_QUALITY_FAILED", rechecked.issues.join("；"), 422);
-    const budgetIssues = validateTeachingBlueprintBudget(boundBlueprint, capacity.outlines);
-    if (budgetIssues.length) stopped("SAVED_FIRST_DRAFT_QUALITY_FAILED", budgetIssues.join("；"), 422);
-    assertSourceSequencesInOutlines(capacity.outlines, input.sourceSequences ?? [], textbookFigureResources);
+    const rechecked = revalidateStoredTeachingBlueprint(boundBlueprint, input, { qualityMode: 'diagnostic' });
+    if (!rechecked.blueprint) stopped("SAVED_FIRST_DRAFT_STRUCTURE_FAILED", rechecked.issues.join("；"), 422);
+    boundBlueprint = rechecked.blueprint;
+    const budgetIssues = validateTeachingBlueprintBudget(boundBlueprint, capacity.outlines, { reviewContent: false });
+    boundBlueprint.qualityDiagnostics = [...new Set([...(boundBlueprint.qualityDiagnostics ?? []), ...(capacity.diagnostics ?? []), ...budgetIssues])];
     local = { blueprint: boundBlueprint, capacity };
   } catch (error) {
     await saveGenerationCheckpoint(job.id, diagnosticStep, { ...diagnostic, status: "rejected",
@@ -228,22 +274,8 @@ export async function resumeSavedCourseDesignFirstDraft(
     throw error;
   }
   await saveGenerationCheckpoint(job.id, diagnosticStep, { ...diagnostic, status: "validated",
+    qualityGateMode: 'diagnostic', qualityDiagnostics: local.blueprint.qualityDiagnostics ?? [],
     blueprint: local.blueprint, outlines: local.capacity.outlines, assessments: local.capacity.assessments,
     deterministicPaginationChanged: local.capacity.changed });
-  try {
-    return await designGenerationJobs.replace({ where: { id: job.id, status: "failed", version: job.version },
-      checkpointPolicy: {}, data: { status: "queued", step: "lessonOutline",
-        message: "正在复用已保存首稿继续课程设计", request: replayRequest as unknown as Prisma.InputJsonValue,
-        error: null, completedAt: null, currentCall: null, retryAt: null,
-        executionId: null, executionOwner: null, leaseExpiresAt: null, lastHeartbeatAt: new Date(),
-        version: { increment: 1 } } });
-  } catch (error) {
-    if (!(error instanceof Error) || error.message !== "GENERATION_JOB_NOT_FOUND") throw error;
-    const current = await designGenerationJobs.findUnique({ where: { courseId } });
-    const currentRequest = current?.request as unknown as ReplayRequest | undefined;
-    if (current?.id === job.id && currentRequest && currentRequest.authoringRequestId === request.authoringRequestId
-      && fingerprintGenerationValue(currentRequest.savedFirstDraftReplay) === fingerprintGenerationValue(guard)
-      && [...LIVE_STATUSES, "completed"].includes(current.status)) return current;
-    stopped("SAVED_FIRST_DRAFT_JOB_CONFLICT", "任务已被其他操作更新，未覆盖当前任务。");
-  }
+  return queueSavedCourseDesignReplay(job, replayRequest);
 }

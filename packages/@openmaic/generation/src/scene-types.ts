@@ -26,6 +26,8 @@ export interface GeneratedSlideContent {
   /** Deterministic measured decision after trying a single-page layout. */
   layoutDecision?: FlowLayoutDecision;
   layoutMeasurement?: FlowPageMeasurement;
+  /** Non-blocking quality findings; the rendered draft remains available. */
+  qualityDiagnostics?: string[];
   /** Host expands these pages before generating per-page actions and media. */
   continuationPages?: GeneratedSlideContent[];
 }

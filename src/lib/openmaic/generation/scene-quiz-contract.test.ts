@@ -25,6 +25,13 @@ const outline: SceneOutline = {
   },
 };
 
+function expectAuthoredQuiz(result: Awaited<ReturnType<typeof generateSceneContent>>, authored: Array<{ question: string; analysis?: string }>) {
+  const questions = result && 'questions' in result ? result.questions : [];
+  expect(questions).toHaveLength(authored.length);
+  expect(questions.map(({ question, analysis }) => ({ question, analysis })))
+    .toEqual(authored.map(({ question, analysis }) => ({ question, analysis })));
+}
+
 describe('section short-answer quiz contract', () => {
   it('distinguishes a selection stem about reasons from an added written response', () => {
     expect(objectiveQuestionRequiresWrittenExplanation(
@@ -96,7 +103,7 @@ describe('section short-answer quiz contract', () => {
     expect(ai).toHaveBeenCalledTimes(1);
   });
 
-  it('rejects an objective item that truly adds a written explanation', async () => {
+  it('retains a written-explanation stem for final teacher review without a second call', async () => {
     const adaptive: SceneOutline = {
       ...outline,
       quizConfig: {
@@ -117,13 +124,11 @@ describe('section short-answer quiz contract', () => {
       knowledgePointIds: ['kp-sampling'], points: 10,
     }]));
 
-    await expect(generateSceneContent(adaptive, ai)).rejects.toThrow(
-      'choice or true/false item that also requires a written explanation',
-    );
+    expectAuthoredQuiz(await generateSceneContent(adaptive, ai), JSON.parse(await ai.mock.results[0]!.value));
     expect(ai).toHaveBeenCalledTimes(1);
   });
 
-  it('prompts for short answers only and repairs a provider type violation', async () => {
+  it('prompts for short answers and retains the authored response type for teacher review', async () => {
     const ai = vi.fn().mockResolvedValue(JSON.stringify([{
       id: 'q1',
       type: 'single',
@@ -139,14 +144,14 @@ describe('section short-answer quiz contract', () => {
     expect(ai.mock.calls[0][1]).toContain('every generated question must use type="short_answer"');
     expect(ai.mock.calls[0][1]).toContain('single comprehensive short-answer question');
     expect(result && 'questions' in result ? result.questions : []).toHaveLength(1);
-    expect(result && 'questions' in result ? result.questions.every((question) =>
-      question.type === 'short_answer' && !question.options && !question.answer && question.hasAnswer === false,
-    ) : false).toBe(true);
+    expect(result && 'questions' in result ? result.questions[0] : {}).toMatchObject({
+      type: 'single', answer: ['A'], options: [{ label: '随机抽样', value: 'A' }, { label: '方便抽样', value: 'B' }],
+    });
     expect(result && 'questions' in result ? result.questions[0]?.knowledgePointIds : []).toEqual(['kp-sampling']);
     expect(result && 'questions' in result ? result.questions[0]?.teachingUnitIds : []).toEqual(['unit-sampling']);
   });
 
-  it('rejects an open response in normal mode without a second model call', async () => {
+  it('retains an authored open response without another model call', async () => {
     const adaptive = {
       ...outline,
       quizConfig: {
@@ -169,7 +174,7 @@ describe('section short-answer quiz contract', () => {
         answer: ['A'], analysis: '随机抽取学号让成员有公平机会。', knowledgePointIds: ['kp-sampling'], points: 10,
       },
       ]));
-    await expect(generateSceneContent(adaptive, ai)).rejects.toThrow('returned 1 open-response questions; maximum is 0');
+    expectAuthoredQuiz(await generateSceneContent(adaptive, ai), JSON.parse(await ai.mock.results[0]!.value));
     expect(ai.mock.calls[0][1]).toContain('use at least 0 and at most 0');
     expect(ai).toHaveBeenCalledTimes(1);
   });
@@ -313,7 +318,7 @@ describe('section short-answer quiz contract', () => {
     expect(ai).toHaveBeenCalledTimes(1);
   });
 
-  it('rejects an unplanned matching item even when a legacy allowlist contains matching', async () => {
+  it('retains a runtime-supported matching first draft for teacher review', async () => {
     const adaptive: SceneOutline = {
       ...outline,
       quizConfig: {
@@ -329,7 +334,7 @@ describe('section short-answer quiz contract', () => {
       analysis: '训练与测试承担不同职责。', knowledgePointIds: ['kp-sampling'], points: 10,
     }]));
 
-    await expect(generateSceneContent(adaptive, ai)).rejects.toThrow('unrequested question format matching');
+    expectAuthoredQuiz(await generateSceneContent(adaptive, ai), JSON.parse(await ai.mock.results[0]!.value));
     expect(ai.mock.calls[0][1]).not.toContain('matching only');
     expect(ai).toHaveBeenCalledTimes(1);
   });
@@ -370,7 +375,7 @@ describe('section short-answer quiz contract', () => {
     expect(questions.map((question) => question.format)).toEqual(['single_choice', 'fill_blank']);
   });
 
-  it('rejects a provider response that replaces a compiled fill-blank question with another format', async () => {
+  it('retains the authored format when it differs from the planning preference', async () => {
     const adaptive: SceneOutline = {
       ...outline,
       keyPoints: ['第 1 题综合考查：识别职责', '第 2 题综合考查：填空补全作用'],
@@ -387,12 +392,10 @@ describe('section short-answer quiz contract', () => {
       { id: 'q2', type: 'single', question: '测试集用于什么？', options: [{ label: '独立检验', value: 'A' }, { label: '反复调参', value: 'B' }], answer: ['A'], analysis: '独立检验。', knowledgePointIds: ['kp-sampling'], points: 10 },
     ]));
 
-    await expect(generateSceneContent(adaptive, ai)).rejects.toThrow(
-      'returned question formats single_choice, single_choice; expected exact plan single_choice, fill_blank',
-    );
+    expectAuthoredQuiz(await generateSceneContent(adaptive, ai), JSON.parse(await ai.mock.results[0]!.value));
   });
 
-  it('rejects a pseudo fill blank without making a correction call', async () => {
+  it('retains an incomplete fill-blank stem for teacher review without a correction call', async () => {
     const adaptive: SceneOutline = {
       ...outline,
       quizConfig: {
@@ -408,11 +411,11 @@ describe('section short-answer quiz contract', () => {
         { id: 'q2', type: 'single', question: '哪项属于随机抽样？', options: [{ label: '随机抽取学号', value: 'A' }, { label: '只问前排', value: 'B' }], answer: ['A'], analysis: '公平入样。', knowledgePointIds: ['kp-sampling'], points: 10 },
       ]));
 
-    await expect(generateSceneContent(adaptive, ai)).rejects.toThrow('fill_blank stem has no explicit blank slot');
+    expectAuthoredQuiz(await generateSceneContent(adaptive, ai), JSON.parse(await ai.mock.results[0]!.value));
     expect(ai).toHaveBeenCalledTimes(1);
   });
 
-  it('rejects missing attribution without making a correction call', async () => {
+  it('retains a draft without knowledge attribution rather than fabricating it', async () => {
     const adaptive: SceneOutline = {
       ...outline,
       knowledgePointIds: ['kp-role', 'kp-leak'],
@@ -434,17 +437,17 @@ describe('section short-answer quiz contract', () => {
     ];
     const ai = vi.fn().mockResolvedValue(JSON.stringify(first));
 
-    await expect(generateSceneContent(adaptive, ai)).rejects.toThrow('missing explicit knowledgePointIds');
+    expectAuthoredQuiz(await generateSceneContent(adaptive, ai), JSON.parse(await ai.mock.results[0]!.value));
     expect(ai).toHaveBeenCalledTimes(1);
   });
 
   it('rejects an incomplete quiz result so the affected page can be retried', async () => {
     const ai = vi.fn().mockResolvedValue(JSON.stringify([]));
-    await expect(generateSceneContent(outline, ai)).rejects.toThrow('returned 0/1 questions');
+    await expect(generateSceneContent(outline, ai)).rejects.toThrow('nonempty array');
     expect(ai).toHaveBeenCalledTimes(1);
   });
 
-  it('rejects a normal-mode result that leaves a section knowledge point untested', async () => {
+  it('retains authored questions with incomplete coverage for final teacher review', async () => {
     const adaptive: SceneOutline = {
       ...outline,
       knowledgePointIds: ['kp-role', 'kp-leak'],
@@ -460,7 +463,7 @@ describe('section short-answer quiz contract', () => {
       { id: 'q2', type: 'true_false', format: 'true_false', question: '测试集用于独立评估。', answer: true, analysis: '正确。', knowledgePointIds: ['kp-role'], points: 10 },
     ]));
 
-    await expect(generateSceneContent(adaptive, ai)).rejects.toThrow('does not cover knowledge points: kp-leak');
+    expectAuthoredQuiz(await generateSceneContent(adaptive, ai), JSON.parse(await ai.mock.results[0]!.value));
   });
 
   it('covers each adaptive teaching-unit target once and keeps matching objective', async () => {
@@ -506,13 +509,13 @@ describe('section short-answer quiz contract', () => {
     const questions = result && 'questions' in result ? result.questions : [];
     expect(ai.mock.calls[0][1]).toContain('question 1 must use type="matching"; question 2 must use type="true_false"');
     expect(questions.map((question) => [question.teachingUnitIds, question.knowledgePointIds])).toEqual([
-      [['unit-role'], ['kp-role']],
       [['unit-leak'], ['kp-leak']],
+      [['unit-role'], ['kp-role']],
     ]);
-    expect(questions[0]).toMatchObject({ id: 'q-role', type: 'matching', format: 'matching' });
+    expect(questions[1]).toMatchObject({ id: 'q-role', type: 'matching', format: 'matching' });
   });
 
-  it('rejects deterministic quality failures after the single generation call', async () => {
+  it('keeps author content with empty analysis and repeated labels while assigning usable question ids', async () => {
     const qualityOutline: SceneOutline = {
       ...outline,
       quizConfig: {
@@ -538,7 +541,7 @@ describe('section short-answer quiz contract', () => {
     ];
     const ai = vi.fn().mockResolvedValue(JSON.stringify(invalid));
 
-    await expect(generateSceneContent(qualityOutline, ai)).rejects.toThrow('duplicate question id "q1"');
+    expectAuthoredQuiz(await generateSceneContent(qualityOutline, ai), JSON.parse(await ai.mock.results[0]!.value));
     expect(ai).toHaveBeenCalledTimes(1);
     expect(ai.mock.calls[0][0]).toContain('There is no later model review or rewrite');
     expect(ai.mock.calls[0][0]).toContain('private design card');
@@ -546,7 +549,7 @@ describe('section short-answer quiz contract', () => {
     expect(ai.mock.calls[0][0]).toContain('Do not make a distractor wrong merely by inserting');
   });
 
-  it('rejects an unplanned multiple-choice item with only one distractor', async () => {
+  it('keeps all first-draft options without a distractor-count rejection', async () => {
     const adaptive: SceneOutline = {
       ...outline,
       quizConfig: {
@@ -569,23 +572,19 @@ describe('section short-answer quiz contract', () => {
       knowledgePointIds: ['kp-sampling'], points: 10,
     }]));
 
-    await expect(generateSceneContent(adaptive, ai)).rejects.toThrow(
-      'question 1 has fewer than two incorrect multiple-choice options',
-    );
+    expectAuthoredQuiz(await generateSceneContent(adaptive, ai), JSON.parse(await ai.mock.results[0]!.value));
     expect(ai.mock.calls[0][0]).toContain('at least two plausible incorrect alternatives');
     expect(ai).toHaveBeenCalledTimes(1);
   });
 
-  it('does not retry when analysis is empty', async () => {
+  it('keeps empty analysis for teacher review without inventing feedback or retrying', async () => {
     const missingAnalysis = JSON.stringify([{
       id: 'q1', type: 'short_answer', format: 'short_answer', question: '解释随机抽样如何减少选择偏差。',
       analysis: ' ', knowledgePointIds: ['kp-sampling'], points: 10,
     }]);
     const ai = vi.fn().mockResolvedValue(missingAnalysis);
 
-    await expect(generateSceneContent(outline, ai)).rejects.toThrow(
-      'failed deterministic quality checks: question 1 has empty analysis',
-    );
+    expectAuthoredQuiz(await generateSceneContent(outline, ai), JSON.parse(await ai.mock.results[0]!.value));
     expect(ai).toHaveBeenCalledTimes(1);
   });
 });

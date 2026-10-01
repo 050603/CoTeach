@@ -58,12 +58,13 @@ import { isAbortError } from './generation-retry.js';
 import { generatePBLV2ProjectSingleCall } from './pbl/planner-single-call.js';
 import { PlannerV2Error } from './pbl/planner-core.js';
 import { componentAuthoringContract, flowAuthoringContract } from './component-authoring-contract.js';
-import { compileTextComponents, compileNativeTextLayout, isOrphanTextLine, TEXT_LAYOUT_FONT, TEXT_LAYOUT_PADDING,
+import { compileTextComponents, compileNativeTextLayout, measureNativeTextStack, isOrphanTextLine, TEXT_LAYOUT_FONT, TEXT_LAYOUT_PADDING,
   TEXT_LAYOUT_LINE_HEIGHT, TEXT_LAYOUT_PARAGRAPH_SPACE, type LabelGridComponent, type TextBoxComponent, type TextMeasure } from './text-layout-compiler.js';
-import { resolveAuthoringContent, assertAuthoringContentCoverage, validateAuthoringContent, type AuthoringContentItem, type AuthoringTextAllocation } from './authoring-content.js';
+import { resolveAuthoringContent, validateAuthoringContent, type AuthoringContentItem, type AuthoringTextAllocation } from './authoring-content.js';
 import { nativeSlideCollisions } from './native-slide-collision.js';
 import { compileMeasuredDiagramComponent, measureDiagramAllocations, isDiagramComponent, normalizeDiagramComponent, type DiagramAllocation } from './diagram-compiler.js';
-import { compileFlowLayout, FlowLayoutFailure, type CompiledFlowPage } from './flow-layout-compiler.js';
+import { compileFlowLayout, paginateMeasuredLayoutGroups, FlowLayoutFailure, type CompiledFlowPage } from './flow-layout-compiler.js';
+import { adoptChartPresentationTypography } from './chart-presentation-typography.js';
 import type { PBLPlannerV2Input } from './pbl/types.js';
 
 function isGeneratedMediaPlaceholder(value: string | undefined): value is string {
@@ -97,8 +98,8 @@ function layoutFailureCategory(error: unknown, detail: string): SceneContentFail
 }
 
 async function measureAdoptedTextAllocations(content: readonly AuthoringContentItem[], measure: TextMeasure,
-  log: GenerationLogger): Promise<AuthoringTextAllocation[]> {
-  const choices = content.flatMap((item) => [22, 24].flatMap((fontSize) => [440, 880].map((width) => ({ item, fontSize, width }))));
+  log: GenerationLogger, fonts: readonly number[] = [22, 24]): Promise<AuthoringTextAllocation[]> {
+  const choices = content.flatMap((item) => fonts.flatMap((fontSize) => [440, 880].map((width) => ({ item, fontSize, width }))));
   const results = await Promise.all(choices.map(async ({ item, fontSize, width }): Promise<AuthoringTextAllocation | undefined> => {
     try {
       const resolved = resolveAuthoringContent({ elements: [{ type: 'text', contentRef: item.id,
@@ -708,11 +709,21 @@ async function generateSlideContent(
   onFailure?: (failure: SceneContentFailure) => void,
   authoringContent?: readonly AuthoringContentItem[],
 ): Promise<GeneratedSlideContent | null> {
+  const qualityDiagnostics: string[] = [];
+  const reportQuality = (detail: string) => {
+    qualityDiagnostics.push(detail);
+    log.warn(`Slide quality finding for ${outline.title}: ${detail}`);
+  };
+  if (componentAuthoring && !textMeasure) {
+    reportQuality('Playback text measurement is unavailable; retaining authored geometry without a measured-fit claim');
+    textMeasure = () => { throw new Error('Playback text measurement is unavailable'); };
+  }
   if (authoringContent) {
     try { validateAuthoringContent(authoringContent); }
     catch (error) {
-      onFailure?.({ code: 'invalid-model-output', detail: error instanceof Error ? error.message : String(error) });
-      return null;
+      reportQuality(error instanceof Error ? error.message : String(error));
+      authoringContent = authoringContent.filter((item) => item && typeof item.id === 'string' && item.id.trim()
+        && typeof item.text === 'string' && item.text.trim());
     }
   }
   const visualResourceRefs = outline.visualIntent?.resourceRefs ?? [];
@@ -729,11 +740,9 @@ async function generateSlideContent(
         !imageMapping[resourceId],
     );
   if (missingRequiredSourceIds.length > 0) {
-    log.error(
+    reportQuality(
       `Required source images are unavailable for ${outline.title}: ${missingRequiredSourceIds.join(', ')}`,
     );
-    onFailure?.({ code: 'invalid-model-output' });
-    return null;
   }
 
   // Build assigned images description for the prompt
@@ -949,30 +958,41 @@ async function generateSlideContent(
     try {
       diagramAllocations = await measureDiagramAllocations(outline.visualIntent.diagram, textMeasure);
     } catch (error) {
-      if (!(error instanceof Error) || !error.message.includes('planned diagram has no feasible measured allocation')) throw error;
+      if (isAbortError(error)) throw error;
+      reportQuality(`Diagram allocation measurement was unavailable: ${error instanceof Error ? error.message : String(error)}`);
       // Decide the page layout before the first content call. Flow preserves
       // the planned relationship and can place its explanation on a continuation
       // page when a local native rectangle cannot hold the measured diagram.
-      useFlow = true;
+      useFlow = error instanceof Error && error.message.includes('planned diagram has no feasible measured allocation');
     }
   }
   const textAllocations = useComponents && !useFlow && authoringContent?.length && textMeasure
-    ? await measureAdoptedTextAllocations(authoringContent, textMeasure, log) : undefined;
+    ? await measureAdoptedTextAllocations(authoringContent, textMeasure, log, outline.presentationTypography
+      ? [outline.presentationTypography.bodyFontSize, outline.presentationTypography.minimumBodyFontSize] : undefined) : undefined;
   const authoring = useComponents ? (useFlow ? flowAuthoringContract(outline, authoringContent)
     : componentAuthoringContract(outline, diagramAllocations, authoringContent, textAllocations)) : undefined;
   if (authoring) userPrompt += `\n\n${authoring.user}`;
   const response = await aiCall(authoring ? `${prompts.system}\n\n${authoring.system}` : prompts.system, userPrompt, visionImages);
   let generatedData = parseJsonResponse<GeneratedSlideData>(response);
   if (generatedData && authoringContent) {
-    try { generatedData = resolveAuthoringContent(generatedData, authoringContent); }
+    try { generatedData = resolveAuthoringContent(generatedData, authoringContent, outline.presentationTypography, reportQuality); }
     catch (error) {
-      onFailure?.({ code: 'invalid-model-output', detail: error instanceof Error ? error.message : String(error) });
-      return null;
+      reportQuality(`Display references could not be resolved; retaining authored content: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+  // Defaults belong to the pre-adopted presentation, never to an overflow repair.
+  if (generatedData && outline.presentationTypography && Array.isArray(generatedData.components)) {
+    for (const component of generatedData.components as Array<Record<string, unknown>>) {
+      if ((component.kind === 'textBox' || component.kind === 'labelGrid') && component.fontSize === undefined) {
+        component.fontSize = component.role === 'title' ? outline.presentationTypography.titleFontSize
+          : outline.presentationTypography.bodyFontSize;
+      }
     }
   }
   if (useComponents && ((useFlow && !generatedData?.layout) || (!useFlow && generatedData?.layout))) {
-    onFailure?.({ code: 'invalid-model-output', detail: useFlow ? 'Explicit flow authoring requires layout.groups' : 'Native slide authoring requires editable elements; flow layout is opt-in' });
-    return null;
+    reportQuality(useFlow ? 'The requested flow layout was not supplied; compiling the authored native content'
+      : 'A flow layout was supplied for native authoring; compiling the authored layout');
+    useFlow = Boolean(generatedData?.layout);
   }
 
   // The component-only case has no native media. Treat an omitted native array
@@ -988,17 +1008,27 @@ async function generateSlideContent(
     return null;
   }
 
+  try {
+    generatedData = adoptChartPresentationTypography(generatedData, outline.presentationTypography, reportQuality);
+  } catch (error) {
+    reportQuality(`Chart typography could not be adapted; retaining authored chart: ${error instanceof Error ? error.message : String(error)}`);
+  }
+
   log.debug(`Got ${generatedData.elements.length} elements for: ${outline.title}`);
 
   let flowPages: CompiledFlowPage[] | undefined;
   if (useFlow && generatedData.layout) {
     try {
       if (!textMeasure) throw new Error('First-draft text measurement is required');
-      if (generatedData.elements.length) throw new Error('Flow authoring owns all media and text; use media blocks');
+      const nativeElements = generatedData.elements;
+      if (nativeElements.length) reportQuality('Flow authoring also supplied native elements; retaining both authored content paths');
       flowPages = await compileFlowLayout(generatedData.layout, { title: outline.title, id: outline.id, textMeasure, diagram: outline.visualIntent?.diagram,
+        typography: outline.presentationTypography,
+        onDiagnostic: reportQuality,
         resourceDescriptions: Object.fromEntries((outline.visualIntent?.resourceRefs ?? []).map((reference) => [reference.resourceId, reference.observationGoal || reference.reason || outline.title])),
         observationGoal: outline.visualIntent?.observationGoal || outline.teachingObjective || outline.description || outline.title,
       });
+      flowPages[0]!.elements.push(...nativeElements as unknown as PPTElement[]);
       generatedData.elements = flowPages.flatMap((page) => page.elements) as unknown as GeneratedSlideData['elements'];
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error);
@@ -1012,28 +1042,24 @@ async function generateSlideContent(
       onFailure?.({ code: 'invalid-model-output', detail: 'First-draft text measurement is required' });
       return null;
     }
+    let components: unknown[] = [];
+    const compiled: GeneratedSlideData['elements'] = [];
     try {
       // Local text/label and flow blocks use kind. Accept that same diagram
       // discriminator at the native entrance before the strict owner gate.
-      const components = (generatedData.components ?? []).map(normalizeDiagramComponent);
-      const requestedDiagramCount = components.filter(isDiagramComponent).length;
-      if (outline.visualIntent?.diagram && requestedDiagramCount !== 1) {
-        throw new Error(`Structured teaching diagram is missing or duplicated (received ${requestedDiagramCount}). Return exactly one components entry with kind:"diagram" (type:"diagram" is also accepted) and a fitting rectangle. Independent sequenceGroups belong inside that one component; do not replace it with native shapes or multiple diagram components.`);
-      }
-      const compiled: GeneratedSlideData['elements'] = [];
+      components = (generatedData.components ?? []).map(normalizeDiagramComponent);
       const allocated: Array<{ left: number; top: number; width: number; height: number }> = generatedData.elements
         .filter((element) => element && element.type !== 'line' && (element.type !== 'shape' || Boolean(element.text)))
         .map(({ left, top, width, height }) => ({ left, top, width, height }));
-      let diagrams = 0;
       for (const [componentIndex, rawComponent] of components.entries()) {
         const component = rawComponent && typeof rawComponent === 'object' ? { ...rawComponent, id: `${outline.id}-component-${componentIndex}` } : rawComponent;
         if (isDiagramComponent(component)) {
-          diagrams += 1;
           const planned = outline.visualIntent?.diagram;
           // The teaching plan owns meaning; the page author chooses only its rectangle and styling.
           const diagram = planned ? { ...component, ...planned } : component;
           compiled.push(...await compileMeasuredDiagramComponent(diagram, textMeasure, {
             feasibleAllocations: planned ? diagramAllocations : undefined,
+            onDiagnostic: reportQuality,
           }) as unknown as GeneratedSlideData['elements']);
           allocated.push({ left: diagram.left, top: diagram.top, width: diagram.width, height: diagram.height });
         } else if (component && typeof component === 'object'
@@ -1047,7 +1073,7 @@ async function generateSlideContent(
           const measuredComponent = textComponent.kind === 'textBox'
             ? { ...textComponent, maxHeight: undefined }
             : textComponent;
-          const textElements = await compileTextComponents([measuredComponent], textMeasure);
+          const textElements = await compileTextComponents([measuredComponent], textMeasure, { onDiagnostic: reportQuality });
           compiled.push(...textElements as unknown as GeneratedSlideData['elements']);
           if (textComponent.kind === 'textBox') {
             const text = textElements[0]!;
@@ -1069,14 +1095,66 @@ async function generateSlideContent(
           throw new Error('First-draft component allocations overlap after measured text sizing');
         }
       }
-      if (outline.visualIntent?.diagram && diagrams !== 1) throw new Error('Structured teaching diagram is missing or duplicated');
       generatedData.elements = [...generatedData.elements, ...compiled];
     } catch (error) {
-      const detail = error instanceof Error ? error.message : String(error);
-      log.error(`First-draft component compilation failed for ${outline.title}: ${detail}`);
-      const category = layoutFailureCategory(error, detail);
-      onFailure?.({ code: 'invalid-model-output', detail, ...(category ? { category } : {}) });
-      return null;
+      const firstDetail = error instanceof Error ? error.message : String(error);
+      let allocatedFirstDraft = false;
+      if (/component allocations overlap|textBox content needs .*maximum allocation/i.test(firstDetail)) {
+        try {
+          const stack = await measureNativeTextStack(generatedData.elements as unknown as PPTElement[],
+            components.map((component, index) => component && typeof component === 'object'
+              ? { ...component, id: `${outline.id}-component-${index}` } : component), textMeasure);
+          if (stack) {
+            const breaks = paginateMeasuredLayoutGroups(stack.groups, stack.capacity, stack.gap);
+            const allocatedIds = new Set<string>();
+            flowPages = breaks.slice(0, -1).map((start, pageIndex): CompiledFlowPage => {
+              const groups = stack.groups.slice(start, breaks[pageIndex + 1]);
+              const headers = stack.headers.map((element, index) => ({ ...element,
+                id: `${element.id || `${outline.id}-header-${index}`}${pageIndex ? `-continuation-${pageIndex + 1}` : ''}` }));
+              let top = stack.top;
+              const elements = [...headers];
+              for (const group of groups) {
+                elements.push(...group.elements.map((element, index) => ({ ...element,
+                  id: element.id || `${group.id}-decoration-${index}`, top: element.top + top })));
+                top += group.height + stack.gap;
+              }
+              for (const [index, element] of elements.entries()) {
+                let id = element.id;
+                if (allocatedIds.has(id)) {
+                  const base = `${outline.id}-allocated-${pageIndex}-${index}`;
+                  id = base;
+                  for (let suffix = 2; allocatedIds.has(id); suffix += 1) id = `${base}-${suffix}`;
+                }
+                allocatedIds.add(id);
+                if (id !== element.id) elements[index] = { ...element, id };
+              }
+              const sourceGroupIds = groups.map((group) => group.id);
+              const occupiedHeight = top - stack.top - stack.gap;
+              return { elements, sourceGroupIds, teachingText: groups.flatMap((group) => group.teachingText),
+                occupiedHeight, paginationVersion: 'balanced-v1', layoutDecision: breaks.length > 2 ? 'paginated' : 'optimized',
+                layoutMeasurement: { strategyVersion: 'adaptive-v2', bodyCapacity: stack.capacity,
+                  occupiedHeight, contentLoad: occupiedHeight / stack.capacity, pageIndex: pageIndex + 1,
+                  pageCount: breaks.length - 1, sourceGroupIds, groups: groups.map((group) => ({
+                    sourceGroupId: group.id, occupiedHeight: group.height, contentLoad: group.loadArea / (900 * stack.capacity),
+                  })) },
+              };
+            });
+            generatedData.elements = flowPages.flatMap((page) => page.elements) as unknown as GeneratedSlideData['elements'];
+            allocatedFirstDraft = true;
+          }
+        } catch (allocationError) { error = allocationError; }
+      }
+      if (!allocatedFirstDraft) {
+        const detail = error instanceof Error ? error.message : String(error);
+        if (/component allocations overlap|textBox content needs .*maximum allocation/i.test(firstDetail)) {
+          reportQuality(`Automatic native allocation did not resolve the layout issue: ${firstDetail}; ${detail}`);
+          generatedData.elements = [...generatedData.elements, ...compiled];
+        } else {
+          log.error(`First-draft component compilation failed for ${outline.title}: ${detail}`);
+          onFailure?.({ code: 'invalid-model-output', detail });
+          return null;
+        }
+      }
     }
   }
 
@@ -1093,40 +1171,19 @@ async function generateSlideContent(
   }
 
   if (useComponents && !useFlow && textMeasure) {
-    try { fixedElements = await compileNativeTextLayout(fixedElements as unknown as PPTElement[], textMeasure) as unknown as GeneratedSlideData['elements']; }
+    try {
+      if (flowPages) {
+        const byId = new Map(fixedElements.map((element) => [element.id, element]));
+        for (const page of flowPages) page.elements = await compileNativeTextLayout(
+          page.elements.map((element) => byId.get(element.id) as unknown as PPTElement), textMeasure, { onDiagnostic: reportQuality });
+        fixedElements = flowPages.flatMap((page) => page.elements) as unknown as GeneratedSlideData['elements'];
+      } else fixedElements = await compileNativeTextLayout(fixedElements as unknown as PPTElement[], textMeasure, { onDiagnostic: reportQuality }) as unknown as GeneratedSlideData['elements'];
+    }
     catch (error) {
       const detail = error instanceof Error ? error.message : String(error);
-      const category = layoutFailureCategory(error, detail);
-      onFailure?.({ code: 'invalid-model-output', detail, ...(category ? { category } : {}) });
-      return null;
+      if (isAbortError(error)) throw error;
+      reportQuality(`Native text measurement could not complete; retaining the compiled draft: ${detail}`);
     }
-  }
-
-  if (authoringContent) {
-    try { assertAuthoringContentCoverage(fixedElements, authoringContent); }
-    catch (error) {
-      onFailure?.({ code: 'invalid-model-output', detail: error instanceof Error ? error.message : String(error) });
-      return null;
-    }
-  }
-
-  const missingRequiredLayoutRefs = requiredResourceRefs.filter((reference) => {
-    return !fixedElements.some((element) => {
-      if (reference.kind === 'generated-video') {
-        if (element.type !== 'video') return false;
-        const video = element as unknown as Record<string, unknown>;
-        return video.mediaRef === reference.resourceId || video.src === reference.resourceId;
-      }
-      if (element.type !== 'image') return false;
-      return (element as unknown as Record<string, unknown>).src === reference.resourceId;
-    });
-  });
-  if (missingRequiredLayoutRefs.length > 0) {
-    log.error(
-      `Generated slide omitted required visual resources for ${outline.title}: ${missingRequiredLayoutRefs.map((reference) => reference.resourceId).join(', ')}`,
-    );
-    onFailure?.({ code: 'invalid-model-output' });
-    return null;
   }
 
   // Debug: Log image elements before resolution
@@ -1191,10 +1248,11 @@ async function generateSlideContent(
   }
 
   if (useComponents && !useFlow) {
-    const collisions = nativeSlideCollisions(processedElements);
+    const byId = new Map(processedElements.map((element) => [element.id, element]));
+    const pages = flowPages ? flowPages.map((page) => page.elements.map((element) => byId.get(element.id)!)) : [processedElements];
+    const collisions = pages.flatMap((page) => nativeSlideCollisions(page));
     if (collisions.length) {
-      onFailure?.({ code: 'invalid-model-output', category: 'layout-conflict', detail: `First-draft native layout collision: ${collisions.join('; ')}` });
-      return null;
+      reportQuality(`First-draft native layout collision: ${collisions.join('; ')}`);
     }
   }
 
@@ -1219,6 +1277,7 @@ async function generateSlideContent(
       sourceGroupIds: page.sourceGroupIds, teachingText: page.teachingText,
       paginationVersion: page.paginationVersion, occupiedHeight: page.occupiedHeight,
       layoutDecision: page.layoutDecision, layoutMeasurement: page.layoutMeasurement,
+      ...(qualityDiagnostics.length ? { qualityDiagnostics } : {}),
     }));
     return { ...pages[0], ...(pages.length > 1 ? { continuationPages: pages.slice(1) } : {}) };
   }
@@ -1226,6 +1285,7 @@ async function generateSlideContent(
     elements: processedElements,
     background,
     remark: generatedData.remark || outline.description,
+    ...(qualityDiagnostics.length ? { qualityDiagnostics } : {}),
   };
 }
 
