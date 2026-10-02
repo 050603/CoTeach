@@ -4,6 +4,7 @@ import { TEACHING_ENHANCEMENT_VERSION } from './teaching-enhancement';
 import { deriveTeachingConstraints } from '@openmaic/lib/pedagogy/teaching-constraints';
 import { findSectionSourceContentIssues, findSourceContentIssues } from '@/lib/course-generation/source-content-acceptance';
 import type { FigureSequenceContract } from '@/lib/textbook/course-visual-binding';
+import originalRedraw from './__fixtures__/teaching-visual-redraw-original.json';
 import {
   buildTeachingNarrationSemantics,
   canUseIndependentTeachingNarration,
@@ -383,6 +384,59 @@ describe('independent first-pass teaching narration', () => {
     const quoted = await generateTeachingSectionNarration({ ...input, aiCall: cropped });
     expect(quoted.pages[0]?.segments[0]?.text).toBe('引导学生在达成任务中获得知识与技能' + reasoning);
     expect(cropped).toHaveBeenCalledOnce();
+  });
+
+  it('waives only a complete definition already present in actual speech while keeping all original sources and list responsibilities', async () => {
+    const definition = '核验模式，是指针对 A1 类记录核对 12 项原始条件且不能省略反例的核验方法。';
+    const rest = '这一方法需要结合具体记录逐项解释推理。';
+    const listClaim = '每次核验都必须检查原记录';
+    const page: SceneOutline = { ...outline(), knowledgePointIds: ['verification'], teachingBrief: { ...outline().teachingBrief!,
+      evidence: [{ sourceId: 'verification-original', quote: definition + rest }] } };
+    const variants: Array<{ name: string; prior?: string[]; required: boolean }> = [
+      { name: 'no actual prior speech', required: true },
+      { name: 'empty actual prior speech', prior: [], required: true },
+      { name: 'concept name only', prior: ['上页介绍了核验模式。'], required: true },
+      { name: 'partial definition', prior: [definition.slice(0, definition.indexOf('且')) + '。'], required: true },
+      { name: 'changed negation', prior: [definition.replace('不能', '能够')], required: true },
+      { name: 'changed quantity', prior: [definition.replace('12', '13')], required: true },
+      { name: 'changed decimal quantity', prior: [definition.replace('12', '1.2')], required: true },
+      { name: 'changed letter identity', prior: [definition.replace('A1', 'B1')], required: true },
+      { name: 'complete definition with normalized punctuation', prior: [
+        `上页的完整讲解。${definition.replace('A1', 'Ａ１').replace('12', '１２').replace('，', '：')}现在继续。`,
+      ], required: false },
+      { name: 'complete definition across adjacent speech segments', prior: [definition.slice(0, 20), definition.slice(20)], required: false },
+      { name: 'definition and source list both spoken before', prior: [definition, `${listClaim}。`], required: false },
+    ];
+    let originalCatalog: unknown, originalSources: unknown;
+    for (const variant of variants) {
+      const aiCall = vi.fn().mockResolvedValue(JSON.stringify({ pages: [{ pageId: page.id, segments: [{
+        // Even after its duty is satisfied, the author may still choose this
+        // unchanged source reference when an explanation genuinely needs it.
+        textParts: [{ sourceRef: 'source-definition-1' }, { text: '现在结合原记录逐项说明判断依据。' }],
+        semanticIds: ['page-a:teaching'],
+      }] }] }));
+      const generated = await generateTeachingSectionNarration({ sectionId: 'verification', pages: [{ outline: page, content: content('逐项核验') }],
+        requirements: { requirement: '只讲本页承担的核验推理' }, previousSectionActualNarration: variant.prior,
+        sourceKnowledgePoints: [{ id: 'verification', evidenceItemIds: ['verification-original'] }],
+        sourceEvidence: { schemaVersion: 2, version: 1, fingerprint: 'verification-book', createdAt: '2026-10-02',
+          retrievalMode: 'hybrid', selections: [{ revisionId: 'book-v1', primary: true, sectionIds: [] }], mappings: [], warnings: [],
+          items: [{ id: 'verification-original', kind: 'source-block', title: '核验模式', content: definition + rest,
+            source: { textbookId: 'book', textbookTitle: '核验教材', revisionId: 'book-v1', revisionVersion: 1, sectionPath: ['核验方法'] } }] },
+        sourceSequenceContracts: [{ resourceId: 'verification-list', required: true, knowledgePointIds: ['verification'],
+          orderedSteps: [{ label: listClaim }] }], aiCall,
+      });
+      expect(aiCall).toHaveBeenCalledOnce();
+      const rawPrompt = JSON.parse(aiCall.mock.calls[0]![1]);
+      const prompt = readNarrationPrompt(aiCall.mock.calls[0]![1]);
+      expect(prompt.sourceAuthoringDuties.some((duty: { text: string }) => duty.text === definition), variant.name).toBe(variant.required);
+      expect(prompt.sourceAuthoringDuties.some((duty: { text: string }) => duty.text === `${listClaim}。`), variant.name).toBe(true);
+      expect(prompt.pages[0].originalTeachingSources.authoritativeAnchors).toContainEqual({ id: 'source-definition-1', text: definition });
+      expect(generated.pages[0]?.segments[0]?.text).toContain(definition);
+      originalCatalog ??= rawPrompt.evidenceCatalog;
+      originalSources ??= rawPrompt.pages[0].originalTeachingSources;
+      expect(rawPrompt.evidenceCatalog, variant.name).toEqual(originalCatalog);
+      expect(rawPrompt.pages[0].originalTeachingSources, variant.name).toEqual(originalSources);
+    }
   });
 
   it('allows a selected source meaning clause in the first section narration without cropping its canonical condition', async () => {
@@ -870,6 +924,46 @@ describe('independent first-pass teaching narration', () => {
       firstActualVisibleEvidence: ['两条独立记录与一条重复转载'],
     });
     expect(prompt).not.toContain('第 1 节 · 节末小测');
+    expect(aiCall).toHaveBeenCalledOnce();
+  });
+
+  it.each([true, false])('keeps original page 19 inside its section and supplies only verified preceding speech (available: %s)', async (hasPriorSpeech) => {
+    const current = structuredClone(originalRedraw.outline) as unknown as SceneOutline;
+    const prior: SceneOutline = { ...current, id: 'teaching-section-6-page-1', order: 17, title: '支架的定义与依据' };
+    const continuation: SceneOutline = { ...current, id: `${current.id}--continuation-2`, order: 19 };
+    const future: SceneOutline = { ...current, id: 'teaching-section-6-page-3', order: 20, title: '抛锚式教学法',
+      teachingBrief: { ...current.teachingBrief!, teachingPlan: { ...current.teachingBrief!.teachingPlan!,
+        newContent: '未来页才解释真实情境中的抛锚过程。', takeaway: '未来页尚未讲授的结论。' } } };
+    // The three actual preceding utterances from the historical classroom;
+    // preserve their complete wording and order, including the final condition.
+    const actualPrior = [
+      '当任务本身对学生有难度时，教师需要在过程中提供支持，而且这种支持不会从头保留到尾。支架式教学法是一种以学生为中心的教学模式,支架式教学法的核心在于教师为学生提供适当的、小步调的线索或提示,这些“支架”随着学生能力的提高而逐渐减少,直至学生能够独立完成任务。它以学生为中心，由教师提供小步调的线索或提示，而这些线索会随着学生能力的提高逐渐减少。',
+      '这一做法的依据来自维果斯基的最近发展区。维果斯基的“最近发展区”理论指出,教学应领先于学生的现有发展水平,引领他们从能够独立解决问题的实际水平,向在教师指导下可能达到的潜在水平提升。学生能独立解决问题的实际水平，和在教师指导下可能达到的潜在水平之间有一段距离，支架就放在这段距离里。',
+      '支架有认知支架、情感支架和能力支架等类型，它们在不同的学习环节里发挥不同的辅助作用。教学支架是可调节的。多数支架由教师课前根据学情预设，但教师还要预判学生可能遇到的问题，并根据课堂实际情况对支架进行增减或调整，同时照顾到不同层次的学生。',
+    ];
+    const currentDraft = '本次正在改写的讲稿不能冒充已讲前文。';
+    const aiCall = vi.fn().mockResolvedValue(JSON.stringify({ pages: [current, continuation].map((page) => ({
+      pageId: page.id, segments: [{ text: currentDraft, semanticIds: [`${page.id}:teaching`] }],
+    })) }));
+    await generateTeachingSectionNarration({ sectionId: current.lectureSectionId!,
+      pages: [{ outline: current, content: content('逐个撤除') }, { outline: continuation, content: content('五个环节') }],
+      courseProgression: [prior, current, continuation, future], requirements: { requirement: currentDraft },
+      previousSectionActualNarration: hasPriorSpeech ? actualPrior : undefined, aiCall,
+    });
+    const prompt = readNarrationPrompt(aiCall.mock.calls[0]![1]);
+    const handoff = prompt.pages[0].continuityContract;
+    expect(prompt.pages[0].deliveryContext.sectionPosition).toBe('continuation');
+    expect(handoff.position).toBe('continuation');
+    expect(handoff.priorActualNarration).toEqual(hasPriorSpeech ? actualPrior : []);
+    expect(handoff.previousSectionActualNarration).toBeUndefined();
+    expect(handoff.previousSectionTakeaways).toBeUndefined();
+    expect(handoff.transitionContract).toMatchObject({ maximumSentences: 2, repeatPreviousTakeaway: false });
+    expect(handoff.priorActualNarration.join('')).not.toContain(currentDraft);
+    expect(handoff.priorActualNarration.join('')).not.toContain('未来页');
+    expect(prompt.pages[1].continuityContract).toMatchObject({ position: 'continuation', previousPageId: current.id });
+    expect(prompt.pages[1].continuityContract.priorActualNarration).toBeUndefined();
+    expect(prompt.pages[1].continuityContract.previousSectionActualNarration).toBeUndefined();
+    expect(aiCall.mock.calls[0]![0]).toContain('subsequent pages keep their own closed-world page contracts');
     expect(aiCall).toHaveBeenCalledOnce();
   });
 

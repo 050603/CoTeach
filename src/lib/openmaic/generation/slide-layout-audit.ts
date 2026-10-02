@@ -1,6 +1,7 @@
 import { access } from 'node:fs/promises';
 import { chromium, type Browser, type Page } from 'playwright-core';
-import type { PPTElement, SlidePresentationItem } from '@openmaic/dsl';
+import type { PPTElement, PPTShapeElement, SlidePresentationItem } from '@openmaic/dsl';
+import { resolveDiagramSequenceGroups } from '@openmaic/generation';
 import type { GeneratedSlideContent, SceneOutline } from '@openmaic/lib/types/generation';
 import type { RenderedElement, VisibleRect } from '@/lib/course-quality-review/render-measurements';
 import { auditGeneratedSlide } from './slide-quality';
@@ -8,6 +9,7 @@ import { canonicalVisibleContent } from './semantic-page-capacity';
 import { adoptedPageAuthoringContent } from './adopted-page-content';
 import { nativeTextRelationCaption } from './native-text-placement';
 import { hasReferenceLectureTypography, slideBodyFontSizes } from './slide-presentation-typography';
+import { TEACHING_VISUAL_THEME as VISUAL_THEME } from './teaching-visual-theme';
 
 export type SlideLayoutAuditStatus = 'checked' | 'unavailable';
 
@@ -314,15 +316,27 @@ export function slideKnowledgeCoverage(
 /** Adopted presentation points own the display contract. Original source prose
  * and narration remain under their independent source/teaching acceptance gates.
  * Historical drafts without that projection retain their existing obligations. */
-export function slideRequiredVisibleStatements(outline: SceneOutline): string[] {
+export function slideRequiredVisibleStatements(outline: SceneOutline, content?: Pick<GeneratedSlideContent, 'teachingVisual'>): string[] {
+  // V2 carries a separately verified native graph responsibility. Historical
+  // projections keep their existing text contract and semantic-structure gate.
+  const graph = outline.visualSourceCatalog !== undefined || content?.teachingVisual
+    ? outline.visualIntent?.diagram : undefined;
+  const graphText = [
+    ...(graph?.nodes.map((node) => node.label) ?? []),
+    ...(graph?.edges?.map((edge) => edge.label) ?? []),
+    ...(graph?.sequenceGroups?.map((group) => group.label) ?? []),
+    graph?.annotation,
+  ].filter((text): text is string => Boolean(text?.trim()));
+  const complete = (points: string[]) => [...new Set([...points, ...graphText].map((text) => text.trim()).filter(Boolean))];
+  if (outline.visualSourceCatalog !== undefined) return complete(outline.visualSourceCatalog.map((source) => source.text));
   const authored = outline.teachingBrief?.teachingPlan?.presentationItems;
-  if (authored?.length) return [...new Set(authored.map((item) => item.text.trim()).filter(Boolean))];
+  if (authored?.length) return complete(authored.map((item) => item.text));
   const adopted = canonicalVisibleContent({ proposed: outline.teachingBrief?.teachingPlan?.presentationContent });
-  if (adopted.length) return adopted;
-  return [...new Set([
+  if (adopted.length) return complete(adopted);
+  return complete([
     ...outline.keyPoints,
     ...(outline.teachingBrief?.teachingPlan?.visibleContent ?? []),
-  ].map((statement) => statement.trim()).filter(Boolean))];
+  ]);
 }
 
 function exactVisibleText(value: string): string {
@@ -372,7 +386,7 @@ function verifiedVisibleProjectionSources(outline: SceneOutline, content: Genera
       || item.sourceContentIds.some((id) => !knownSources.has(id))
       || [item.label, item.row, item.column].some((field) => field !== undefined
         && (typeof field !== 'string' || !field.trim())))) return new Set();
-  const minimumFont = slideBodyFontSizes(outline)[1];
+  const minimumFont = content.teachingVisual ? VISUAL_THEME.minimum : slideBodyFontSizes(outline)[1];
   const display = displayedContentElements(content.elements, minimumFont).filter((element) => {
     const readable = (html: string, inheritedFont?: string) => {
       if (/(?:display\s*:\s*none|visibility\s*:\s*hidden|(?:opacity|font-size)\s*:\s*0(?:px|[;"\s])|color\s*:\s*transparent)/iu.test(html)) return false;
@@ -383,10 +397,22 @@ function verifiedVisibleProjectionSources(outline: SceneOutline, content: Genera
     if (element.type === 'text' || element.type === 'shape') return readable(elementVisibleTextHtml(element));
     if (element.type === 'table') return element.data.flat().every((cell) =>
       readable(cell.text, cell.style?.fontsize));
+    if (element.type === 'chart' && content.teachingVisual) return (element.options?.fontSize ?? 0) >= minimumFont;
     return false;
   });
   const includes = (actual: string, expected: string) => exactVisibleText(actual).includes(exactVisibleText(expected));
   const visibleItem = (item: SlidePresentationItem, elements: PPTElement[]) => {
+    const dataComponent = content.teachingVisual?.scene.pages.find((page) => page.id === content.teachingVisual?.pageId)
+      ?.components.find((component) => component.data && `${component.id}:data` === item.id);
+    if (dataComponent?.data) {
+      const expected = dataComponent.data;
+      const chart = elements.find((element) => element.type === 'chart' && element.id === item.id);
+      if (chart?.type !== 'chart' || chart.chartType !== expected.chartType
+        || JSON.stringify(chart.data.labels) !== JSON.stringify(expected.labels)
+        || JSON.stringify(chart.data.legends) !== JSON.stringify(expected.series.map((series) => series.name))
+        || JSON.stringify(chart.data.series) !== JSON.stringify(expected.series.map((series) => series.values))) return false;
+      return !expected.unit || completeVisibleStatement(expected.unit, elements);
+    }
     if (item.row || item.column) {
       if (!item.row || !item.column) return false;
       // Actual table headings, their intersecting cell and its label must agree.
@@ -412,6 +438,80 @@ function requiredProjectionSources(outline: SceneOutline) {
   const annotation = outline.visualIntent?.diagram?.annotation?.trim();
   return [...adoptedPageAuthoringContent(outline), ...(annotation
     ? [{ id: 'diagram-annotation', text: annotation, required: true }] : [])];
+}
+
+/** An adopted graph is a separate responsibility from its explanatory prose.
+ * Verify its native nodes and directed endpoints; a saved semantic plan alone
+ * cannot certify that the graph is still present on the canvas. */
+function visibleAdoptedDiagram(outline: SceneOutline, content: GeneratedSlideContent, display: PPTElement[]) {
+  const graph = outline.visualIntent?.diagram;
+  const visibleNodes = new Set<string>(), visibleLabelRelations = new Set<string>(), issues: string[] = [];
+  if (!graph || !content.teachingVisual) return { visibleNodes, visibleLabelRelations, issues };
+  const components = content.teachingVisual.scene.pages.find((page) => page.id === content.teachingVisual?.pageId)
+    ?.components.filter((component) => component.useAdoptedDiagram) ?? [];
+  const nodes = new Map<string, PPTShapeElement>();
+  for (const node of graph.nodes) {
+    const mapped = content.presentationProjection?.elementIdsBySource[`diagram-node:${node.id}`] ?? [];
+    const actual = display.find((element): element is PPTShapeElement => element.type === 'shape'
+      && mapped.includes(element.id) && components.some((component) => element.id === `${component.id}-node-${node.id}`)
+      && (completeVisibleStatement(node.label, [element]) || components.some((component) => {
+        // The original label may sit below a host-owned vector glyph. Only
+        // its canonical, source-mapped native caption can identify that node;
+        // repeating its words elsewhere on the page is not graph coverage.
+        if (element.id !== `${component.id}-node-${node.id}` || element.groupId !== component.id) return false;
+        const transparent = (color: string | undefined) => /^(?:\s*|none|transparent|#[\da-f]{6}00|#[\da-f]{3}0|rgba\([^)]*,\s*0(?:\.0+)?\s*\))$/iu.test(color?.trim() ?? '');
+        if (!element.path.trim() || (!element.gradient && !element.pattern && transparent(element.fill)
+          && (!element.outline?.width || transparent(element.outline.color)))) return false;
+        const caption = display.find((item) => item.type === 'text' && item.id === `${element.id}:label`
+          && mapped.includes(item.id) && item.groupId === component.id);
+        if (!caption || caption.type !== 'text') return false;
+        if (transparent(caption.defaultColor) && ![...caption.content.matchAll(/(?<![\w-])color\s*:\s*([^;"']+)/giu)]
+          .some((match) => !transparent(match[1]!))) return false;
+        const fonts = [...caption.content.matchAll(/font-size\s*:\s*([\d.]+)px/giu)].map((match) => Number(match[1]));
+        const gap = caption.top - (element.top + element.height);
+        return fonts.length > 0 && fonts.every((font) => font >= 18)
+          && Math.abs(caption.left + caption.width / 2 - (element.left + element.width / 2)) <= 3
+          && gap >= 0 && gap <= 24 && completeVisibleStatement(node.label, [caption]);
+      })));
+    if (actual) { nodes.set(node.id, actual); visibleNodes.add(node.id); }
+  }
+  if (components.length !== 1) issues.push('已采纳原图缺少唯一的实际承接构件');
+  let groups: ReturnType<typeof resolveDiagramSequenceGroups>;
+  try { groups = resolveDiagramSequenceGroups(graph); }
+  catch { issues.push('已采纳原图的独立流程序列无效'); }
+  const implicit = graph.topology === 'branch' || graph.topology === 'cycle' && graph.edges?.length
+    ? [] : (groups ?? [{ nodeIds: graph.nodes.map((node) => node.id) }])
+    .flatMap((group) => group.nodeIds.slice(0, graph.topology === 'cycle' ? undefined : -1)
+      .map((from, index) => ({ from, to: group.nodeIds[(index + 1) % group.nodeIds.length]! })));
+  const expected = [...new Map([...implicit, ...(graph.edges ?? [])].map((edge) => [`${edge.from}\0${edge.to}`, edge])).values()];
+  const actualEdges = content.elements.filter((element) => element.type === 'line'
+    && components.some((component) => element.id.startsWith(`${component.id}-edge-`)));
+  const touches = (point: [number, number], node: PPTShapeElement) => {
+    const [x, y] = point, right = node.left + node.width, bottom = node.top + node.height;
+    return x >= node.left - 3 && x <= right + 3 && y >= node.top - 3 && y <= bottom + 3
+      && Math.min(Math.abs(x - node.left), Math.abs(x - right), Math.abs(y - node.top), Math.abs(y - bottom)) <= 3;
+  };
+  const matched = new Set<string>();
+  for (const edge of expected) {
+    const from = nodes.get(edge.from), to = nodes.get(edge.to);
+    const actual = from && to && actualEdges.find((line) => line.type === 'line' && !matched.has(line.id)
+      && line.points[1] === 'arrow' && line.points[0] !== 'arrow' && line.width > 0
+      && (!('opacity' in line) || line.opacity === undefined || typeof line.opacity === 'number' && line.opacity > 0)
+      && !/^(?:transparent|none)$/iu.test(line.color)
+      && touches([line.left + line.start[0], line.top + line.start[1]], from)
+      && touches([line.left + line.end[0], line.top + line.end[1]], to));
+    if (actual) {
+      matched.add(actual.id);
+      if ('label' in edge && typeof edge.label === 'string') {
+        const labels = display.filter((element) => element.id === actual.id.replace(/-edge-(\d+)$/u, '-edge-label-$1'));
+        if (!completeVisibleStatement(edge.label, labels)) issues.push(`已采纳原图关系标签未完整可见：${edge.label}`);
+        else visibleLabelRelations.add(`${edge.from}\0${edge.to}`);
+      }
+    }
+    else issues.push(`已采纳原图关系未完整可见：${graph.nodes.find((node) => node.id === edge.from)?.label ?? edge.from} → ${graph.nodes.find((node) => node.id === edge.to)?.label ?? edge.to}`);
+  }
+  if (actualEdges.length > matched.size) issues.push('原图存在未匹配已采纳节点与方向的连接线');
+  return { visibleNodes, visibleLabelRelations, issues };
 }
 
 /** The complete literal relationship caption is native semantic evidence only
@@ -527,6 +627,13 @@ function normalizeElementPalette(
 }
 
 function paletteDeviations(content: GeneratedSlideContent): number {
+  if (content.teachingVisual) {
+    const expected = new Set([VISUAL_THEME.background, VISUAL_THEME.text, VISUAL_THEME.muted, VISUAL_THEME.blue,
+      VISUAL_THEME.teal, VISUAL_THEME.warm, VISUAL_THEME.line, VISUAL_THEME.pale, VISUAL_THEME.mint,
+      VISUAL_THEME.warmPale, '#F5F7F8'].map(normalizedHex));
+    return new Set(content.elements.flatMap(elementColors).filter((color) => !expected.has(color))).size
+      + Number(content.background?.type !== 'solid' || content.background.color !== VISUAL_THEME.background);
+  }
   const colors = new Set(content.elements.flatMap(elementColors));
   const nonReferenceColors = [...colors]
     .filter((color) => !REFERENCE_ELEMENT_PALETTE.has(color)).length;
@@ -565,6 +672,7 @@ export function normalizeAuditedReferenceStyle(
   content: GeneratedSlideContent,
   density: SlideDensityAudit = auditSlideDensity(outline, content),
 ): GeneratedSlideContent | null {
+  if (content.teachingVisual) return null;
   let changed = false;
   const palette = density.paletteDeviationCount > 0
     ? normalizeElementPalette(content.elements)
@@ -867,15 +975,20 @@ export function auditSlideDensity(
   const visibleCharacters = visibleTextCharacters(content.elements);
   const referenceLecture = hasReferenceLectureTypography(outline);
   const verticalSpan = instructionalVerticalSpan(content.elements);
-  const requiredVisibleStatements = slideRequiredVisibleStatements(outline);
+  const requiredVisibleStatements = slideRequiredVisibleStatements(outline, content);
   const hasAdoptedProjection = Boolean(outline.teachingBrief?.teachingPlan?.presentationItems?.some((item) => item.text.trim())
     || outline.teachingBrief?.teachingPlan?.presentationContent?.some((point) => point.trim()));
-  const displayElements = displayedContentElements(content.elements, referenceLecture ? slideBodyFontSizes(outline)[1] : undefined);
+  const displayElements = displayedContentElements(content.elements, content.teachingVisual ? VISUAL_THEME.minimum : referenceLecture ? slideBodyFontSizes(outline)[1] : undefined);
+  const adoptedDiagram = visibleAdoptedDiagram(outline, content, displayElements);
   const visibleProjectionSources = verifiedVisibleProjectionSources(outline, content);
   const adoptedSources = requiredProjectionSources(outline);
   const completeVisibleProjection = adoptedSources.length > 0
     && adoptedSources.every((source) => visibleProjectionSources.has(source.id));
   const pointCoverage = (point: string) => {
+    const graphNodes = outline.visualIntent?.diagram?.nodes.filter((node) => node.label.trim() === point.trim()) ?? [];
+    if (content.teachingVisual && graphNodes.length) return Number(graphNodes.every((node) => adoptedDiagram.visibleNodes.has(node.id)));
+    const graphEdges = outline.visualIntent?.diagram?.edges?.filter((edge) => edge.label?.trim() === point.trim()) ?? [];
+    if (content.teachingVisual && graphEdges.length) return Number(graphEdges.every((edge) => adoptedDiagram.visibleLabelRelations.has(`${edge.from}\0${edge.to}`)));
     const source = adoptedSources.find((source) => source.text.trim() === point.trim());
     if (source && content.presentationProjection) return Number(visibleProjectionSources.has(source.id));
     return hasAdoptedProjection ? Number(completeVisibleStatement(point, displayElements))
@@ -889,7 +1002,8 @@ export function auditSlideDensity(
     .filter((item) => item.coverage < 0.3)
     .sort((a, b) => a.coverage - b.coverage);
   const area = contentAreaMetrics(content.elements);
-  const deepBlueTitle = titleUsesDeepBlue(outline, content.elements);
+  const deepBlueTitle = content.teachingVisual ? Boolean(titleElement(outline, content.elements)
+    && elementColors(titleElement(outline, content.elements)!).includes(normalizedHex(VISUAL_THEME.text))) : titleUsesDeepBlue(outline, content.elements);
   const subtitle = hasIndependentSubtitle(outline, content.elements)
     || completeVisibleProjection && content.presentationProjection!.items.some((item) =>
       Boolean(item.label || item.row || item.column));
@@ -897,7 +1011,7 @@ export function auditSlideDensity(
   const structures = semanticStructures(content.elements);
   const completeRelationCaption = hasCompleteVisibleRelationCaption(outline, content.elements);
   if (completeRelationCaption) structures.push('text-relation-caption');
-  const structureSatisfied = satisfiesSemanticKind(requiredStructure, structures);
+  const structureSatisfied = satisfiesSemanticKind(requiredStructure, structures) && adoptedDiagram.issues.length === 0;
   const hasSemanticEvidence = displayElements.some((element) =>
     ['image', 'video', 'chart', 'latex', 'code'].includes(element.type),
   ) || structures.includes('connector') || completeRelationCaption;
@@ -907,17 +1021,17 @@ export function auditSlideDensity(
   const instructionalCount = content.elements.filter((element) =>
     element.type !== 'line' && (element.type !== 'shape' || Boolean(element.text?.content)),
   ).length;
-  const issues: string[] = [];
+  const issues: string[] = [...adoptedDiagram.issues];
   if (requiredVisibleStatements.length > 0 && underrepresentedKeyPoints.length > 0) {
     issues.push(`关键教学点可见覆盖率仅 ${(knowledgeCoverage * 100).toFixed(1)}%，存在 ${underrepresentedKeyPoints.length} 条未完整可见的已确认要点`);
   }
-  if (!referenceLecture && !hasSemanticEvidence && !completeVisibleProjection && visibleCharacters < 150) {
+  if (!content.teachingVisual && !referenceLecture && !hasSemanticEvidence && !completeVisibleProjection && visibleCharacters < 150) {
     issues.push(`普通讲授页可见教学文字仅 ${visibleCharacters} 个有效字符，低于 150 个字符的信息密度基线`);
   }
   if (!deepBlueTitle) {
     issues.push('主标题未使用 OpenMAIC 参考页的深蓝视觉角色（#1E3A8A/#1E40AF）');
   }
-  if (!subtitle) {
+  if (!subtitle && !content.teachingVisual) {
     issues.push('普通讲授页缺少独立副标题，标题与正文未形成清晰的两级页首层级');
   }
   if (requiredStructure && !structureSatisfied) {
@@ -931,10 +1045,10 @@ export function auditSlideDensity(
   }
   // Utilization is a continuous comparison signal, not a pass/fail target.
   // Intentional whitespace alone must not trigger another model request.
-  if (!referenceLecture && area.maxBlankBand > 125) {
+  if (!content.teachingVisual && !referenceLecture && area.maxBlankBand > 125) {
     issues.push(`正文区域存在 ${area.maxBlankBand}px 的连续空白带，信息分布明显失衡`);
   }
-  if (!referenceLecture && !hasMedia && instructionalCount <= 3 && verticalSpan < 300) {
+  if (!content.teachingVisual && !referenceLecture && !hasMedia && instructionalCount <= 3 && verticalSpan < 300) {
     issues.push(`有效内容纵向仅占 ${verticalSpan}px，页面下半部存在大面积无教学作用的空白`);
   }
   return {
@@ -1179,7 +1293,7 @@ export async function auditAndRepairSlideOnce(input: {
     }
   };
   const initialAudit = await audit(input.content, input.outline.id);
-  const requiredVisibleStatements = slideRequiredVisibleStatements(input.outline);
+  const requiredVisibleStatements = slideRequiredVisibleStatements(input.outline, input.content);
   const initialCoverage = slideKnowledgeCoverage(requiredVisibleStatements, input.content.elements);
   const initialDensity = auditSlideDensity(input.outline, input.content);
   const initialQualityScore = slideCompositeQualityScore(

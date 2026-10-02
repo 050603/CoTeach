@@ -1,4 +1,10 @@
 import type { GeneratedSlideContent, SceneOutline } from '@openmaic/lib/types/generation';
+import type { TeachingVisualComponentKind } from '@openmaic/dsl';
+
+const componentRepresentation: Record<TeachingVisualComponentKind, NonNullable<SceneOutline['visualIntent']>['representation']> = {
+  'state-change': 'native-diagram', process: 'native-diagram', causal: 'native-diagram', structure: 'native-diagram',
+  comparison: 'table', 'annotated-image': 'mixed', data: 'native-chart', 'worked-example': 'native-diagram', text: 'text',
+};
 
 /** Integer shares preserve every second of the adopted teaching budget. */
 function share(total: number | undefined, index: number, count: number): number | undefined {
@@ -58,11 +64,30 @@ export function expandCompiledSlidePages(
       ? plannedTiming.narrationSec + plannedTiming.learnerActivitySec + plannedTiming.transitionSec
       : durationShares[index];
     const plan = outline.teachingBrief?.teachingPlan;
+    const visual = page.teachingVisual;
+    const originalSources = visual?.sourceCatalog?.filter((source) => page.sourceGroupIds?.includes(source.id));
+    const displayItems = page.presentationProjection?.items ?? [];
+    const display = visual ? [...new Set(displayItems.map((item) => [item.row, item.column, item.label, item.text].filter(Boolean).join('：')))] : visible;
+    const visualPage = visual?.scene.pages.find((part) => part.id === visual.pageId);
+    const ownsAdoptedDiagram = visualPage?.components.some((component) => component.useAdoptedDiagram) === true;
+    const graphSibling = Boolean(visualPage && outline.visualIntent?.diagram && !ownsAdoptedDiagram);
+    const localRepresentations = [...new Set(visualPage?.components.map((component) => componentRepresentation[component.kind]) ?? [])];
+    const originalItemNodes = (sourceIds: string[]) => [...new Set(sourceIds.flatMap((sourceId) => {
+      const source = visual?.sourceCatalog?.find((entry) => entry.id === sourceId);
+      return source ? plan?.presentationItems?.filter((item) => item.text.trim() === source.text.trim()).flatMap((item) => item.nodeIds) ?? [] : [];
+    }))];
+    const localNodeIds = originalItemNodes(page.sourceGroupIds ?? []);
     const local: SceneOutline = {
       ...outline, id,
+      ...(visualPage ? { title: visualPage.title } : {}),
+      // An explicit empty catalog is a real figure-only duty, not permission
+      // to inherit the parent's textual facts on this page.
+      ...(visual ? { visualSourceCatalog: originalSources ?? [] } : {}),
       sourcePageIds: outline.sourcePageIds ?? [outline.spatialParentId ?? outline.id],
       spatialParentId: outline.spatialParentId ?? outline.id,
-      spatialSourceContext: outline.spatialSourceContext ?? {
+      spatialSourceContext: outline.spatialSourceContext ? { ...outline.spatialSourceContext,
+        title: outline.spatialSourceContext.title ?? outline.title } : {
+        title: outline.title,
         description: outline.description,
         teachingObjective: outline.teachingObjective,
         coreMessage: plan?.newContent ?? outline.description,
@@ -76,9 +101,12 @@ export function expandCompiledSlidePages(
       mediaGenerations: outline.mediaGenerations?.filter((request) => mediaIds.has(request.elementId)),
       visualIntent: outline.visualIntent ? {
         ...outline.visualIntent,
+        ...(graphSibling ? { observationGoal: visualPage!.focus,
+          representation: localRepresentations.length === 1 ? localRepresentations[0]! : 'mixed' as const } : {}),
         resourceRefs: outline.visualIntent.resourceRefs?.filter((resource) => mediaIds.has(resource.resourceId)),
-        // The diagram has already been compiled; do not require its nodes on siblings.
-        diagram: undefined,
+        // Retain the adopted graph on its actual host for audits and regeneration.
+        // Siblings own only their local source duties.
+        diagram: ownsAdoptedDiagram ? outline.visualIntent.diagram : undefined,
       } : undefined,
       teachingBrief: outline.teachingBrief ? {
         ...outline.teachingBrief,
@@ -86,13 +114,16 @@ export function expandCompiledSlidePages(
           need.kind !== 'source-image' || Boolean(need.assetId && mediaIds.has(need.assetId))),
         teachingPlan: plan ? {
           ...plan,
-          visibleContent: visible,
-          ...(plan.presentationContent?.length ? { presentationContent: visible } : {}),
-          newContent: visible.join('；'),
+          ...(graphSibling ? { visualRelationship: undefined } : {}),
+          visibleContent: visual ? display : visible,
+          ...(plan.presentationContent?.length ? { presentationContent: visual ? display : visible } : {}),
+          ...(visual && plan.presentationItems ? { presentationItems: displayItems.map((item) => ({ role: 'key-point' as const,
+            text: [item.row, item.column, item.label, item.text].filter(Boolean).join('：'), nodeIds: originalItemNodes(item.sourceContentIds) })) } : {}),
+          newContent: visual ? plan.newContent : visible.join('；'),
           narrationFocus: [`只展开本页内容，原教学解释作为连续讲解背景，不逐页重复。`, ...visible],
           takeaway: visible.join('；'),
-          introduces: index === 0 ? plan.introduces : [],
-          deepens: index === 0 ? plan.deepens : [],
+          introduces: visual && (localNodeIds.length || !ownsAdoptedDiagram) ? plan.introduces?.filter((id) => localNodeIds.includes(id)) : index === 0 ? plan.introduces : [],
+          deepens: visual && (localNodeIds.length || !ownsAdoptedDiagram) ? plan.deepens?.filter((id) => localNodeIds.includes(id)) : index === 0 ? plan.deepens : [],
           references: index === 0 ? plan.references : [...new Set([
             ...(plan.references ?? []), ...(plan.introduces ?? []), ...(plan.deepens ?? []),
           ])],

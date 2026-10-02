@@ -1,7 +1,7 @@
 'use client';
 
 import { produce } from 'immer';
-import { Image as ImageIcon, PaintBucket, Type } from 'lucide-react';
+import { Image as ImageIcon, PaintBucket, Type, LayoutTemplate, LoaderCircle } from 'lucide-react';
 import React, { useEffect, useLayoutEffect, useMemo, useRef } from 'react';
 import type { SceneDataController } from '@openmaic/lib/contexts/scene-context';
 import type { InsertPaletteItem, SurfaceState } from '@openmaic/lib/edit/scene-editor-surface';
@@ -17,6 +17,7 @@ import { ImagePicker } from './ImagePicker';
 import { BackgroundControl } from './BackgroundControl';
 import { useSlideEditSession } from './slide-edit-session';
 import { resolveEditingElementId, resolveSelectedElement } from './editing-state';
+import { useTeachingVisualRecompose } from './use-teaching-visual-actions';
 
 export interface SlideSelection {
   readonly activeElementIds: readonly string[];
@@ -188,6 +189,9 @@ export function useSlideSurfaceState(): SurfaceState<SlideContent, SlideSelectio
   const activeElementIds = useCanvasStore.use.activeElementIdList();
   const creatingElement = useCanvasStore.use.creatingElement();
   const content = useResolvedSlideContent();
+  const { pending, recompose, messages } = useTeachingVisualRecompose();
+  const visual = content.canvas.teachingVisual;
+  const canRecompose = visual?.components.some((component) => !component.locked && !component.modified);
 
   return {
     content,
@@ -204,7 +208,16 @@ export function useSlideSurfaceState(): SurfaceState<SlideContent, SlideSelectio
     // (AnchoredTextBar / AnchoredElementBar) — the surface contributes no
     // top-center FloatingToolbar actions.
     floatingActions: [],
-    commands: [],
+    commands: visual ? [{
+      id: 'visual-recompose-page',
+      label: pending ? messages.pending : messages.recomposePage,
+      tooltip: pending ? messages.pending : canRecompose ? messages.recomposePage : messages.unavailable,
+      icon: React.createElement(pending ? LoaderCircle : LayoutTemplate, {
+        className: pending ? 'h-4 w-4 animate-spin' : 'h-4 w-4',
+      }),
+      disabled: pending || !canRecompose,
+      onInvoke: () => { void recompose(); },
+    }] : [],
     hints: [],
   };
 }
@@ -305,8 +318,9 @@ export function useSlideCanvasController(): SlideCanvasController {
  */
 export function useEditingTextElementId(): string {
   const activeElementIds = useCanvasStore.use.activeElementIdList();
+  const activeGroupElementId = useCanvasStore.use.activeGroupElementId();
   const content = useResolvedSlideContent();
-  return resolveEditingElementId(activeElementIds, content.canvas.elements);
+  return resolveEditingElementId(activeElementIds, content.canvas.elements, activeGroupElementId);
 }
 
 /**
@@ -317,8 +331,9 @@ export function useEditingTextElementId(): string {
  */
 export function useSelectedNonTextElement(): PPTElement | null {
   const activeElementIds = useCanvasStore.use.activeElementIdList();
+  const activeGroupElementId = useCanvasStore.use.activeGroupElementId();
   const content = useResolvedSlideContent();
-  const el = resolveSelectedElement(activeElementIds, content.canvas.elements);
+  const el = resolveSelectedElement(activeElementIds, content.canvas.elements, activeGroupElementId);
   return el && el.type !== 'text' ? el : null;
 }
 

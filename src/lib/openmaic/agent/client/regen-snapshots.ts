@@ -15,6 +15,8 @@ import type { SceneContent } from '@openmaic/lib/types/stage';
 import { isEqual } from 'lodash';
 import type { WhiteboardPatch } from '@openmaic/lib/edit/whiteboard-patch';
 import { whiteboardBlocks, replaceWhiteboardSteps } from '@openmaic/lib/edit/whiteboard-blocks';
+import type { SceneRangeDirection, SceneRangeTransaction } from './scene-range-transaction';
+import { hasProtectedTeachingVisualEdits } from '@openmaic/lib/edit/teaching-visual-edits';
 
 export interface RegenSnapshot {
   sceneId: string;
@@ -28,6 +30,8 @@ export interface RegenSnapshot {
    */
   actionsOnly?: boolean;
   whiteboardPatch?: WhiteboardPatch;
+  /** Atomic local split. Its after-state also supplies redo. */
+  sceneRange?: SceneRangeTransaction;
   restored: boolean;
   /**
    * Post-edit state (the patch the tool applied), kept so an undo can be RESUMED
@@ -58,6 +62,8 @@ interface RegenSnapshotsState {
     toolCallId: string,
     apply: RestoreApplyFn,
     readActions?: (sceneId: string) => Action[] | null | undefined,
+    applyRange?: (transaction: SceneRangeTransaction, direction: SceneRangeDirection) => string | undefined,
+    readScene?: (sceneId: string) => { content: SceneContent; actions?: Action[] } | null | undefined,
   ) => string | undefined;
   /** Drop all snapshots (e.g. on "新对话") so stale entries don't accumulate. */
   clearAll: () => void;
@@ -67,11 +73,18 @@ export const useRegenSnapshots = create<RegenSnapshotsState>((set, get) => ({
   snapshots: {},
   setSnapshot: (toolCallId, snap) =>
     set((s) => ({
-      snapshots: { ...s.snapshots, [toolCallId]: { ...snap, restored: false } },
+      snapshots: { ...s.snapshots, [toolCallId]: { ...structuredClone(snap), restored: false } },
     })),
-  restore: (toolCallId, apply, readActions) => {
+  restore: (toolCallId, apply, readActions, applyRange, readScene) => {
     const snap = get().snapshots[toolCallId];
     if (!snap) return;
+    if (snap.sceneRange) {
+      if (!applyRange) return '未找到拆页恢复接口，已保留当前课程。';
+      const error = applyRange(snap.sceneRange, snap.restored ? 'redo' : 'undo');
+      if (error) return error;
+      set((s) => ({ snapshots: { ...s.snapshots, [toolCallId]: { ...snap, restored: !snap.restored } } }));
+      return;
+    }
     if (snap.whiteboardPatch) {
       if (snap.restored && !snap.redo) return;
       const actions = readActions?.(snap.sceneId);
@@ -85,13 +98,25 @@ export const useRegenSnapshots = create<RegenSnapshotsState>((set, get) => ({
       set((s) => ({ snapshots: { ...s.snapshots, [toolCallId]: { ...snap, restored: !snap.restored } } }));
       return;
     }
+    // Legacy whole-page tool cards also need to respect later teacher edits.
+    // Compare only the fields this tool owns; narration undo keeps canvas edits.
+    const live = readScene?.(snap.sceneId);
+    const expected = snap.restored
+      ? { content: snap.actionsOnly ? undefined : snap.content,
+          actions: snap.actionsOnly || !snap.redo || snap.redo.actions !== undefined ? snap.actions : undefined }
+      : snap.redo;
+    if (readScene && (!live || (expected?.content !== undefined && !isEqual(live.content, expected.content)) ||
+        (expected?.actions !== undefined && !isEqual(live.actions ?? [], expected.actions)) ||
+        (!snap.actionsOnly && live.content.type === 'slide' && hasProtectedTeachingVisualEdits(live.content)))) {
+      return '这页已有后续修改，已保留你的最新内容，无法直接撤销或重做 AI 修改。';
+    }
     if (!snap.restored) {
       // Undo → pre-edit state.
       apply(
         snap.sceneId,
         snap.actionsOnly
           ? { actions: snap.actions }
-          : { content: snap.content, actions: snap.actions },
+          : { content: snap.content, ...(!snap.redo || snap.redo.actions !== undefined ? { actions: snap.actions } : {}) },
       );
       set((s) => ({
         snapshots: { ...s.snapshots, [toolCallId]: { ...snap, restored: true } },

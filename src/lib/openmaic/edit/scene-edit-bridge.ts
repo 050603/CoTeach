@@ -19,6 +19,7 @@ import type { SlideContent } from '@openmaic/lib/types/stage';
 import type { PPTElement } from '@openmaic/dsl';
 import { applySlideEditOperation, MAX_HISTORY } from '@openmaic/lib/edit/slide-ops';
 import type { SlideEditHistory, SlideEditOperation } from '@openmaic/lib/edit/slide-ops';
+import { markTeachingVisualEdits } from './teaching-visual-edits';
 
 type AnyRecord = Record<string, unknown>;
 
@@ -110,9 +111,17 @@ export function deriveSlideEditOperations(
  *   content overload, then push a single past entry.
  */
 export function commitSlideEdit(history: SlideEditHistory, next: SlideContent): SlideEditHistory {
+  next = markTeachingVisualEdits(history.present, next);
   const ops = deriveSlideEditOperations(history.present, next);
-  if (ops.length === 0) return history;
-  if (ops.length === 1) return applySlideEditOperation(history, ops[0]);
+  const beforeIds = new Set(history.present.canvas.elements.map((element) => element.id));
+  const afterIds = new Set(next.canvas.elements.map((element) => element.id));
+  const reordered = !isEqual(
+    history.present.canvas.elements.filter((element) => afterIds.has(element.id)).map((element) => element.id),
+    next.canvas.elements.filter((element) => beforeIds.has(element.id)).map((element) => element.id),
+  );
+  const animationsChanged = !isEqual(history.present.canvas.animations, next.canvas.animations);
+  if (ops.length === 0 && !reordered && !animationsChanged) return history;
+  if (ops.length === 1 && !reordered && !animationsChanged) return applySlideEditOperation(history, ops[0]);
 
   // Multi-element gesture = one undo step. Use the renderer's authoritative
   // snapshot as `present` rather than replaying derived ops onto it: the

@@ -2,18 +2,21 @@ import type { ReactNode } from 'react';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Scene, Stage } from '@openmaic/lib/types/stage';
+import type { SceneOutline } from '@openmaic/lib/types/generation';
+import { teachingVisualEditFixture } from '@openmaic/lib/edit/teaching-visual-edit-fixture';
 
 interface TestState {
   stage: Stage | null;
   scenes: Scene[];
+  outlines: SceneOutline[];
   currentSceneId: string | null;
   clearStore: () => void;
 }
 
 const mocks = vi.hoisted(() => {
   const listeners = new Set<(state: TestState) => void>();
-  const reset = () => { state = { stage: null, scenes: [], currentSceneId: null, clearStore: reset }; };
-  let state: TestState = { stage: null, scenes: [], currentSceneId: null, clearStore: reset };
+  const reset = () => { state = { stage: null, scenes: [], outlines: [], currentSceneId: null, clearStore: reset }; };
+  let state: TestState = { stage: null, scenes: [], outlines: [], currentSceneId: null, clearStore: reset };
   return {
     fetch: vi.fn(),
     toast: { success: vi.fn(), warning: vi.fn(), error: vi.fn() },
@@ -75,6 +78,54 @@ beforeEach(() => {
 });
 
 describe('teacher classroom save lifecycle', () => {
+  it('hydrates canonical responsibilities without replacing current titles, order or protected canvas edits', async () => {
+    const initial = classroom();
+    const content = teachingVisualEditFixture();
+    content.canvas.teachingVisual!.components[0].modified = true;
+    initial.scenes[0].content = content;
+    initial.scenes[0].title = '教师的当前标题';
+    initial.scenes.reverse();
+    const outlines: SceneOutline[] = [{ id: 's1', type: 'slide', title: '原教材标题', order: 8,
+      description: '原始完整教学解释和条件', keyPoints: ['必要条件'],
+      teachingBrief: { schemaVersion: 1, explanation: '完整原文教学责任', evidence: [{ sourceId: 'book', quote: '原文证据' }],
+        conditions: ['必要条件'], examples: ['真实案例'], assessmentFocus: '理解关系' } }];
+    mocks.fetch.mockResolvedValueOnce(Response.json({ success: true, classroom: initial, outlines }));
+    render(editor());
+    await screen.findByText('课堂编辑区域');
+    expect(mocks.store.getState().outlines).toEqual(outlines);
+    expect(mocks.store.getState().scenes).toEqual(initial.scenes);
+    expect(mocks.store.getState().scenes[1].title).toBe('教师的当前标题');
+    expect(screen.getByText('所有修改已保存')).toBeInTheDocument();
+  });
+
+  it('includes local split outlines in saves and preserves a newer local duty while applying the response', async () => {
+    const initial = classroom();
+    const outline: SceneOutline = { id: 's1', type: 'slide', title: '教材标题', description: '原始责任', keyPoints: [], order: 0 };
+    const pending = deferred<Response>();
+    mocks.fetch.mockResolvedValueOnce(Response.json({ success: true, classroom: initial, outlines: [outline] }));
+    mocks.fetch.mockReturnValueOnce(pending.promise);
+    render(editor());
+    await screen.findByText('课堂编辑区域');
+    act(() => mocks.store.setState({ outlines: [{ ...outline, segmentRole: '已提交的局部责任' }] }));
+    expect(screen.getByText('有修改尚未保存')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '保存课堂' }));
+    await waitFor(() => expect(mocks.fetch).toHaveBeenCalledTimes(2));
+    const body = JSON.parse(mocks.fetch.mock.calls[1][1].body);
+    expect(body.outlines).toEqual([{ ...outline, segmentRole: '已提交的局部责任' }]);
+    act(() => mocks.store.setState({ outlines: [{ ...outline, segmentRole: '保存期间继续修改的局部责任' }] }));
+    await act(async () => pending.resolve(Response.json({ success: true, classroom: { ...initial, revision: 5 },
+      outlines: [{ ...body.outlines[0], sourcePageIds: ['s1'] }] })));
+    expect(mocks.store.getState().outlines[0]).toMatchObject({ segmentRole: '保存期间继续修改的局部责任', sourcePageIds: ['s1'] });
+    expect(screen.getByText('有修改尚未保存')).toBeInTheDocument();
+  });
+
+  it('keeps old courses with no canonical outlines editable', async () => {
+    mocks.fetch.mockResolvedValueOnce(Response.json({ success: true, classroom: classroom() }));
+    render(editor());
+    await screen.findByText('课堂编辑区域');
+    expect(mocks.store.getState().outlines).toEqual([]);
+    expect(screen.getByRole('button', { name: '保存课堂' })).toBeDisabled();
+  });
   it('opens the requested review scene and selects a valid slide element', async () => {
     const initial = classroom();
     const reviewScene = initial.scenes[1];
@@ -128,6 +179,7 @@ describe('teacher classroom save lifecycle', () => {
     expect(mocks.fetch.mock.calls[0][1].signal.aborted).toBe(true);
     await act(async () => oldLoad.resolve(Response.json({ success: true, classroom: classroom('c1') })));
     expect(mocks.store.getState().stage?.id).toBe('c2');
+    expect(mocks.store.getState().outlines).toEqual([]);
   });
 
   it('keeps local changes when the user declines a conflict reload', async () => {

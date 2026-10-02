@@ -1,0 +1,1257 @@
+[
+  {
+    "id": "structure-01-ecosystem-1",
+    "outline": {
+      "id": "structure-01-ecosystem",
+      "type": "slide",
+      "title": "生态系统的组成层级",
+      "description": "整体包含生物部分和非生物环境；分类关系不表示食物链顺序。",
+      "keyPoints": [
+        "生态系统包含生物部分和非生物环境。",
+        "生物部分可按功能分为生产者、消费者和分解者。",
+        "阳光、水和温度属于非生物环境；分类层级不表示食物链顺序。"
+      ],
+      "order": 0,
+      "targetDurationSec": 60,
+      "estimatedDuration": 60,
+      "teachingBrief": {
+        "schemaVersion": 1,
+        "explanation": "生态系统包含生物部分和非生物环境。\n生物部分可按功能分为生产者、消费者和分解者。\n阳光、水和温度属于非生物环境；分类层级不表示食物链顺序。",
+        "examples": [],
+        "conditions": [],
+        "evidence": [],
+        "assessmentFocus": "",
+        "teachingPlan": {
+          "purpose": "整体包含生物部分和非生物环境；分类关系不表示食物链顺序。",
+          "priorKnowledge": "",
+          "newContent": "生态系统包含生物部分和非生物环境。\n生物部分可按功能分为生产者、消费者和分解者。\n阳光、水和温度属于非生物环境；分类层级不表示食物链顺序。",
+          "learnerQuestion": "整体包含生物部分和非生物环境；分类关系不表示食物链顺序。",
+          "reasoningSteps": [
+            "生态系统包含生物部分和非生物环境。",
+            "生物部分可按功能分为生产者、消费者和分解者。",
+            "阳光、水和温度属于非生物环境；分类层级不表示食物链顺序。"
+          ],
+          "takeaway": "生态系统包含生物部分和非生物环境。；生物部分可按功能分为生产者、消费者和分解者。；阳光、水和温度属于非生物环境；分类层级不表示食物链顺序。",
+          "visibleContent": [
+            "生态系统包含生物部分和非生物环境。",
+            "生物部分可按功能分为生产者、消费者和分解者。",
+            "阳光、水和温度属于非生物环境；分类层级不表示食物链顺序。"
+          ],
+          "presentationContent": [
+            "生态系统包含生物部分和非生物环境。",
+            "生物部分可按功能分为生产者、消费者和分解者。",
+            "阳光、水和温度属于非生物环境；分类层级不表示食物链顺序。"
+          ],
+          "narrationFocus": [
+            "生态系统包含生物部分和非生物环境。",
+            "生物部分可按功能分为生产者、消费者和分解者。",
+            "阳光、水和温度属于非生物环境；分类层级不表示食物链顺序。"
+          ]
+        }
+      },
+      "audience": "student",
+      "generationPurpose": "knowledge-teaching"
+    },
+    "scene": {
+      "schemaVersion": 1,
+      "designVersion": "teaching-visual-v2",
+      "pages": [
+        {
+          "id": "structure-01-ecosystem",
+          "title": "生态系统的组成层级",
+          "focus": "观察生态系统的两个一级组成部分，区分生物部分的功能类群与非生物环境中的非生物因素，并明确分类层级不表示食物链顺序。",
+          "components": [
+            {
+              "id": "comp-ecosystem-structure",
+              "kind": "structure",
+              "nodes": [
+                {
+                  "id": "n-ecosystem",
+                  "sourceContentIds": [
+                    "adopted-content-1"
+                  ],
+                  "label": "生态系统",
+                  "text": "包含生物部分和非生物环境",
+                  "sourceEvidenceIds": [
+                    "source-quote-1"
+                  ],
+                  "emphasis": [
+                    "生物部分",
+                    "非生物环境"
+                  ]
+                },
+                {
+                  "id": "n-biotic",
+                  "sourceContentIds": [
+                    "adopted-content-1",
+                    "adopted-content-2"
+                  ],
+                  "label": "生物部分",
+                  "text": "可按功能分为生产者、消费者和分解者",
+                  "sourceEvidenceIds": [
+                    "source-quote-1",
+                    "source-quote-2"
+                  ],
+                  "emphasis": [
+                    "生产者",
+                    "消费者",
+                    "分解者"
+                  ]
+                },
+                {
+                  "id": "n-producer",
+                  "sourceContentIds": [
+                    "adopted-content-2"
+                  ],
+                  "label": "生产者",
+                  "sourceEvidenceIds": [
+                    "source-quote-2"
+                  ]
+                },
+                {
+                  "id": "n-consumer",
+                  "sourceContentIds": [
+                    "adopted-content-2"
+                  ],
+                  "label": "消费者",
+                  "sourceEvidenceIds": [
+                    "source-quote-2"
+                  ]
+                },
+                {
+                  "id": "n-decomposer",
+                  "sourceContentIds": [
+                    "adopted-content-2"
+                  ],
+                  "label": "分解者",
+                  "sourceEvidenceIds": [
+                    "source-quote-2"
+                  ]
+                },
+                {
+                  "id": "n-abiotic",
+                  "sourceContentIds": [
+                    "adopted-content-1",
+                    "adopted-content-3"
+                  ],
+                  "label": "非生物环境",
+                  "text": "包含阳光、水和温度；分类层级不表示食物链顺序",
+                  "sourceEvidenceIds": [
+                    "source-quote-1",
+                    "source-quote-3"
+                  ],
+                  "emphasis": [
+                    "阳光",
+                    "水",
+                    "温度",
+                    "分类层级不表示食物链顺序"
+                  ]
+                },
+                {
+                  "id": "n-sunlight",
+                  "sourceContentIds": [
+                    "adopted-content-3"
+                  ],
+                  "label": "阳光",
+                  "sourceEvidenceIds": [
+                    "source-quote-3"
+                  ]
+                },
+                {
+                  "id": "n-water",
+                  "sourceContentIds": [
+                    "adopted-content-3"
+                  ],
+                  "label": "水",
+                  "sourceEvidenceIds": [
+                    "source-quote-3"
+                  ]
+                },
+                {
+                  "id": "n-temperature",
+                  "sourceContentIds": [
+                    "adopted-content-3"
+                  ],
+                  "label": "温度",
+                  "sourceEvidenceIds": [
+                    "source-quote-3"
+                  ]
+                },
+                {
+                  "id": "n-note-no-food-chain-order",
+                  "sourceContentIds": [
+                    "adopted-content-3"
+                  ],
+                  "label": "分类层级",
+                  "text": "不表示食物链顺序",
+                  "sourceEvidenceIds": [
+                    "source-quote-3"
+                  ],
+                  "emphasis": [
+                    "不表示食物链顺序"
+                  ]
+                }
+              ],
+              "title": "生态系统的组成层级",
+              "edges": [
+                {
+                  "from": "n-ecosystem",
+                  "to": "n-biotic",
+                  "label": "包含",
+                  "kind": "containment"
+                },
+                {
+                  "from": "n-ecosystem",
+                  "to": "n-abiotic",
+                  "label": "包含",
+                  "kind": "containment"
+                },
+                {
+                  "from": "n-biotic",
+                  "to": "n-producer",
+                  "label": "按功能分为",
+                  "kind": "containment"
+                },
+                {
+                  "from": "n-biotic",
+                  "to": "n-consumer",
+                  "label": "按功能分为",
+                  "kind": "containment"
+                },
+                {
+                  "from": "n-biotic",
+                  "to": "n-decomposer",
+                  "label": "按功能分为",
+                  "kind": "containment"
+                },
+                {
+                  "from": "n-abiotic",
+                  "to": "n-sunlight",
+                  "label": "包含",
+                  "kind": "containment"
+                },
+                {
+                  "from": "n-abiotic",
+                  "to": "n-water",
+                  "label": "包含",
+                  "kind": "containment"
+                },
+                {
+                  "from": "n-abiotic",
+                  "to": "n-temperature",
+                  "label": "包含",
+                  "kind": "containment"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "images": []
+  },
+  {
+    "id": "process-03-investigation-1",
+    "outline": {
+      "id": "process-03-investigation",
+      "type": "slide",
+      "title": "科学探究的证据链",
+      "description": "先明确可检验假设，记录受控观察，再依据数据评价假设并开展下一轮验证。",
+      "keyPoints": [
+        "提出可检验的问题和假设，说明哪些观察结果能够支持或反驳它。",
+        "控制无关变量，改变自变量并记录因变量，多次测量降低随机波动。",
+        "根据数据评价假设，公开局限并提出下一轮验证。"
+      ],
+      "order": 0,
+      "targetDurationSec": 60,
+      "estimatedDuration": 60,
+      "teachingBrief": {
+        "schemaVersion": 1,
+        "explanation": "提出可检验的问题和假设，说明哪些观察结果能够支持或反驳它。\n控制无关变量，改变自变量并记录因变量，多次测量降低随机波动。\n根据数据评价假设，公开局限并提出下一轮验证。",
+        "examples": [],
+        "conditions": [],
+        "evidence": [],
+        "assessmentFocus": "",
+        "teachingPlan": {
+          "purpose": "先明确可检验假设，记录受控观察，再依据数据评价假设并开展下一轮验证。",
+          "priorKnowledge": "",
+          "newContent": "提出可检验的问题和假设，说明哪些观察结果能够支持或反驳它。\n控制无关变量，改变自变量并记录因变量，多次测量降低随机波动。\n根据数据评价假设，公开局限并提出下一轮验证。",
+          "learnerQuestion": "先明确可检验假设，记录受控观察，再依据数据评价假设并开展下一轮验证。",
+          "reasoningSteps": [
+            "提出可检验的问题和假设，说明哪些观察结果能够支持或反驳它。",
+            "控制无关变量，改变自变量并记录因变量，多次测量降低随机波动。",
+            "根据数据评价假设，公开局限并提出下一轮验证。"
+          ],
+          "takeaway": "提出可检验的问题和假设，说明哪些观察结果能够支持或反驳它。；控制无关变量，改变自变量并记录因变量，多次测量降低随机波动。；根据数据评价假设，公开局限并提出下一轮验证。",
+          "visibleContent": [
+            "提出可检验的问题和假设，说明哪些观察结果能够支持或反驳它。",
+            "控制无关变量，改变自变量并记录因变量，多次测量降低随机波动。",
+            "根据数据评价假设，公开局限并提出下一轮验证。"
+          ],
+          "presentationContent": [
+            "提出可检验的问题和假设，说明哪些观察结果能够支持或反驳它。",
+            "控制无关变量，改变自变量并记录因变量，多次测量降低随机波动。",
+            "根据数据评价假设，公开局限并提出下一轮验证。"
+          ],
+          "narrationFocus": [
+            "提出可检验的问题和假设，说明哪些观察结果能够支持或反驳它。",
+            "控制无关变量，改变自变量并记录因变量，多次测量降低随机波动。",
+            "根据数据评价假设，公开局限并提出下一轮验证。"
+          ]
+        }
+      },
+      "audience": "student",
+      "generationPurpose": "knowledge-teaching"
+    },
+    "scene": {
+      "schemaVersion": 1,
+      "designVersion": "teaching-visual-v2",
+      "pages": [
+        {
+          "id": "process-03-investigation",
+          "title": "科学探究的证据链",
+          "focus": "按可检验问题与假设、变量控制与测量、数据评价与下一轮验证的顺序，呈现科学探究各环节的证据责任。",
+          "components": [
+            {
+              "id": "component-investigation-process",
+              "kind": "process",
+              "nodes": [
+                {
+                  "id": "n1",
+                  "sourceContentIds": [
+                    "adopted-content-1"
+                  ],
+                  "label": "提出可检验的问题和假设",
+                  "text": "提出可检验的问题和假设。",
+                  "sourceEvidenceIds": [
+                    "source-quote-1"
+                  ]
+                },
+                {
+                  "id": "n2",
+                  "sourceContentIds": [
+                    "adopted-content-1"
+                  ],
+                  "label": "说明支持或反驳的观察结果",
+                  "text": "说明哪些观察结果能够支持或反驳它。",
+                  "sourceEvidenceIds": [
+                    "source-quote-1"
+                  ]
+                },
+                {
+                  "id": "n3",
+                  "sourceContentIds": [
+                    "adopted-content-2"
+                  ],
+                  "label": "控制无关变量",
+                  "text": "控制无关变量。",
+                  "sourceEvidenceIds": [
+                    "source-quote-2"
+                  ]
+                },
+                {
+                  "id": "n4",
+                  "sourceContentIds": [
+                    "adopted-content-2"
+                  ],
+                  "label": "改变自变量并记录因变量",
+                  "text": "改变自变量并记录因变量。",
+                  "sourceEvidenceIds": [
+                    "source-quote-2"
+                  ]
+                },
+                {
+                  "id": "n5",
+                  "sourceContentIds": [
+                    "adopted-content-2"
+                  ],
+                  "label": "多次测量降低随机波动",
+                  "text": "多次测量降低随机波动。",
+                  "sourceEvidenceIds": [
+                    "source-quote-2"
+                  ]
+                },
+                {
+                  "id": "n6",
+                  "sourceContentIds": [
+                    "adopted-content-3"
+                  ],
+                  "label": "根据数据评价假设",
+                  "text": "根据数据评价假设。",
+                  "sourceEvidenceIds": [
+                    "source-quote-3"
+                  ]
+                },
+                {
+                  "id": "n7",
+                  "sourceContentIds": [
+                    "adopted-content-3"
+                  ],
+                  "label": "公开局限并提出下一轮验证",
+                  "text": "公开局限并提出下一轮验证。",
+                  "sourceEvidenceIds": [
+                    "source-quote-3"
+                  ]
+                }
+              ],
+              "title": "从问题到下一轮验证的探究流程",
+              "edges": [
+                {
+                  "from": "n1",
+                  "to": "n2",
+                  "label": "明确证据方向",
+                  "kind": "sequence"
+                },
+                {
+                  "from": "n2",
+                  "to": "n3",
+                  "label": "进入变量控制",
+                  "kind": "sequence"
+                },
+                {
+                  "from": "n3",
+                  "to": "n4",
+                  "label": "控制后改变与记录",
+                  "kind": "sequence"
+                },
+                {
+                  "from": "n4",
+                  "to": "n5",
+                  "label": "重复测量",
+                  "kind": "sequence"
+                },
+                {
+                  "from": "n5",
+                  "to": "n6",
+                  "label": "进入数据评价",
+                  "kind": "sequence"
+                },
+                {
+                  "from": "n6",
+                  "to": "n7",
+                  "label": "公开局限并推进验证",
+                  "kind": "sequence"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "images": []
+  },
+  {
+    "id": "image-01-leaf-2",
+    "outline": {
+      "id": "image-01-leaf",
+      "type": "slide",
+      "title": "标注植物叶片的结构功能",
+      "description": "定位叶脉、叶肉与气孔，并观察各自功能；示意不代表精确解剖比例。",
+      "keyPoints": [
+        "叶脉承担支撑与物质运输，不能标注为光能来源。",
+        "叶肉中含叶绿体的细胞进行光合作用。",
+        "气孔参与气体交换和蒸腾调节；示意图不代表所有植物的精确解剖比例。"
+      ],
+      "order": 0,
+      "targetDurationSec": 60,
+      "estimatedDuration": 60,
+      "visualIntent": {
+        "observationGoal": "定位叶脉、叶肉与气孔，并观察各自功能；示意不代表精确解剖比例。",
+        "representation": "source-image",
+        "resourceRefs": [
+          {
+            "resourceId": "leaf-diagram",
+            "kind": "source-image",
+            "required": true,
+            "reason": "固定基准合法代码绘制资产",
+            "observationGoal": "定位叶脉、叶肉与气孔，并观察各自功能；示意不代表精确解剖比例。"
+          }
+        ]
+      },
+      "teachingBrief": {
+        "schemaVersion": 1,
+        "explanation": "叶脉承担支撑与物质运输，不能标注为光能来源。\n叶肉中含叶绿体的细胞进行光合作用。\n气孔参与气体交换和蒸腾调节；示意图不代表所有植物的精确解剖比例。",
+        "examples": [],
+        "conditions": [],
+        "evidence": [],
+        "assessmentFocus": "",
+        "teachingPlan": {
+          "purpose": "定位叶脉、叶肉与气孔，并观察各自功能；示意不代表精确解剖比例。",
+          "priorKnowledge": "",
+          "newContent": "叶脉承担支撑与物质运输，不能标注为光能来源。\n叶肉中含叶绿体的细胞进行光合作用。\n气孔参与气体交换和蒸腾调节；示意图不代表所有植物的精确解剖比例。",
+          "learnerQuestion": "定位叶脉、叶肉与气孔，并观察各自功能；示意不代表精确解剖比例。",
+          "reasoningSteps": [
+            "叶脉承担支撑与物质运输，不能标注为光能来源。",
+            "叶肉中含叶绿体的细胞进行光合作用。",
+            "气孔参与气体交换和蒸腾调节；示意图不代表所有植物的精确解剖比例。"
+          ],
+          "takeaway": "叶脉承担支撑与物质运输，不能标注为光能来源。；叶肉中含叶绿体的细胞进行光合作用。；气孔参与气体交换和蒸腾调节；示意图不代表所有植物的精确解剖比例。",
+          "visibleContent": [
+            "叶脉承担支撑与物质运输，不能标注为光能来源。",
+            "叶肉中含叶绿体的细胞进行光合作用。",
+            "气孔参与气体交换和蒸腾调节；示意图不代表所有植物的精确解剖比例。"
+          ],
+          "presentationContent": [
+            "叶脉承担支撑与物质运输，不能标注为光能来源。",
+            "叶肉中含叶绿体的细胞进行光合作用。",
+            "气孔参与气体交换和蒸腾调节；示意图不代表所有植物的精确解剖比例。"
+          ],
+          "narrationFocus": [
+            "叶脉承担支撑与物质运输，不能标注为光能来源。",
+            "叶肉中含叶绿体的细胞进行光合作用。",
+            "气孔参与气体交换和蒸腾调节；示意图不代表所有植物的精确解剖比例。"
+          ]
+        }
+      },
+      "audience": "student",
+      "generationPurpose": "knowledge-teaching"
+    },
+    "scene": {
+      "schemaVersion": 1,
+      "designVersion": "teaching-visual-v2",
+      "pages": [
+        {
+          "id": "image-01-leaf",
+          "title": "标注植物叶片的结构功能",
+          "focus": "在叶片示意图上辨认叶脉、叶肉和气孔，把结构与功能对应标注，并注意叶脉不标注为光能来源、示意图不代表所有植物的精确解剖比例。",
+          "components": [
+            {
+              "id": "leaf-annotated-diagram",
+              "kind": "annotated-image",
+              "nodes": [
+                {
+                  "id": "node-vein",
+                  "sourceContentIds": [
+                    "adopted-content-1"
+                  ],
+                  "label": "叶脉",
+                  "text": "承担支撑与物质运输；不能标注为光能来源。",
+                  "sourceEvidenceIds": [
+                    "source-quote-1"
+                  ],
+                  "emphasis": [
+                    "支撑与物质运输",
+                    "不能标注为光能来源"
+                  ],
+                  "anchor": {
+                    "x": 0.52,
+                    "y": 0.58
+                  }
+                },
+                {
+                  "id": "node-mesophyll",
+                  "sourceContentIds": [
+                    "adopted-content-2"
+                  ],
+                  "label": "叶肉",
+                  "text": "含叶绿体的细胞进行光合作用。",
+                  "sourceEvidenceIds": [
+                    "source-quote-2"
+                  ],
+                  "emphasis": [
+                    "含叶绿体的细胞",
+                    "光合作用"
+                  ],
+                  "anchor": {
+                    "x": 0.38,
+                    "y": 0.38
+                  }
+                },
+                {
+                  "id": "node-stoma",
+                  "sourceContentIds": [
+                    "adopted-content-3"
+                  ],
+                  "label": "气孔",
+                  "text": "参与气体交换和蒸腾调节；示意图不代表所有植物的精确解剖比例。",
+                  "sourceEvidenceIds": [
+                    "source-quote-3"
+                  ],
+                  "emphasis": [
+                    "气体交换",
+                    "蒸腾调节",
+                    "不代表所有植物的精确解剖比例"
+                  ],
+                  "anchor": {
+                    "x": 0.68,
+                    "y": 0.84
+                  }
+                }
+              ],
+              "title": "叶片结构功能标注",
+              "resourceId": "leaf-diagram"
+            }
+          ]
+        }
+      ]
+    },
+    "images": [
+      {
+        "id": "leaf-diagram",
+        "src": "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI2NDAiIGhlaWdodD0iNDAwIiB2aWV3Qm94PSIwIDAgNjQwIDQwMCI+PHJlY3Qgd2lkdGg9IjY0MCIgaGVpZ2h0PSI0MDAiIGZpbGw9IiNmMGZkZmEiLz48cGF0aCBkPSJNMTAwIDMyMEM5MCAxNzAgMjM1IDQ0IDUyOCA2M0M1MzUgMjE4IDM2MSAzNDMgMTAwIDMyMFoiIGZpbGw9IiM5OWQ4YjciIHN0cm9rZT0iIzE3ODc2YyIgc3Ryb2tlLXdpZHRoPSI1Ii8+PHBhdGggZD0iTTk2IDMyOEw1MDQgODBNMTk3IDI1OEwxOTggMTQ4TTI2NCAyMjVMMjc5IDExMk0zMzAgMTgwTDM0NSA4NE0xOTYgMjU4TDMwMyAzMDJNMjY0IDIyNUwzODkgMjYzTTMzMCAxODBMNDQ0IDIxMyIgZmlsbD0ibm9uZSIgc3Ryb2tlPSIjMTc4NzZjIiBzdHJva2Utd2lkdGg9IjQiLz48Y2lyY2xlIGN4PSI0MjUiIGN5PSIyODAiIHI9IjY1IiBmaWxsPSIjZmZmIiBzdHJva2U9IiMxNzg3NmMiIHN0cm9rZS13aWR0aD0iMyIvPjxlbGxpcHNlIGN4PSI0MTIiIGN5PSIyODIiIHJ4PSIxNSIgcnk9IjM1IiBmaWxsPSIjYjdlNGM3IiBzdHJva2U9IiMxNzg3NmMiIHN0cm9rZS13aWR0aD0iMyIvPjxlbGxpcHNlIGN4PSI0NDAiIGN5PSIyODIiIHJ4PSIxNSIgcnk9IjM1IiBmaWxsPSIjYjdlNGM3IiBzdHJva2U9IiMxNzg3NmMiIHN0cm9rZS13aWR0aD0iMyIvPjxwYXRoIGQ9Ik0zNTEgMjAyTDM4NiAyNDAiIGZpbGw9Im5vbmUiIHN0cm9rZT0iIzY0NzQ4YiIgc3Ryb2tlLXdpZHRoPSIyIi8+PC9zdmc+",
+        "width": 640,
+        "height": 400,
+        "caption": "代码绘制叶片示意图；不代表所有植物的精确解剖比例。"
+      }
+    ]
+  },
+  {
+    "id": "comparison-02-cell-1",
+    "outline": {
+      "id": "comparison-02-cell",
+      "type": "slide",
+      "title": "有丝分裂与减数分裂",
+      "description": "相同维度下辨析分裂次数、细胞数量和染色体数变化。",
+      "keyPoints": [
+        "有丝分裂通常经历一次分裂，形成两个子细胞。",
+        "减数分裂经历两次连续分裂，通常形成四个细胞。",
+        "有丝分裂子细胞染色体数通常不变；减数分裂使染色体数减半，服务于有性生殖。"
+      ],
+      "order": 0,
+      "targetDurationSec": 60,
+      "estimatedDuration": 60,
+      "teachingBrief": {
+        "schemaVersion": 1,
+        "explanation": "有丝分裂通常经历一次分裂，形成两个子细胞。\n减数分裂经历两次连续分裂，通常形成四个细胞。\n有丝分裂子细胞染色体数通常不变；减数分裂使染色体数减半，服务于有性生殖。",
+        "examples": [],
+        "conditions": [],
+        "evidence": [],
+        "assessmentFocus": "",
+        "teachingPlan": {
+          "purpose": "相同维度下辨析分裂次数、细胞数量和染色体数变化。",
+          "priorKnowledge": "",
+          "newContent": "有丝分裂通常经历一次分裂，形成两个子细胞。\n减数分裂经历两次连续分裂，通常形成四个细胞。\n有丝分裂子细胞染色体数通常不变；减数分裂使染色体数减半，服务于有性生殖。",
+          "learnerQuestion": "相同维度下辨析分裂次数、细胞数量和染色体数变化。",
+          "reasoningSteps": [
+            "有丝分裂通常经历一次分裂，形成两个子细胞。",
+            "减数分裂经历两次连续分裂，通常形成四个细胞。",
+            "有丝分裂子细胞染色体数通常不变；减数分裂使染色体数减半，服务于有性生殖。"
+          ],
+          "takeaway": "有丝分裂通常经历一次分裂，形成两个子细胞。；减数分裂经历两次连续分裂，通常形成四个细胞。；有丝分裂子细胞染色体数通常不变；减数分裂使染色体数减半，服务于有性生殖。",
+          "visibleContent": [
+            "有丝分裂通常经历一次分裂，形成两个子细胞。",
+            "减数分裂经历两次连续分裂，通常形成四个细胞。",
+            "有丝分裂子细胞染色体数通常不变；减数分裂使染色体数减半，服务于有性生殖。"
+          ],
+          "presentationContent": [
+            "有丝分裂通常经历一次分裂，形成两个子细胞。",
+            "减数分裂经历两次连续分裂，通常形成四个细胞。",
+            "有丝分裂子细胞染色体数通常不变；减数分裂使染色体数减半，服务于有性生殖。"
+          ],
+          "narrationFocus": [
+            "有丝分裂通常经历一次分裂，形成两个子细胞。",
+            "减数分裂经历两次连续分裂，通常形成四个细胞。",
+            "有丝分裂子细胞染色体数通常不变；减数分裂使染色体数减半，服务于有性生殖。"
+          ]
+        }
+      },
+      "audience": "student",
+      "generationPurpose": "knowledge-teaching"
+    },
+    "scene": {
+      "schemaVersion": 1,
+      "designVersion": "teaching-visual-v2",
+      "pages": [
+        {
+          "id": "comparison-02-cell",
+          "title": "有丝分裂与减数分裂",
+          "focus": "对比有丝分裂与减数分裂的分裂次数、子细胞数量、子细胞染色体数变化及有性生殖意义",
+          "components": [
+            {
+              "id": "compare-mitosis-meiosis",
+              "kind": "comparison",
+              "nodes": [
+                {
+                  "id": "mitosis-division-count",
+                  "sourceContentIds": [
+                    "adopted-content-1"
+                  ],
+                  "text": "通常经历一次分裂",
+                  "row": "分裂次数",
+                  "column": "有丝分裂",
+                  "sourceEvidenceIds": [
+                    "source-quote-1"
+                  ],
+                  "emphasis": [
+                    "通常"
+                  ]
+                },
+                {
+                  "id": "meiosis-division-count",
+                  "sourceContentIds": [
+                    "adopted-content-2"
+                  ],
+                  "text": "经历两次连续分裂",
+                  "row": "分裂次数",
+                  "column": "减数分裂",
+                  "sourceEvidenceIds": [
+                    "source-quote-2"
+                  ],
+                  "emphasis": [
+                    "两次连续"
+                  ]
+                },
+                {
+                  "id": "mitosis-cell-count",
+                  "sourceContentIds": [
+                    "adopted-content-1"
+                  ],
+                  "text": "通常形成两个子细胞",
+                  "row": "形成子细胞数量",
+                  "column": "有丝分裂",
+                  "sourceEvidenceIds": [
+                    "source-quote-1"
+                  ],
+                  "emphasis": [
+                    "通常"
+                  ]
+                },
+                {
+                  "id": "meiosis-cell-count",
+                  "sourceContentIds": [
+                    "adopted-content-2"
+                  ],
+                  "text": "通常形成四个细胞",
+                  "row": "形成子细胞数量",
+                  "column": "减数分裂",
+                  "sourceEvidenceIds": [
+                    "source-quote-2"
+                  ],
+                  "emphasis": [
+                    "通常"
+                  ]
+                },
+                {
+                  "id": "mitosis-chromosome-number",
+                  "sourceContentIds": [
+                    "adopted-content-3"
+                  ],
+                  "text": "子细胞染色体数通常不变",
+                  "row": "子细胞染色体数变化",
+                  "column": "有丝分裂",
+                  "sourceEvidenceIds": [
+                    "source-quote-3"
+                  ],
+                  "emphasis": [
+                    "通常不变"
+                  ]
+                },
+                {
+                  "id": "meiosis-chromosome-number",
+                  "sourceContentIds": [
+                    "adopted-content-3"
+                  ],
+                  "text": "染色体数减半",
+                  "row": "子细胞染色体数变化",
+                  "column": "减数分裂",
+                  "sourceEvidenceIds": [
+                    "source-quote-3"
+                  ],
+                  "emphasis": [
+                    "减半"
+                  ]
+                },
+                {
+                  "id": "meiosis-sexual-reproduction",
+                  "sourceContentIds": [
+                    "adopted-content-3"
+                  ],
+                  "text": "减数分裂使染色体数减半，服务于有性生殖。",
+                  "sourceEvidenceIds": [
+                    "source-quote-3"
+                  ],
+                  "emphasis": [
+                    "有性生殖"
+                  ]
+                }
+              ],
+              "title": "有丝分裂与减数分裂的核心差异"
+            }
+          ]
+        }
+      ]
+    },
+    "images": []
+  },
+  {
+    "id": "data-02-seeds-1",
+    "outline": {
+      "id": "data-02-seeds",
+      "type": "slide",
+      "title": "萌发实验数据",
+      "description": "两组温度光照相同；水分条件与萌发不同，结论限于本实验且需重复。",
+      "keyPoints": [
+        "示例实验：适量水组萌发率90%（18/20粒）；缺水组萌发率10%（2/20粒）。",
+        "萌发率分别为90%和10%，两组温度和光照条件相同。",
+        "结果支持水分影响本实验种子的萌发；仍需重复实验并说明样本局限。"
+      ],
+      "order": 0,
+      "targetDurationSec": 60,
+      "estimatedDuration": 60,
+      "teachingBrief": {
+        "schemaVersion": 1,
+        "explanation": "示例实验：适量水组 20 粒种子中 18 粒萌发，缺水组 20 粒中 2 粒萌发。\n萌发率分别为 90% 和 10%，两组温度和光照条件相同。\n结果支持水分影响本实验种子的萌发；仍需重复实验并说明样本局限。",
+        "examples": [],
+        "conditions": [],
+        "evidence": [],
+        "assessmentFocus": "",
+        "teachingPlan": {
+          "purpose": "两组温度光照相同；水分条件与萌发不同，结论限于本实验且需重复。",
+          "priorKnowledge": "",
+          "newContent": "示例实验：适量水组 20 粒种子中 18 粒萌发，缺水组 20 粒中 2 粒萌发。\n萌发率分别为 90% 和 10%，两组温度和光照条件相同。\n结果支持水分影响本实验种子的萌发；仍需重复实验并说明样本局限。",
+          "learnerQuestion": "两组温度光照相同；水分条件与萌发不同，结论限于本实验且需重复。",
+          "reasoningSteps": [
+            "示例实验：适量水组 20 粒种子中 18 粒萌发，缺水组 20 粒中 2 粒萌发。",
+            "萌发率分别为 90% 和 10%，两组温度和光照条件相同。",
+            "结果支持水分影响本实验种子的萌发；仍需重复实验并说明样本局限。"
+          ],
+          "takeaway": "示例实验：适量水组萌发率90%（18/20粒）；缺水组萌发率10%（2/20粒）。；萌发率分别为90%和10%，两组温度和光照条件相同。；结果支持水分影响本实验种子的萌发；仍需重复实验并说明样本局限。",
+          "visibleContent": [
+            "示例实验：适量水组萌发率90%（18/20粒）；缺水组萌发率10%（2/20粒）。",
+            "萌发率分别为90%和10%，两组温度和光照条件相同。",
+            "结果支持水分影响本实验种子的萌发；仍需重复实验并说明样本局限。"
+          ],
+          "presentationContent": [
+            "示例实验：适量水组萌发率90%（18/20粒）；缺水组萌发率10%（2/20粒）。",
+            "萌发率分别为90%和10%，两组温度和光照条件相同。",
+            "结果支持水分影响本实验种子的萌发；仍需重复实验并说明样本局限。"
+          ],
+          "narrationFocus": [
+            "示例实验：适量水组 20 粒种子中 18 粒萌发，缺水组 20 粒中 2 粒萌发。",
+            "萌发率分别为 90% 和 10%，两组温度和光照条件相同。",
+            "结果支持水分影响本实验种子的萌发；仍需重复实验并说明样本局限。"
+          ]
+        }
+      },
+      "audience": "student",
+      "generationPurpose": "knowledge-teaching"
+    },
+    "scene": {
+      "schemaVersion": 1,
+      "designVersion": "teaching-visual-v2",
+      "pages": [
+        {
+          "id": "data-02-seeds",
+          "title": "萌发实验数据",
+          "focus": "比较适量水组与缺水组的萌发率和种子数，理解结果支持的结论与样本局限。",
+          "components": [
+            {
+              "id": "comp-germination-data",
+              "kind": "data",
+              "nodes": [
+                {
+                  "id": "n-counts",
+                  "sourceContentIds": [
+                    "adopted-content-1"
+                  ],
+                  "text": "示例实验：适量水组20粒种子中18粒萌发；缺水组20粒中2粒萌发。",
+                  "sourceEvidenceIds": [
+                    "source-quote-1"
+                  ],
+                  "emphasis": [
+                    "18粒萌发",
+                    "2粒萌发"
+                  ]
+                },
+                {
+                  "id": "n-rates",
+                  "sourceContentIds": [
+                    "adopted-content-2"
+                  ],
+                  "text": "萌发率分别为90%和10%，两组温度和光照条件相同。",
+                  "sourceEvidenceIds": [
+                    "source-quote-2"
+                  ],
+                  "emphasis": [
+                    "90%",
+                    "10%",
+                    "温度和光照条件相同"
+                  ]
+                },
+                {
+                  "id": "n-conclusion",
+                  "sourceContentIds": [
+                    "adopted-content-3"
+                  ],
+                  "text": "结果支持水分影响本实验种子的萌发；仍需重复实验并说明样本局限。",
+                  "sourceEvidenceIds": [
+                    "source-quote-3"
+                  ],
+                  "emphasis": [
+                    "支持水分影响",
+                    "仍需重复实验",
+                    "样本局限"
+                  ]
+                }
+              ],
+              "title": "两组种子萌发率对比",
+              "edges": [
+                {
+                  "from": "n-rates",
+                  "to": "n-conclusion",
+                  "label": "结果支持",
+                  "kind": "association"
+                }
+              ],
+              "data": {
+                "chartType": "bar",
+                "labels": [
+                  "适量水组",
+                  "缺水组"
+                ],
+                "series": [
+                  {
+                    "name": "萌发率",
+                    "values": [
+                      90,
+                      10
+                    ]
+                  }
+                ],
+                "unit": "%"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "images": []
+  },
+  {
+    "id": "original-page-19-1",
+    "outline": {
+      "id": "teaching-section-6-page-2",
+      "type": "slide",
+      "title": "支架的撤除与支架式教学法的教学过程",
+      "description": "本页把上一页的核心推进到撤除机制与教学过程，讲清支架为什么是暂时、渐消而不是一次性撤销的，并按五个环节完整呈现支架式教学法的教学过程。",
+      "keyPoints": [
+        "教学支架的撤除",
+        "支架具有暂时性和渐消性：学生能独立解决问题时，支架的作用完成，需要撤离",
+        "支架不是最后阶段一次性撤销，而是一个一个地随着学生的发展而撤销",
+        "搭脚手架：制定符合学生最近发展区的概念框架，设计有层次性的支架",
+        "独立探索：提供启发式引导后给予自主空间，随学生能力提升逐渐减少、撤出支架",
+        "效果评价：涵盖自我评价、小组互评和教师评价，围绕自主学习能力、协作贡献和意义建构展开"
+      ],
+      "order": 18,
+      "targetDurationSec": 97,
+      "estimatedDuration": 97,
+      "plannedTiming": {
+        "role": "teaching",
+        "narrationSec": 97,
+        "transitionSec": 0,
+        "learnerActivitySec": 0
+      },
+      "visualIntent": {
+        "diagram": {
+          "edges": [
+            {
+              "to": "c2",
+              "from": "c1"
+            },
+            {
+              "to": "c3",
+              "from": "c2"
+            },
+            {
+              "to": "c4",
+              "from": "c3"
+            },
+            {
+              "to": "c5",
+              "from": "c4"
+            }
+          ],
+          "nodes": [
+            {
+              "id": "c1",
+              "label": "搭脚手架"
+            },
+            {
+              "id": "c2",
+              "label": "进入情境"
+            },
+            {
+              "id": "c3",
+              "label": "独立探索"
+            },
+            {
+              "id": "c4",
+              "label": "协作学习"
+            },
+            {
+              "id": "c5",
+              "label": "效果评价"
+            }
+          ],
+          "topology": "sequence",
+          "annotation": "支架在独立探索环节随学生能力提升而逐渐减少、撤出，这些支架是一个一个地随着学生发展而撤销的，而不是在最后阶段一次性撤销；教学中需要把握支架的进入和退出时刻。"
+        },
+        "rationale": "五个环节有真实的时间推进顺序，用原生流程图整体呈现能让学生一次看清完整链条，也能看到独立探索处于支架开始减少的位置；文字清单会丢掉这个位置关系。",
+        "representation": "native-diagram",
+        "observationGoal": "支架式教学法五个教学环节及其先后位置。"
+      },
+      "teachingBrief": {
+        "schemaVersion": 1,
+        "explanation": "教学支架具有暂时性和渐消性。支架式教学法中的教学支架是为了帮助学生穿过最近发展区、从现有发展水平到达潜在发展水平而设计的，当学生逐步学习和发展到能独立解决问题时，支架的作用也就完成了，在这个时候需要将教学支架撤离。 学生顺着教学支架向上攀登、最终达到理想水平的过程是循序渐进的，过程中需要运用多个支架来帮助完成阶段性的任务。因此这些支架并不是在最后阶段一次性撤销的，而是一个一个地随着学生的不断发展而撤销的。在教学中需要把握教学支架的进入和退出时刻，以达到最佳的教学效果。\n支架式教学法的教学过程包括五个环节：搭脚手架、进入情境、独立探索、协作学习、效果评价。 搭脚手架环节要求教师根据学生的认知水平、教学目标和学习主题，制定符合学生最近发展区的概念框架，设计具有层次性的教学支架。进入情境环节要求教师设计贴近学生生活的问题情境，把学生引入其中的特定节点，并可以为其提供范例支架、引导其把复杂问题分解。独立探索环节中，教师先提供启发式引导和基础概念原理的铺垫，随后给予学生充足的时间和空间自主探索，并根据不同学习水平和学习阶段提供个性化支架，同时随着学生能力提升而逐渐减少、撤出支架。协作学习环节组织学生讨论交流，在共享观点和相互启发中调整并完善对概念的理解。效果评价环节包括学生的自我评价、小组的互相评价和教师评价，围绕自主学习能力、对小组协作的贡献以及知识意义建构的完成情况展开。\n支架式教学法是一种以学生为中心的教学模式，它的核心在于教师为学生提供适当的、小步调的线索或提示，这些“支架”随着学生能力的提高而逐渐减少，直至学生能够独立完成任务。 这一做法的依据来自维果斯基的“最近发展区”理论。该理论指出，教学应领先于学生的现有发展水平，引领他们从能够独立解决问题的实际水平，向在教师指导下可能达到的潜在水平提升。为此，必须为学生构建一个支持其学习的概念框架。支架式教学法正是通过构建助力学生理解和能力提升的“脚手架”，帮助他们分解复杂学习任务，逐步深化理解。\n教师为学生搭建的教学支架类型繁多，包括引导知识建构的认知支架、激发学习动力的情感支架、提供学习策略能力支持的能力支架等。这些支架在不同的学习环节中扮演各异的角色，发挥特定的辅助功能。 教学支架是可调节的。多数教学支架是教师在授课前根据学生的学情和教学活动预设的，但在实际教学中，可能会发现某些支架并不适合学生，或学生遇到的实际问题需要不同类型的支架。因此教师在教学前应预判学生可能遇到的问题并据此设计支架，同时具备应变能力，根据实际情况对支架进行增减或调整；在设计支架时还要考虑学生的不同层次，有针对性地设计符合每个学生需求的支架。",
+        "examples": [],
+        "conditions": [],
+        "evidence": [],
+        "assessmentFocus": "",
+        "teachingPlan": {
+          "purpose": "学生能说明支架为什么必须逐个撤除，并按五个环节描述支架式教学法的教学过程。",
+          "priorKnowledge": "支架式教学法；以学生为中心，核心在于教师提供适当的、小步调的线索或提示，这些支架随学生能力提高逐渐减少，直至学生能独立完成任务；教学应领先于学生的现有发展水平，引领他们从实际水平向潜在水平提升；支架类型包括认知支架、情感支架和能力支架，各自发挥不同的辅助功能；教学支架是可调节的：根据需要增减或调整，并考虑学生的不同层次",
+          "newContent": "教学支架具有暂时性和渐消性。支架式教学法中的教学支架是为了帮助学生穿过最近发展区、从现有发展水平到达潜在发展水平而设计的，当学生逐步学习和发展到能独立解决问题时，支架的作用也就完成了，在这个时候需要将教学支架撤离。 学生顺着教学支架向上攀登、最终达到理想水平的过程是循序渐进的，过程中需要运用多个支架来帮助完成阶段性的任务。因此这些支架并不是在最后阶段一次性撤销的，而是一个一个地随着学生的不断发展而撤销的。在教学中需要把握教学支架的进入和退出时刻，以达到最佳的教学效果。\n支架式教学法的教学过程包括五个环节：搭脚手架、进入情境、独立探索、协作学习、效果评价。 搭脚手架环节要求教师根据学生的认知水平、教学目标和学习主题，制定符合学生最近发展区的概念框架，设计具有层次性的教学支架。进入情境环节要求教师设计贴近学生生活的问题情境，把学生引入其中的特定节点，并可以为其提供范例支架、引导其把复杂问题分解。独立探索环节中，教师先提供启发式引导和基础概念原理的铺垫，随后给予学生充足的时间和空间自主探索，并根据不同学习水平和学习阶段提供个性化支架，同时随着学生能力提升而逐渐减少、撤出支架。协作学习环节组织学生讨论交流，在共享观点和相互启发中调整并完善对概念的理解。效果评价环节包括学生的自我评价、小组的互相评价和教师评价，围绕自主学习能力、对小组协作的贡献以及知识意义建构的完成情况展开。\n支架式教学法是一种以学生为中心的教学模式，它的核心在于教师为学生提供适当的、小步调的线索或提示，这些“支架”随着学生能力的提高而逐渐减少，直至学生能够独立完成任务。 这一做法的依据来自维果斯基的“最近发展区”理论。该理论指出，教学应领先于学生的现有发展水平，引领他们从能够独立解决问题的实际水平，向在教师指导下可能达到的潜在水平提升。为此，必须为学生构建一个支持其学习的概念框架。支架式教学法正是通过构建助力学生理解和能力提升的“脚手架”，帮助他们分解复杂学习任务，逐步深化理解。\n教师为学生搭建的教学支架类型繁多，包括引导知识建构的认知支架、激发学习动力的情感支架、提供学习策略能力支持的能力支架等。这些支架在不同的学习环节中扮演各异的角色，发挥特定的辅助功能。 教学支架是可调节的。多数教学支架是教师在授课前根据学生的学情和教学活动预设的，但在实际教学中，可能会发现某些支架并不适合学生，或学生遇到的实际问题需要不同类型的支架。因此教师在教学前应预判学生可能遇到的问题并据此设计支架，同时具备应变能力，根据实际情况对支架进行增减或调整；在设计支架时还要考虑学生的不同层次，有针对性地设计符合每个学生需求的支架。",
+          "learnerQuestion": "",
+          "reasoningSteps": [],
+          "takeaway": "教学支架的撤除；支架具有暂时性和渐消性：学生能独立解决问题时，支架的作用完成，需要撤离；支架不是最后阶段一次性撤销，而是一个一个地随着学生的发展而撤销；搭脚手架：制定符合学生最近发展区的概念框架，设计有层次性的支架；独立探索：提供启发式引导后给予自主空间，随学生能力提升逐渐减少、撤出支架；效果评价：涵盖自我评价、小组互评和教师评价，围绕自主学习能力、协作贡献和意义建构展开",
+          "visibleContent": [
+            "教学支架的撤除",
+            "支架具有暂时性和渐消性：学生能独立解决问题时，支架的作用完成，需要撤离",
+            "支架不是最后阶段一次性撤销，而是一个一个地随着学生的发展而撤销",
+            "搭脚手架：制定符合学生最近发展区的概念框架，设计有层次性的支架",
+            "独立探索：提供启发式引导后给予自主空间，随学生能力提升逐渐减少、撤出支架",
+            "效果评价：涵盖自我评价、小组互评和教师评价，围绕自主学习能力、协作贡献和意义建构展开"
+          ],
+          "presentationContent": [
+            "教学支架的撤除",
+            "支架具有暂时性和渐消性：学生能独立解决问题时，支架的作用完成，需要撤离",
+            "支架不是最后阶段一次性撤销，而是一个一个地随着学生的发展而撤销",
+            "搭脚手架：制定符合学生最近发展区的概念框架，设计有层次性的支架",
+            "独立探索：提供启发式引导后给予自主空间，随学生能力提升逐渐减少、撤出支架",
+            "效果评价：涵盖自我评价、小组互评和教师评价，围绕自主学习能力、协作贡献和意义建构展开"
+          ],
+          "presentationItems": [
+            {
+              "role": "heading",
+              "text": "教学支架的撤除",
+              "nodeIds": [
+                "teaching-section-6-unit-1-node-3"
+              ]
+            },
+            {
+              "role": "key-point",
+              "text": "支架具有暂时性和渐消性：学生能独立解决问题时，支架的作用完成，需要撤离",
+              "nodeIds": [
+                "teaching-section-6-unit-1-node-3"
+              ]
+            },
+            {
+              "role": "key-point",
+              "text": "支架不是最后阶段一次性撤销，而是一个一个地随着学生的发展而撤销",
+              "nodeIds": [
+                "teaching-section-6-unit-1-node-3"
+              ]
+            },
+            {
+              "role": "key-point",
+              "text": "搭脚手架：制定符合学生最近发展区的概念框架，设计有层次性的支架",
+              "nodeIds": [
+                "teaching-section-6-unit-1-node-4"
+              ]
+            },
+            {
+              "role": "key-point",
+              "text": "独立探索：提供启发式引导后给予自主空间，随学生能力提升逐渐减少、撤出支架",
+              "nodeIds": [
+                "teaching-section-6-unit-1-node-4"
+              ]
+            },
+            {
+              "role": "key-point",
+              "text": "效果评价：涵盖自我评价、小组互评和教师评价，围绕自主学习能力、协作贡献和意义建构展开",
+              "nodeIds": [
+                "teaching-section-6-unit-1-node-4"
+              ]
+            }
+          ],
+          "narrationFocus": [
+            "教学支架具有暂时性和渐消性。支架式教学法中的教学支架是为了帮助学生穿过最近发展区、从现有发展水平到达潜在发展水平而设计的，当学生逐步学习和发展到能独立解决问题时，支架的作用也就完成了，在这个时候需要将教学支架撤离。 学生顺着教学支架向上攀登、最终达到理想水平的过程是循序渐进的，过程中需要运用多个支架来帮助完成阶段性的任务。因此这些支架并不是在最后阶段一次性撤销的，而是一个一个地随着学生的不断发展而撤销的。在教学中需要把握教学支架的进入和退出时刻，以达到最佳的教学效果。",
+            "支架式教学法的教学过程包括五个环节：搭脚手架、进入情境、独立探索、协作学习、效果评价。 搭脚手架环节要求教师根据学生的认知水平、教学目标和学习主题，制定符合学生最近发展区的概念框架，设计具有层次性的教学支架。进入情境环节要求教师设计贴近学生生活的问题情境，把学生引入其中的特定节点，并可以为其提供范例支架、引导其把复杂问题分解。独立探索环节中，教师先提供启发式引导和基础概念原理的铺垫，随后给予学生充足的时间和空间自主探索，并根据不同学习水平和学习阶段提供个性化支架，同时随着学生能力提升而逐渐减少、撤出支架。协作学习环节组织学生讨论交流，在共享观点和相互启发中调整并完善对概念的理解。效果评价环节包括学生的自我评价、小组的互相评价和教师评价，围绕自主学习能力、对小组协作的贡献以及知识意义建构的完成情况展开。",
+            "支架式教学法是一种以学生为中心的教学模式，它的核心在于教师为学生提供适当的、小步调的线索或提示，这些“支架”随着学生能力的提高而逐渐减少，直至学生能够独立完成任务。 这一做法的依据来自维果斯基的“最近发展区”理论。该理论指出，教学应领先于学生的现有发展水平，引领他们从能够独立解决问题的实际水平，向在教师指导下可能达到的潜在水平提升。为此，必须为学生构建一个支持其学习的概念框架。支架式教学法正是通过构建助力学生理解和能力提升的“脚手架”，帮助他们分解复杂学习任务，逐步深化理解。",
+            "教师为学生搭建的教学支架类型繁多，包括引导知识建构的认知支架、激发学习动力的情感支架、提供学习策略能力支持的能力支架等。这些支架在不同的学习环节中扮演各异的角色，发挥特定的辅助功能。 教学支架是可调节的。多数教学支架是教师在授课前根据学生的学情和教学活动预设的，但在实际教学中，可能会发现某些支架并不适合学生，或学生遇到的实际问题需要不同类型的支架。因此教师在教学前应预判学生可能遇到的问题并据此设计支架，同时具备应变能力，根据实际情况对支架进行增减或调整；在设计支架时还要考虑学生的不同层次，有针对性地设计符合每个学生需求的支架。"
+          ]
+        }
+      },
+      "audience": "student",
+      "generationPurpose": "knowledge-teaching"
+    },
+    "scene": {
+      "schemaVersion": 1,
+      "designVersion": "teaching-visual-v2",
+      "pages": [
+        {
+          "id": "teaching-section-6-page-2",
+          "title": "教学支架的撤除：暂时性、渐消性与逐个撤离",
+          "focus": "理解支架为什么必须撤离，以及撤离不是最后阶段一次性完成，而是一个一个地随着学生的发展而撤销",
+          "components": [
+            {
+              "id": "p1-c1",
+              "kind": "state-change",
+              "nodes": [
+                {
+                  "id": "p1-s1",
+                  "sourceContentIds": [
+                    "adopted-content-2"
+                  ],
+                  "label": "支架作用中",
+                  "text": "支架具有暂时性：它是帮助学生穿越最近发展区而提供的支持，此时学生仍需依托支架完成学习任务",
+                  "sourceEvidenceIds": [
+                    "f81cab4c-ae89-5a15-8125-6899e31cf00e",
+                    "source-quote-1"
+                  ],
+                  "supportLevel": "present"
+                },
+                {
+                  "id": "p1-s2",
+                  "sourceContentIds": [
+                    "adopted-content-2"
+                  ],
+                  "label": "支架渐消",
+                  "text": "支架具有渐消性：随着学生不断学习和发展，支架的支持逐步减少、撤出，而不是一直保留",
+                  "sourceEvidenceIds": [
+                    "f81cab4c-ae89-5a15-8125-6899e31cf00e",
+                    "e4d66882-499f-5889-8eb2-b7cffaf7e671"
+                  ],
+                  "supportLevel": "fading"
+                },
+                {
+                  "id": "p1-s3",
+                  "sourceContentIds": [
+                    "adopted-content-2"
+                  ],
+                  "label": "支架撤离",
+                  "text": "学生能独立解决问题时，支架的作用完成，需要将教学支架撤离",
+                  "sourceEvidenceIds": [
+                    "f81cab4c-ae89-5a15-8125-6899e31cf00e",
+                    "source-quote-1"
+                  ],
+                  "supportLevel": "withdrawn"
+                }
+              ],
+              "title": "支架支持状态随学生发展的定性变化",
+              "edges": [
+                {
+                  "from": "p1-s1",
+                  "to": "p1-s2",
+                  "label": "随学生发展、能力提高",
+                  "kind": "sequence"
+                },
+                {
+                  "from": "p1-s2",
+                  "to": "p1-s3",
+                  "label": "能独立解决问题",
+                  "kind": "sequence"
+                }
+              ]
+            },
+            {
+              "id": "p1-c2",
+              "kind": "text",
+              "nodes": [
+                {
+                  "id": "p1-t1",
+                  "sourceContentIds": [
+                    "adopted-content-1"
+                  ],
+                  "label": "教学支架的撤除",
+                  "text": "支架的撤除指在支架作用完成后把支持撤离，使学生最终能够独立完成任务",
+                  "sourceEvidenceIds": [
+                    "e4d66882-499f-5889-8eb2-b7cffaf7e671",
+                    "f81cab4c-ae89-5a15-8125-6899e31cf00e"
+                  ]
+                },
+                {
+                  "id": "p1-t2",
+                  "sourceContentIds": [
+                    "adopted-content-3"
+                  ],
+                  "label": "不是一次性撤销",
+                  "text": "支架并不是在最后阶段一次性撤销，而是一个一个地随着学生的发展而撤销",
+                  "sourceEvidenceIds": [
+                    "f81cab4c-ae89-5a15-8125-6899e31cf00e",
+                    "source-quote-3"
+                  ],
+                  "emphasis": [
+                    "并不是在最后阶段一次性撤销",
+                    "一个一个地随着学生的发展而撤销"
+                  ]
+                }
+              ],
+              "title": "撤除的含义与常见误解"
+            }
+          ]
+        },
+        {
+          "id": "teaching-section-6-page-2:visual-2",
+          "title": "支架式教学法的教学过程：五个环节与支架的退出时机",
+          "focus": "按真实顺序看清搭脚手架、进入情境、独立探索、协作学习、效果评价五个环节，并定位支架随学生能力提升而减少、撤出的位置",
+          "components": [
+            {
+              "id": "p2-c1",
+              "kind": "process",
+              "nodes": [
+                {
+                  "id": "p2-n1",
+                  "sourceContentIds": [
+                    "adopted-content-4"
+                  ],
+                  "label": "搭脚手架：明确任务",
+                  "text": "依据学生的认知水平、教学目标和学习主题，制定符合学生最近发展区的概念框架，设计有层次性的教学支架",
+                  "anchorId": "c1",
+                  "sourceEvidenceIds": [
+                    "07d64579-b564-5f1a-9ba5-a000990058dc"
+                  ]
+                },
+                {
+                  "id": "p2-n2",
+                  "sourceContentIds": [
+                    "adopted-content-5"
+                  ],
+                  "label": "独立探索：解决问题",
+                  "text": "教师先提供启发式引导，并以演示、指导的形式铺垫基础概念原理，之后给予学生自主空间，随学生能力提升逐渐减少、撤出支架",
+                  "anchorId": "c3",
+                  "sourceEvidenceIds": [
+                    "07d64579-b564-5f1a-9ba5-a000990058dc"
+                  ]
+                },
+                {
+                  "id": "p2-n3",
+                  "sourceContentIds": [
+                    "adopted-content-6"
+                  ],
+                  "label": "效果评价：完成建构",
+                  "text": "评价涵盖学生的自我评价、小组互评和教师评价，围绕自主学习能力、对小组协作的贡献以及知识意义建构的完成情况展开",
+                  "anchorId": "c5",
+                  "sourceEvidenceIds": [
+                    "07d64579-b564-5f1a-9ba5-a000990058dc"
+                  ]
+                },
+                {
+                  "id": "p2-n4",
+                  "sourceContentIds": [
+                    "diagram-annotation"
+                  ],
+                  "label": "支架的进入与退出时刻",
+                  "text": "支架在独立探索环节随学生能力提升而逐渐减少、撤出，这些支架是一个一个地随着学生发展而撤销的，而不是在最后阶段一次性撤销；教学中需要把握支架的进入和退出时刻",
+                  "anchorId": "c3",
+                  "sourceEvidenceIds": [
+                    "07d64579-b564-5f1a-9ba5-a000990058dc",
+                    "f81cab4c-ae89-5a15-8125-6899e31cf00e",
+                    "source-quote-3"
+                  ],
+                  "emphasis": [
+                    "逐渐减少、撤出",
+                    "一个一个地随着学生发展而撤销"
+                  ]
+                }
+              ],
+              "title": "支架式教学法的五个教学环节",
+              "useAdoptedDiagram": true
+            }
+          ]
+        }
+      ]
+    },
+    "images": []
+  }
+]

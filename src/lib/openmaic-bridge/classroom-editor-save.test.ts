@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Scene } from '@openmaic/lib/types/stage';
-import { reconcileClassroomSave, type ClassroomEditorDocument } from './classroom-editor-save';
+import { classroomFingerprint, reconcileClassroomSave, type ClassroomEditorDocument } from './classroom-editor-save';
 
 function document(): ClassroomEditorDocument {
   return {
@@ -17,6 +17,18 @@ function document(): ClassroomEditorDocument {
 }
 
 describe('classroom save reconciliation', () => {
+  it('tracks and reconciles canonical outlines independently from visual content during saves', () => {
+    const sent = document();
+    sent.outlines = [{ id: 's1', title: '原页', type: 'slide', description: '原始责任', keyPoints: [], order: 0 }];
+    const live = structuredClone(sent);
+    live.outlines![0].segmentRole = '后续教师修改';
+    const saved = structuredClone(sent);
+    saved.outlines![0].sourcePageIds = ['source-page'];
+    const result = reconcileClassroomSave(sent, live, saved);
+    expect(result.outlines![0]).toMatchObject({ segmentRole: '后续教师修改', sourcePageIds: ['source-page'] });
+    expect(classroomFingerprint(sent.stage, sent.scenes, sent.outlines)).not.toBe(
+      classroomFingerprint(live.stage, live.scenes, live.outlines));
+  });
   it('preserves edits made during save while adopting invalidated speech audio', () => {
     const sent = document();
     const live = structuredClone(sent);

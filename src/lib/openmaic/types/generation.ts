@@ -260,6 +260,8 @@ export type SceneVisualIntent = {
  * Gives AI more freedom, only requiring intent description and key points
  */
 export interface SceneOutline {
+  /** Stable source responsibilities inherited by compiler-owned continuation pages. */
+  visualSourceCatalog?: Array<{ id: string; text: string }>;
   teachingBrief?: import("@/lib/course-quality-review/types").TeachingBrief;
   /**
    * One concise course-level art direction chosen during page planning.
@@ -286,7 +288,7 @@ export interface SceneOutline {
    * this metadata never substitutes for actually visible teaching content. */
   semanticSourceClaims?: Array<{ id: string; sourcePageId: string; text: string; parts: string[] }>;
   /** Parent scope is evidence; each split page only renders its own region content. */
-  spatialSourceContext?: { description: string; teachingObjective?: string; coreMessage: string };
+  spatialSourceContext?: { title?: string; description: string; teachingObjective?: string; coreMessage: string };
   id: string;
   type: 'slide' | 'quiz' | 'interactive' | 'pbl';
   title: string;
@@ -413,13 +415,14 @@ export interface SceneOutline {
 
 // ==================== Stage 3 Output: Generated Content ====================
 
-import type { PPTElement, SlideBackground, SlideTheme, SlidePresentationProjection } from '@openmaic/dsl';
+import type { PPTElement, SlideBackground, SlideTheme, SlidePresentationProjection, TeachingVisualMetadata } from '@openmaic/dsl';
 import type { QuizQuestion } from './stage';
 
 /**
  * AI-generated slide content
  */
 export interface GeneratedSlideContent {
+  teachingVisual?: TeachingVisualMetadata;
   presentationProjection?: SlidePresentationProjection;
   /** Teacher-private quality findings; usable slide elements remain renderable. */
   qualityDiagnostics?: string[];

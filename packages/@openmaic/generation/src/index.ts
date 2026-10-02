@@ -28,7 +28,7 @@ export type { AuthoringContentItem, AuthoringContentReference } from './authorin
 export { adoptChartPresentationTypography } from './chart-presentation-typography.js';
 export type { ChartPresentationTypography } from './chart-presentation-typography.js';
 export { compileDiagramComponent, isDiagramComponent } from './diagram-compiler.js';
-export type { DiagramComponent, DiagramCompilerOptions } from './diagram-compiler.js';
+export type { DiagramComponent, DiagramCompilerOptions, DiagramTypographyOptions } from './diagram-compiler.js';
 export type { DiagramPlan, DiagramSequenceGroup } from './outline-types.js';
 export { buildCompleteScene } from './scene-builder.js';
 export type { BuildCompleteSceneOptions } from './scene-builder.js';

@@ -17,6 +17,7 @@
  */
 
 import type { AssetRef } from './storage.js';
+import type { TeachingVisualMetadata } from './teaching-visual.js';
 
 /**
  * Regular (not `const`) enum on purpose: consumers compile with
@@ -986,6 +987,7 @@ export interface Slide {
   theme: SlideTheme;
   elements: PPTElement[];
   presentationProjection?: SlidePresentationProjection;
+  teachingVisual?: TeachingVisualMetadata;
   background?: SlideBackground;
   animations?: PPTAnimation[];
   turningMode?: TurningMode;

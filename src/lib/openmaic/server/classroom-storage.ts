@@ -63,6 +63,9 @@ export interface PersistedClassroomData {
   /** Last content or asset update. Legacy snapshots may not have this field. */
   updatedAt?: string;
   assetGeneration?: ClassroomAssetGenerationStatus;
+  /** Server-owned provenance carried by authorized teacher-edit forks. It is
+   * only a lookup anchor; source hydration still verifies a same-course witness. */
+  teachingSource?: { courseId: string; classroomId: string };
 }
 
 export class ClassroomRevisionConflictError extends Error {
@@ -197,6 +200,7 @@ export async function persistClassroom(
     stage: Stage;
     scenes: Scene[];
     assetGeneration?: ClassroomAssetGenerationStatus;
+    teachingSource?: PersistedClassroomData['teachingSource'];
   },
 ): Promise<PersistedClassroomData> {
   return withClassroomLock(data.id, async () => {
@@ -209,6 +213,7 @@ export async function persistClassroom(
       updatedAt: now,
       revision: 1,
       ...(data.assetGeneration ? { assetGeneration: data.assetGeneration } : {}),
+      ...(data.teachingSource ? { teachingSource: data.teachingSource } : {}),
     };
 
     await ensureClassroomsDir();

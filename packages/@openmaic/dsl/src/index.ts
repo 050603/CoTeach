@@ -23,6 +23,7 @@
  * through the interactive content generic extension point.
  */
 export * from './slides.js';
+export * from './teaching-visual.js';
 export * from './guards.js';
 export * from './stage.js';
 export * from './interactive.js';

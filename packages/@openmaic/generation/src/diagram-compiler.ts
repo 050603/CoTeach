@@ -15,10 +15,17 @@ export interface DiagramComponent extends DiagramPlan {
   textColor?: string;
 }
 
-export interface DiagramCompilerOptions {
+export interface DiagramTypographyOptions {
+  /** Explicit typography must be shared by allocation, measurement and output. */
+  nodeFontSize?: number;
+  edgeFontSize?: number;
+}
+
+export interface DiagramCompilerOptions extends DiagramTypographyOptions {
   fontName?: string;
   /** Host-provided font measurement; the package does not depend on a browser. */
   measureText?: (text: string, fontSize: number, fontName: string, fontWeight: number) => number;
+  measureTextHeight?: (text: string, fontSize: number, fontWeight: number) => number;
   canvasWidth?: number;
   canvasHeight?: number;
 }
@@ -48,7 +55,7 @@ export interface DiagramAllocationBounds {
   maxHeight?: number;
 }
 
-export interface MeasuredDiagramCompilerOptions {
+export interface MeasuredDiagramCompilerOptions extends DiagramTypographyOptions {
   /** Previously measured choices for this complete plan, including annotation. */
   feasibleAllocations?: readonly DiagramAllocation[];
   /** Preserve a renderable graph when measured visual preferences cannot fit. */
@@ -96,11 +103,22 @@ const EDGE_FONT_SIZE = 16;
 const EDGE_LABEL_HEIGHT = 40;
 const NODE_PADDING_X = 15;
 const NODE_PADDING_Y = 12;
-const NODE_LINE_HEIGHT = 25;
 const NODE_MIN_WIDTH = 104;
 const NODE_MAX_WIDTH = 174;
 const NODE_MARGIN = 18;
 const SHAPE_PATH = 'M 12 0 H 88 Q 100 0 100 12 V 88 Q 100 100 88 100 H 12 Q 0 100 0 88 V 12 Q 0 0 12 0 Z';
+
+function fontSize(value: number | undefined, fallback: number): number {
+  if (value === undefined) return fallback;
+  if (!Number.isFinite(value) || value <= 0) fail('diagram font sizes must be positive');
+  return value;
+}
+const nodeFontSize = (options: DiagramTypographyOptions) => fontSize(options.nodeFontSize, NODE_FONT_SIZE);
+const edgeFontSize = (options: DiagramTypographyOptions) => fontSize(options.edgeFontSize, EDGE_FONT_SIZE);
+function edgeLabelHeight(label: string, options: DiagramCompilerOptions): number {
+  return Math.max(EDGE_LABEL_HEIGHT, Math.ceil(edgeFontSize(options) * 1.2 + 20),
+    options.measureTextHeight?.(label, edgeFontSize(options), 400) ?? 0);
+}
 
 export function isDiagramComponent(value: unknown): value is DiagramComponent {
   return typeof value === 'object' && value !== null && 'type' in value && value.type === 'diagram';
@@ -151,11 +169,11 @@ function wrapLabel(label: string, maxWidth: number, options: DiagramCompilerOpti
   const explicit = label.split('\n').map((line) => line.trim());
   if (explicit.some((line) => !line) || explicit.length > 2) fail(`node label ${JSON.stringify(label)} cannot fit in two lines`);
   if (explicit.length === 2) {
-    if (explicit.some((line) => measure(line, NODE_FONT_SIZE, options) > maxWidth)) fail(`node label ${JSON.stringify(label)} exceeds its node`);
+    if (explicit.some((line) => measure(line, nodeFontSize(options), options) > maxWidth)) fail(`node label ${JSON.stringify(label)} exceeds its node`);
     if (Array.from(explicit[1]!).length === 1 && Array.from(label.replace(/\n/g, '')).length > 2) fail(`node label ${JSON.stringify(label)} leaves an orphan character`);
     return explicit;
   }
-  if (measure(label, NODE_FONT_SIZE, options) <= maxWidth) return [label];
+  if (measure(label, nodeFontSize(options), options) <= maxWidth) return [label];
 
   const chars = Array.from(label);
   let best: { lines: [string, string]; score: number } | undefined;
@@ -165,8 +183,8 @@ function wrapLabel(label: string, maxWidth: number, options: DiagramCompilerOpti
     const first = chars.slice(0, split).join('').trim();
     const second = chars.slice(split).join('').trim();
     if (!first || !second || /^[，。；：、,.!?！？）】]/u.test(second)) continue;
-    const firstWidth = measure(first, NODE_FONT_SIZE, options);
-    const secondWidth = measure(second, NODE_FONT_SIZE, options);
+    const firstWidth = measure(first, nodeFontSize(options), options);
+    const secondWidth = measure(second, nodeFontSize(options), options);
     if (firstWidth > maxWidth || secondWidth > maxWidth) continue;
     const score = Math.max(firstWidth, secondWidth) + Math.abs(firstWidth - secondWidth) * 0.35
       - (/\s|[，。；：、,.!?！？]$/u.test(first) ? 8 : 0);
@@ -219,14 +237,15 @@ function makeText(
   };
 }
 
-function makeNode(node: PositionedNode, component: DiagramComponent, fontName: string): PPTShapeElement {
+function makeNode(node: PositionedNode, component: DiagramComponent, options: DiagramCompilerOptions): PPTShapeElement {
+  const fontName = options.fontName ?? 'Noto Sans SC';
   return {
     id: `${component.id}-node-${node.id}`, type: 'shape', ...node.rect, rotate: 0,
     viewBox: [100, 100], path: SHAPE_PATH, fixedRatio: false,
     fill: component.nodeFill ?? '#FFF4E8',
     outline: { color: component.accentColor ?? '#D97706', width: 2, style: 'solid' },
     text: {
-      content: `<p style="margin:0;text-align:center;font-family:${escapeHtml(fontName)};font-size:${NODE_FONT_SIZE}px;font-weight:700;line-height:1.25">${node.lines.map(escapeHtml).join('<br>')}</p>`,
+      content: `<p style="margin:0;text-align:center;font-family:${escapeHtml(fontName)};font-size:${nodeFontSize(options)}px;font-weight:700;line-height:1.25">${node.lines.map(escapeHtml).join('<br>')}</p>`,
       defaultFontName: fontName,
       defaultColor: component.textColor ?? '#30343A',
       align: 'middle', lineHeight: 1.25, paragraphSpace: 0,
@@ -384,9 +403,13 @@ function branchLevels(component: DiagramComponent, edges: readonly DirectedEdge[
 function nodeSize(component: DiagramComponent, options: DiagramCompilerOptions, widthLimit?: number, maxNodeWidth = NODE_MAX_WIDTH): { width: number; height: number; lines: string[][] } {
   if (widthLimit !== undefined && widthLimit < NODE_MIN_WIDTH) fail('readable diagram nodes do not fit inside the container');
   const maxWidth = Math.min(maxNodeWidth, Math.max(NODE_MIN_WIDTH, component.width * 0.24), widthLimit ?? Infinity);
-  const width = Math.min(maxWidth, Math.max(NODE_MIN_WIDTH, Math.max(...component.nodes.map((node) => measure(node.label.replace(/\n/g, ''), NODE_FONT_SIZE, options))) + NODE_PADDING_X * 2));
+  const width = Math.min(maxWidth, Math.max(NODE_MIN_WIDTH, Math.max(...component.nodes.map((node) => measure(node.label.replace(/\n/g, ''), nodeFontSize(options), options))) + NODE_PADDING_X * 2));
   const lines = component.nodes.map((node) => wrapLabel(node.label, width - NODE_PADDING_X * 2, options));
-  const height = Math.max(...lines.map((parts) => parts.length)) * NODE_LINE_HEIGHT + NODE_PADDING_Y * 2;
+  const height = Math.ceil(Math.max(...lines.map((parts) => {
+    const measuredLine = Math.max(...parts.map((part) => Math.max(nodeFontSize(options) * 1.25,
+      (options.measureTextHeight?.(part, nodeFontSize(options), 700) ?? 20) - 20)));
+    return parts.length * measuredLine + NODE_PADDING_Y * 2;
+  })));
   return { width, height, lines };
 }
 
@@ -482,7 +505,7 @@ function* positionCycleCandidates(component: DiagramComponent, options: DiagramC
 }
 
 function edgeLabelWidth(label: string, options: DiagramCompilerOptions): number {
-  return Math.max(52, measure(label, EDGE_FONT_SIZE, options, 500) + 24);
+  return Math.max(52, measure(label, edgeFontSize(options), options, 500) + 24);
 }
 
 function positionSequence(component: DiagramComponent, options: DiagramCompilerOptions, edges: DirectedEdge[], widthLimit?: number): SequencePosition {
@@ -503,7 +526,7 @@ function positionSequence(component: DiagramComponent, options: DiagramCompilerO
     const hasLabels = labels.some(Boolean);
     if (!useVertical && hasLabels && main.height < 80) continue;
     if (useVertical && labels.some((label) => label && edgeLabelWidth(label, options) > main.width)) continue;
-    const gaps = labels.map((label) => label ? (useVertical ? 48 : edgeLabelWidth(label, options) + 8) : 24);
+    const gaps = labels.map((label) => label ? (useVertical ? edgeLabelHeight(label, options) + 8 : edgeLabelWidth(label, options) + 8) : 24);
     const nodeExtent = useVertical ? size.height : size.width;
     const available = useVertical ? main.height : main.width;
     const minimum = component.nodes.length * nodeExtent + gaps.reduce((sum, gap) => sum + gap, 0);
@@ -684,7 +707,7 @@ function positionBranch(component: DiagramComponent, options: DiagramCompilerOpt
     const levelGap = widestLabel ? (vertical ? 56 : widestLabel + 12) : 32;
     // Fork labels sit between the parent and each child. Keep enough space
     // between sibling branches for those labels at their measured font size.
-    const crossLabelExtent = vertical ? widestLabel : widestLabel ? EDGE_LABEL_HEIGHT : 0;
+    const crossLabelExtent = vertical ? widestLabel : widestLabel ? Math.max(...edges.map((edge) => edge.label ? edgeLabelHeight(edge.label, options) : 0)) : 0;
     const siblingGap = Math.max(28, crossLabelExtent * 2 + 12 - across);
     const minimumAlong = levels.length * along + (levels.length - 1) * levelGap;
     const maximumAcross = Math.max(...levels.map((level) => level.length * across + (level.length - 1) * siblingGap));
@@ -783,10 +806,11 @@ function routeBranchEdge(component: DiagramComponent, position: SequencePosition
 function edgeLabel(id: string, label: string, at: Point, bounds: Rect, component: DiagramComponent, options: DiagramCompilerOptions): PPTTextElement {
   const availableWidth = 2 * Math.min(at.x - bounds.left, bounds.left + bounds.width - at.x);
   const width = Math.min(availableWidth, edgeLabelWidth(label, options));
-  if (measure(label, EDGE_FONT_SIZE, options, 500) > width - 20) fail(`edge label ${JSON.stringify(label)} is too long`);
-  const rect = { left: at.x - width / 2, top: at.y - EDGE_LABEL_HEIGHT / 2, width, height: EDGE_LABEL_HEIGHT };
+  if (measure(label, edgeFontSize(options), options, 500) > width - 20) fail(`edge label ${JSON.stringify(label)} is too long`);
+  const height = edgeLabelHeight(label, options);
+  const rect = { left: at.x - width / 2, top: at.y - height / 2, width, height };
   if (!within(rect, bounds)) fail('edge label exceeds the diagram container');
-  return makeText(id, label, rect, EDGE_FONT_SIZE, component.textColor ?? '#30343A', options.fontName ?? 'Noto Sans SC', { fill: '#FFFFFF' });
+  return makeText(id, label, rect, edgeFontSize(options), component.textColor ?? '#30343A', options.fontName ?? 'Noto Sans SC', { fill: '#FFFFFF' });
 }
 
 function outsideAnnotation(component: DiagramComponent, options: DiagramCompilerOptions): PPTTextElement {
@@ -953,7 +977,7 @@ function renderDiagramPosition(component: DiagramComponent, options: DiagramComp
     labels.push(accepted);
   }
 
-  return [...lines, ...position.nodes.map((node) => makeNode(node, component, options.fontName ?? 'Noto Sans SC')), ...labels,
+  return [...lines, ...position.nodes.map((node) => makeNode(node, component, options)), ...labels,
     ...(position.groupLabels ?? []).map((label) => makeText(`${component.id}-group-${label.id}`, label.text, label.rect,
       ANNOTATION_FONT_SIZE, component.textColor ?? '#30343A', options.fontName ?? 'Noto Sans SC', { weight: 700 }))];
 }
@@ -965,14 +989,14 @@ export async function compileMeasuredDiagramComponent(
   options: MeasuredDiagramCompilerOptions = {},
 ): Promise<PPTElement[]> {
   try {
-    return await compileMeasuredDiagram(component, textMeasure);
+    return await compileMeasuredDiagram(component, textMeasure, options);
   } catch (error) {
     if (error instanceof Error && error.name === 'AbortError') throw error;
     if (!isDiagramFitError(error) && !options.onDiagnostic) throw error;
     if (options.onDiagnostic) {
       // The fallback validates real endpoints and retains every original label,
       // edge and annotation. It does not certify the resulting layout as fitting.
-      const elements = compileDiagramForReview(component);
+      const elements = compileDiagramForReview(component, options);
       options.onDiagnostic(`${error instanceof Error ? error.message : String(error)}; retaining the complete graph with a basic editable layout`);
       return elements;
     }
@@ -983,7 +1007,7 @@ export async function compileMeasuredDiagramComponent(
   }
 }
 
-function compileDiagramForReview(component: DiagramComponent): PPTElement[] {
+function compileDiagramForReview(component: DiagramComponent, options: DiagramCompilerOptions): PPTElement[] {
   if (!component || component.type !== 'diagram' || typeof component.id !== 'string' || !component.id.trim()
     || !['sequence', 'cycle', 'branch'].includes(component.topology)) fail('a renderable diagram needs its type, id and topology');
   if (![component.left, component.top].every((value) => typeof value === 'number' && Number.isFinite(value))
@@ -1033,15 +1057,15 @@ function compileDiagramForReview(component: DiagramComponent): PPTElement[] {
     lines.push(makeLine(`${component.id}-edge-${index}`, port(from, origin, 1), port(to, destination, -1),
       component.accentColor ?? '#D97706'));
     if (edge.label) labels.push(makeText(`${component.id}-edge-label-${index}`, edge.label, {
-      left: (origin.x + destination.x) / 2 - 80, top: (origin.y + destination.y) / 2 - 20, width: 160, height: 40,
-    }, EDGE_FONT_SIZE, component.textColor ?? '#30343A', font));
+      left: (origin.x + destination.x) / 2 - 80, top: (origin.y + destination.y) / 2 - edgeLabelHeight(edge.label, options) / 2, width: 160, height: edgeLabelHeight(edge.label, options),
+    }, edgeFontSize(options), component.textColor ?? '#30343A', font));
   }
   for (const [index, group] of (component.sequenceGroups ?? []).entries()) if (group.label) {
     const first = byId.get(group.nodeIds[0] ?? '')?.rect;
     if (first) labels.push(makeText(`${component.id}-group-${index}`, group.label,
       { ...first, top: first.top - 36, height: 36 }, ANNOTATION_FONT_SIZE, component.textColor ?? '#30343A', font, { weight: 700 }));
   }
-  return [...lines, ...nodes.map((node) => makeNode(node, component, font)), ...labels,
+  return [...lines, ...nodes.map((node) => makeNode(node, component, options)), ...labels,
     ...(component.annotation ? [makeText(`${component.id}-annotation`, component.annotation,
       { left: component.left, top: component.top, width: component.width, height: captionHeight },
       ANNOTATION_FONT_SIZE, component.textColor ?? '#30343A', font, { weight: 700 })] : [])];
@@ -1050,6 +1074,7 @@ function compileDiagramForReview(component: DiagramComponent): PPTElement[] {
 async function compileMeasuredDiagram(
   component: DiagramComponent,
   textMeasure: import('./text-layout-compiler.js').TextMeasure,
+  options: DiagramTypographyOptions = {},
 ): Promise<PPTElement[]> {
   if (component.annotation !== undefined) {
     const { compileTextComponents } = await import('./text-layout-compiler.js');
@@ -1061,10 +1086,10 @@ async function compileMeasuredDiagram(
     if (annotation.type !== 'text') fail('annotation must compile to editable text');
     const reserve = annotation.height + 12;
     const diagram = await compileMeasuredDiagram({ ...component, annotation: undefined,
-      top: component.top + reserve, height: component.height - reserve }, textMeasure);
+      top: component.top + reserve, height: component.height - reserve }, textMeasure, options);
     return [...diagram, annotation];
   }
-  const widths = new Map<string, number>();
+  const widths = new Map<string, number>(), heights = new Map<string, number>();
   const requests = new Map<string, { text: string; size: number; weight: 400 | 700 }>();
   const collect = (text: string, size: number, weight: 400 | 700) => {
     const add = (value: string) => requests.set(`${size}:${weight}:${value}`, { text: value, size, weight });
@@ -1076,21 +1101,28 @@ async function compileMeasuredDiagram(
       add(chars.slice(index).join('').trim());
     }
   };
-  for (const node of component.nodes) collect(node.label, NODE_FONT_SIZE, 700);
+  for (const node of component.nodes) collect(node.label, nodeFontSize(options), 700);
   for (const group of component.sequenceGroups ?? []) if (group.label) collect(group.label, ANNOTATION_FONT_SIZE, 700);
   if (component.annotation) collect(component.annotation, ANNOTATION_FONT_SIZE, 700);
-  for (const edge of component.edges ?? []) if (edge.label) collect(edge.label, EDGE_FONT_SIZE, 400);
+  for (const edge of component.edges ?? []) if (edge.label) collect(edge.label, edgeFontSize(options), 400);
   await Promise.all([...requests.entries()].map(async ([key, request]) => {
-    const result = await textMeasure({ html: `<p>${escapeHtml(request.text)}</p>`, text: request.text, width: 10000,
+    const customTypography = options.nodeFontSize !== undefined || options.edgeFontSize !== undefined;
+    const lineHeight = customTypography ? request.size === nodeFontSize(options) && request.weight === 700 ? 1.25 : 1.2 : 1.5;
+    const html = customTypography
+      ? `<p style="margin:0;font-family:Noto Sans SC;font-size:${request.size}px;font-weight:${request.weight};line-height:${lineHeight}">${escapeHtml(request.text)}</p>`
+      : `<p>${escapeHtml(request.text)}</p>`;
+    const result = await textMeasure({ html, text: request.text, width: 10000,
       fontSize: request.size, fontWeight: request.weight, fontFamily: 'Noto Sans SC', padding: 10,
-      lineHeight: 1.5, paragraphSpace: 5, align: 'center' });
+      lineHeight, paragraphSpace: 5, align: 'center', ...(customTypography ? { preserveRichText: true } : {}) });
     widths.set(key, result.naturalWidth);
+    heights.set(key, Math.max(result.height, result.inkBottom ?? 0));
   }));
-  return compileDiagramComponent(component, { measureText: (text, size, _font, weight) => {
+  return compileDiagramComponent(component, { ...options, measureText: (text, size, _font, weight) => {
     const result = widths.get(`${size}:${weight >= 600 ? 700 : 400}:${text}`);
     if (result === undefined) throw new Error(`Unmeasured diagram text: ${text}`);
     return result;
-  } });
+  }, ...(options.nodeFontSize !== undefined || options.edgeFontSize !== undefined ? { measureTextHeight: (text: string, size: number, weight: number) =>
+    heights.get(`${size}:${weight >= 600 ? 700 : 400}:${text}`) ?? 0 } : {}) });
 }
 
 /** Give the page author measured local choices before its single content call. */
@@ -1098,6 +1130,7 @@ export async function measureDiagramAllocations(
   plan: DiagramPlan,
   textMeasure: import('./text-layout-compiler.js').TextMeasure,
   bounds: DiagramAllocationBounds = {},
+  typography: DiagramTypographyOptions = {},
 ): Promise<DiagramAllocation[]> {
   const left = bounds.left ?? 50;
   const top = bounds.top ?? 140;
@@ -1116,7 +1149,7 @@ export async function measureDiagramAllocations(
   for (const width of widths) {
     for (const height of heights) {
       try {
-        await compileMeasuredDiagram({ ...plan, type: 'diagram', id: 'planned-allocation', left, top, width, height }, textMeasure);
+        await compileMeasuredDiagram({ ...plan, type: 'diagram', id: 'planned-allocation', left, top, width, height }, textMeasure, typography);
         allocations.push({ width, height });
         break;
       } catch (error) {

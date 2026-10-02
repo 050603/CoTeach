@@ -1,0 +1,202 @@
+{
+  "origin": "Unmodified actual original19 response from model-refinement-20261002-v2; process before removal was rejected by the teaching-order contract.",
+  "response": "{\n  \"schemaVersion\": 1,\n  \"designVersion\": \"teaching-visual-v2\",\n  \"pages\": [\n    {\n      \"id\": \"page-1\",\n      \"title\": \"支架式教学法的教学过程\",\n      \"focus\": \"看清五个环节的先后位置，并明确搭脚手架、独立探索与效果评价的关键要求\",\n      \"components\": [\n        {\n          \"id\": \"main-process\",\n          \"kind\": \"process\",\n          \"title\": \"支架式教学法的五个环节\",\n          \"role\": \"primary\",\n          \"useAdoptedDiagram\": true,\n          \"nodes\": [\n            {\n              \"id\": \"p1-c3-fade\",\n              \"anchorId\": \"c3\",\n              \"text\": \"支架在此环节随能力提升逐渐减少、撤出\",\n              \"sourceContentIds\": [\n                \"adopted-content-5\",\n                \"diagram-annotation\"\n              ],\n              \"sourceEvidenceIds\": [\n                \"07d64579-b564-5f1a-9ba5-a000990058dc\",\n                \"f81cab4c-ae89-5a15-8125-6899e31cf00e\"\n              ]\n            }\n          ]\n        },\n        {\n          \"id\": \"support-c1\",\n          \"kind\": \"text\",\n          \"role\": \"support\",\n          \"anchorNodeId\": \"c1\",\n          \"nodes\": [\n            {\n              \"id\": \"p1-c1-detail\",\n              \"text\": \"制定符合最近发展区的概念框架，设计有层次性的支架\",\n              \"sourceContentIds\": [\n                \"adopted-content-4\"\n              ],\n              \"sourceEvidenceIds\": [\n                \"07d64579-b564-5f1a-9ba5-a000990058dc\"\n              ]\n            }\n          ]\n        },\n        {\n          \"id\": \"support-c3\",\n          \"kind\": \"text\",\n          \"role\": \"support\",\n          \"anchorNodeId\": \"c3\",\n          \"nodes\": [\n            {\n              \"id\": \"p1-c3-guide\",\n              \"label\": \"引导与自主\",\n              \"text\": \"先提供启发式引导，再给予自主空间\",\n              \"sourceContentIds\": [\n                \"adopted-content-5\"\n              ],\n              \"sourceEvidenceIds\": [\n                \"07d64579-b564-5f1a-9ba5-a000990058dc\"\n              ]\n            }\n          ]\n        },\n        {\n          \"id\": \"support-c5\",\n          \"kind\": \"text\",\n          \"role\": \"support\",\n          \"anchorNodeId\": \"c5\",\n          \"nodes\": [\n            {\n              \"id\": \"p1-c5-subjects\",\n              \"label\": \"评价主体\",\n              \"text\": \"自我评价 · 小组互评 · 教师评价\",\n              \"sourceContentIds\": [\n                \"adopted-content-6\"\n              ],\n              \"sourceEvidenceIds\": [\n                \"07d64579-b564-5f1a-9ba5-a000990058dc\"\n              ]\n            },\n            {\n              \"id\": \"p1-c5-content\",\n              \"label\": \"评价内容\",\n              \"text\": \"自主学习能力 · 协作贡献 · 意义建构\",\n              \"sourceContentIds\": [\n                \"adopted-content-6\"\n              ],\n              \"sourceEvidenceIds\": [\n                \"07d64579-b564-5f1a-9ba5-a000990058dc\"\n              ]\n            }\n          ]\n        }\n      ]\n    },\n    {\n      \"id\": \"page-2\",\n      \"title\": \"教学支架的撤除\",\n      \"focus\": \"看清支架作用完成的条件，以及逐个撤出而非最后一次性撤销的边界\",\n      \"components\": [\n        {\n          \"id\": \"removal-states\",\n          \"kind\": \"state-change\",\n          \"title\": \"支架的暂时性与渐消性\",\n          \"role\": \"primary\",\n          \"nodes\": [\n            {\n              \"id\": \"p2-state-temp\",\n              \"label\": \"暂时性与渐消性\",\n              \"text\": \"支架只在学生尚需帮助时存在\",\n              \"sourceContentIds\": [\n                \"adopted-content-2\"\n              ],\n              \"sourceEvidenceIds\": [\n                \"f81cab4c-ae89-5a15-8125-6899e31cf00e\"\n              ]\n            },\n            {\n              \"id\": \"p2-state-done\",\n              \"label\": \"作用完成\",\n              \"text\": \"学生能独立解决问题时，支架的作用完成\",\n              \"sourceContentIds\": [\n                \"adopted-content-2\"\n              ],\n              \"sourceEvidenceIds\": [\n                \"f81cab4c-ae89-5a15-8125-6899e31cf00e\"\n              ]\n            },\n            {\n              \"id\": \"p2-state-withdraw\",\n              \"label\": \"需要撤离\",\n              \"text\": \"此时需要将教学支架撤离\",\n              \"sourceContentIds\": [\n                \"adopted-content-2\"\n              ],\n              \"sourceEvidenceIds\": [\n                \"f81cab4c-ae89-5a15-8125-6899e31cf00e\"\n              ]\n            }\n          ],\n          \"edges\": [\n            {\n              \"from\": \"p2-state-temp\",\n              \"to\": \"p2-state-done\",\n              \"kind\": \"sequence\"\n            },\n            {\n              \"from\": \"p2-state-done\",\n              \"to\": \"p2-state-withdraw\",\n              \"kind\": \"sequence\"\n            }\n          ]\n        },\n        {\n          \"id\": \"removal-boundary\",\n          \"kind\": \"text\",\n          \"role\": \"takeaway\",\n          \"nodes\": [\n            {\n              \"id\": \"p2-not-once\",\n              \"label\": \"教学支架的撤除\",\n              \"text\": \"不是最后阶段一次性撤销，而是一个一个地随着学生的发展而撤销\",\n              \"emphasis\": [\n                \"不是最后阶段一次性撤销\",\n                \"一个一个地\"\n              ],\n              \"sourceContentIds\": [\n                \"adopted-content-1\",\n                \"adopted-content-3\",\n                \"diagram-annotation\"\n              ],\n              \"sourceEvidenceIds\": [\n                \"source-quote-3\",\n                \"f81cab4c-ae89-5a15-8125-6899e31cf00e\"\n              ]\n            },\n            {\n              \"id\": \"p2-timing\",\n              \"label\": \"把握时机\",\n              \"text\": \"在教学中需要把握教学支架的进入和退出时刻\",\n              \"sourceContentIds\": [\n                \"diagram-annotation\"\n              ],\n              \"sourceEvidenceIds\": [\n                \"f81cab4c-ae89-5a15-8125-6899e31cf00e\"\n              ]\n            }\n          ]\n        }\n      ]\n    }\n  ]\n}",
+  "scene": {
+    "schemaVersion": 1,
+    "designVersion": "teaching-visual-v2",
+    "pages": [
+      {
+        "id": "teaching-section-6-page-2",
+        "title": "支架式教学法的教学过程",
+        "focus": "看清五个环节的先后位置，并明确搭脚手架、独立探索与效果评价的关键要求",
+        "components": [
+          {
+            "id": "main-process",
+            "kind": "process",
+            "nodes": [
+              {
+                "id": "p1-c3-fade",
+                "sourceContentIds": [
+                  "adopted-content-5",
+                  "diagram-annotation"
+                ],
+                "text": "支架在此环节随能力提升逐渐减少、撤出",
+                "anchorId": "c3",
+                "sourceEvidenceIds": [
+                  "07d64579-b564-5f1a-9ba5-a000990058dc",
+                  "f81cab4c-ae89-5a15-8125-6899e31cf00e"
+                ]
+              }
+            ],
+            "title": "支架式教学法的五个环节",
+            "role": "primary",
+            "useAdoptedDiagram": true
+          },
+          {
+            "id": "support-c1",
+            "kind": "text",
+            "nodes": [
+              {
+                "id": "p1-c1-detail",
+                "sourceContentIds": [
+                  "adopted-content-4"
+                ],
+                "text": "制定符合最近发展区的概念框架，设计有层次性的支架",
+                "sourceEvidenceIds": [
+                  "07d64579-b564-5f1a-9ba5-a000990058dc"
+                ]
+              }
+            ],
+            "role": "support",
+            "anchorNodeId": "c1"
+          },
+          {
+            "id": "support-c3",
+            "kind": "text",
+            "nodes": [
+              {
+                "id": "p1-c3-guide",
+                "sourceContentIds": [
+                  "adopted-content-5"
+                ],
+                "label": "引导与自主",
+                "text": "先提供启发式引导，再给予自主空间",
+                "sourceEvidenceIds": [
+                  "07d64579-b564-5f1a-9ba5-a000990058dc"
+                ]
+              }
+            ],
+            "role": "support",
+            "anchorNodeId": "c3"
+          },
+          {
+            "id": "support-c5",
+            "kind": "text",
+            "nodes": [
+              {
+                "id": "p1-c5-subjects",
+                "sourceContentIds": [
+                  "adopted-content-6"
+                ],
+                "label": "评价主体",
+                "text": "自我评价 · 小组互评 · 教师评价",
+                "sourceEvidenceIds": [
+                  "07d64579-b564-5f1a-9ba5-a000990058dc"
+                ]
+              },
+              {
+                "id": "p1-c5-content",
+                "sourceContentIds": [
+                  "adopted-content-6"
+                ],
+                "label": "评价内容",
+                "text": "自主学习能力 · 协作贡献 · 意义建构",
+                "sourceEvidenceIds": [
+                  "07d64579-b564-5f1a-9ba5-a000990058dc"
+                ]
+              }
+            ],
+            "role": "support",
+            "anchorNodeId": "c5"
+          }
+        ]
+      },
+      {
+        "id": "teaching-section-6-page-2:visual-2",
+        "title": "教学支架的撤除",
+        "focus": "看清支架作用完成的条件，以及逐个撤出而非最后一次性撤销的边界",
+        "components": [
+          {
+            "id": "removal-states",
+            "kind": "state-change",
+            "nodes": [
+              {
+                "id": "p2-state-temp",
+                "sourceContentIds": [
+                  "adopted-content-2"
+                ],
+                "label": "暂时性与渐消性",
+                "text": "支架只在学生尚需帮助时存在",
+                "sourceEvidenceIds": [
+                  "f81cab4c-ae89-5a15-8125-6899e31cf00e"
+                ]
+              },
+              {
+                "id": "p2-state-done",
+                "sourceContentIds": [
+                  "adopted-content-2"
+                ],
+                "label": "作用完成",
+                "text": "学生能独立解决问题时，支架的作用完成",
+                "sourceEvidenceIds": [
+                  "f81cab4c-ae89-5a15-8125-6899e31cf00e"
+                ]
+              },
+              {
+                "id": "p2-state-withdraw",
+                "sourceContentIds": [
+                  "adopted-content-2"
+                ],
+                "label": "需要撤离",
+                "text": "此时需要将教学支架撤离",
+                "sourceEvidenceIds": [
+                  "f81cab4c-ae89-5a15-8125-6899e31cf00e"
+                ]
+              }
+            ],
+            "title": "支架的暂时性与渐消性",
+            "edges": [
+              {
+                "from": "p2-state-temp",
+                "to": "p2-state-done",
+                "kind": "sequence"
+              },
+              {
+                "from": "p2-state-done",
+                "to": "p2-state-withdraw",
+                "kind": "sequence"
+              }
+            ],
+            "role": "primary"
+          },
+          {
+            "id": "removal-boundary",
+            "kind": "text",
+            "nodes": [
+              {
+                "id": "p2-not-once",
+                "sourceContentIds": [
+                  "adopted-content-1",
+                  "adopted-content-3",
+                  "diagram-annotation"
+                ],
+                "label": "教学支架的撤除",
+                "text": "不是最后阶段一次性撤销，而是一个一个地随着学生的发展而撤销",
+                "sourceEvidenceIds": [
+                  "source-quote-3",
+                  "f81cab4c-ae89-5a15-8125-6899e31cf00e"
+                ],
+                "emphasis": [
+                  "不是最后阶段一次性撤销",
+                  "一个一个地"
+                ]
+              },
+              {
+                "id": "p2-timing",
+                "sourceContentIds": [
+                  "diagram-annotation"
+                ],
+                "label": "把握时机",
+                "text": "在教学中需要把握教学支架的进入和退出时刻",
+                "sourceEvidenceIds": [
+                  "f81cab4c-ae89-5a15-8125-6899e31cf00e"
+                ]
+              }
+            ],
+            "role": "takeaway"
+          }
+        ]
+      }
+    ]
+  }
+}

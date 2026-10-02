@@ -70,8 +70,11 @@ export function CanvasArea({
     whiteboardWasOpened.current &&
     !readOnly &&
     Boolean(hideToolbar || minimalToolbar);
+  const isTeachingVisualSlide = currentScene?.content.type === 'slide'
+    && currentScene.content.canvas.teachingVisual?.scene.designVersion === 'teaching-visual-v2';
   const showPlayHint =
     showControls &&
+    !isTeachingVisualSlide &&
     engineState !== 'playing' &&
     currentScene?.type === 'slide' &&
     !isLiveSession &&
@@ -247,7 +250,8 @@ export function CanvasArea({
             </div>
           )}
 
-          {/* Play hint — breathing button when idle or paused (slides only) */}
+          {/* Legacy play hint. Teaching visuals use the player's existing
+              controls so paused diagrams stay unobstructed. */}
           <AnimatePresence>
             {showPlayHint && (
               <motion.div

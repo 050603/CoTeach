@@ -2,6 +2,7 @@ import { current, produce } from 'immer';
 import type { SlideContent } from '@openmaic/lib/types/stage';
 import type { PPTElement, Slide } from '@openmaic/dsl';
 import { getElementListRange } from '@openmaic/lib/utils/element';
+import { markTeachingVisualEdits } from './teaching-visual-edits';
 
 type ElementPatch = Partial<PPTElement>;
 type ElementPropName = string;
@@ -24,6 +25,12 @@ export type SlideElementAlignCommand =
 export type SlideMetaPatch = Partial<Omit<Slide, 'elements' | 'animations'>>;
 
 export type SlideEditOperation =
+  | {
+      /** Protect from automatic composition while retaining direct editing. */
+      type: 'visual.setLocked';
+      componentId: string;
+      locked: boolean;
+    }
   | {
       type: 'slide.update';
       patch: SlideMetaPatch;
@@ -152,8 +159,15 @@ function applyOperationToContent(
   content: SlideContent,
   operation: SlideEditOperation,
 ): SlideContent {
-  return produce(content, (draft) => {
+  const next = produce(content, (draft) => {
     switch (operation.type) {
+      case 'visual.setLocked': {
+        const component = draft.canvas.teachingVisual?.components.find(
+          (item) => item.id === operation.componentId,
+        );
+        if (component && !!component.locked !== operation.locked) component.locked = operation.locked;
+        return;
+      }
       case 'slide.update': {
         // Type-level narrowing via SlideMetaPatch already forbids elements /
         // animations, but a runtime guard closes the `as any` escape hatch
@@ -289,6 +303,7 @@ function applyOperationToContent(
       }
     }
   });
+  return operation.type === 'visual.setLocked' ? next : markTeachingVisualEdits(content, next);
 }
 
 function isSlideEditHistory(target: SlideContent | SlideEditHistory): target is SlideEditHistory {

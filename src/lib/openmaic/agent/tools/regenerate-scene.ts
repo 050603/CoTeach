@@ -35,6 +35,7 @@ import {
   restoreTeachingSemanticElementIds,
   withTeachingSlideGuidance,
 } from '@openmaic/lib/generation/teaching-narration';
+import { redesignTeachingSlide, type TeachingVisualRedesign } from './redesign-teaching-slide';
 
 // ── Runtime SlideContent → generation GeneratedSlideContent (edit baseline) ──
 // The client sends runtime `SceneContent` ({ type:'slide', canvas: Slide }); the
@@ -134,6 +135,9 @@ export const RegenerateSceneParams = Type.Object({
         'Do NOT include slide content here — the current slide is loaded automatically as the baseline.',
     }),
   ),
+  visualDesign: Type.Optional(Type.Boolean({
+    description: 'Use the teaching-diagram design system for an explicitly requested visual redesign. May split this one page into up to three consecutive pages while preserving its teaching sources and total duration. Existing teaching-diagram pages use this automatically.',
+  })),
 });
 
 export type RegenerateSceneParams = Static<typeof RegenerateSceneParams>;
@@ -144,6 +148,7 @@ export interface RegenerateSceneDetails {
   sceneId: string;
   content: GeneratedSlideContent | null;
   actions: Action[];
+  visualRedesign?: TeachingVisualRedesign;
 }
 
 // ── Factory ──────────────────────────────────────────────────────────────────
@@ -157,7 +162,7 @@ export function makeRegenerateSceneTool(
     description:
       'Regenerates a whole slide — its content AND its narration — to match the user instruction. ' +
       'Only works on slide scenes. Supply the sceneId and a natural-language instruction; ' +
-      'the current slide is loaded automatically as the editing baseline.',
+      'the current slide is loaded automatically as the editing baseline. For a teaching-diagram visual redesign, set visualDesign=true; only this page and any resulting consecutive fragments are changed.',
     parameters: RegenerateSceneParams,
 
     execute: async (_toolCallId, params, signal) => {
@@ -219,6 +224,16 @@ export function makeRegenerateSceneTool(
           ],
           details: { sceneId, content: null, actions: [] },
           isError: true,
+        };
+      }
+
+      if (params.visualDesign || content.canvas.teachingVisual) {
+        const redesigned = await redesignTeachingSlide({ deps, context: ctxData, instruction, signal,
+          imageResources: buildImageResources(slideBaseline(content)!) });
+        return {
+          content: [{ type: 'text', text: redesigned.message }],
+          details: { sceneId, content: null, actions: [], ...(redesigned.visualRedesign ? { visualRedesign: redesigned.visualRedesign } : {}) },
+          ...(redesigned.error ? { isError: true } : {}),
         };
       }
 

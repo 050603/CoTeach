@@ -13,7 +13,7 @@ import { useI18n } from '@openmaic/lib/hooks/use-i18n';
 import type { Slide, PPTElementOutline, PPTElementShadow, PPTElementLink } from '@openmaic/dsl';
 import type { Scene, SlideContent } from '@openmaic/lib/types/stage';
 import type { SpeechAction } from '@openmaic/lib/types/action';
-import { getElementRange, getLineElementPath, getTableSubThemeColor } from '@openmaic/lib/utils/element';
+import { getLineElementPath, getTableSubThemeColor } from '@openmaic/lib/utils/element';
 import { type AST, toAST } from '@openmaic/lib/export/html-parser';
 import { type SvgPoints, toPoints, getSvgPathRange } from '@openmaic/lib/export/svg-path-parser';
 import { svg2Base64 } from '@openmaic/lib/export/svg2base64';
@@ -43,7 +43,7 @@ type FormatColor = ReturnType<typeof formatColor>;
 
 // ── HTML → pptxgenjs TextProps ──
 
-function formatHTML(html: string, ratioPx2Pt: number) {
+function formatHTML(html: string, ratioPx2Pt: number, tableCell = false) {
   const ast = toAST(html);
   let bulletFlag = false;
   let indent = 0;
@@ -52,6 +52,7 @@ function formatHTML(html: string, ratioPx2Pt: number) {
 
   const parse = (obj: AST[], baseStyleObj: Record<string, string> = {}) => {
     for (const item of obj) {
+      if (tableCell && item.type === 'comment') continue;
       const isBlockTag = 'tagName' in item && ['div', 'li', 'p'].includes(item.tagName);
 
       if (isBlockTag && slices.length) {
@@ -75,8 +76,10 @@ function formatHTML(html: string, ratioPx2Pt: number) {
       }
 
       if ('tagName' in item) {
-        if (item.tagName === 'em') styleObj['font-style'] = 'italic';
-        if (item.tagName === 'strong') styleObj['font-weight'] = 'bold';
+        if (item.tagName === 'em' || (tableCell && item.tagName === 'i')) styleObj['font-style'] = 'italic';
+        if (item.tagName === 'strong' || (tableCell && item.tagName === 'b')) styleObj['font-weight'] = 'bold';
+        if (tableCell && item.tagName === 'u') styleObj['text-decoration-line'] = 'underline';
+        if (tableCell && ['s', 'del'].includes(item.tagName)) styleObj['text-decoration-line'] = 'line-through';
         if (item.tagName === 'sup') styleObj['vertical-align'] = 'super';
         if (item.tagName === 'sub') styleObj['vertical-align'] = 'sub';
         if (item.tagName === 'a') {
@@ -97,7 +100,7 @@ function formatHTML(html: string, ratioPx2Pt: number) {
       if ('tagName' in item && item.tagName === 'br') {
         slices.push({ text: '', options: { breakLine: true } });
       } else if ('content' in item) {
-        const text = item.content
+        const text = tableCell ? decodeTableText(item.content) : item.content
           .replace(/&nbsp;/g, ' ')
           .replace(/&gt;/g, '>')
           .replace(/&lt;/g, '<')
@@ -106,7 +109,7 @@ function formatHTML(html: string, ratioPx2Pt: number) {
         const options: pptxgen.TextPropsOptions = {};
 
         if (styleObj['font-size']) {
-          options.fontSize = parseInt(styleObj['font-size']) / ratioPx2Pt;
+          options.fontSize = (tableCell ? Number.parseFloat(styleObj['font-size']) : parseInt(styleObj['font-size'])) / ratioPx2Pt;
         }
         if (styleObj['color']) {
           options.color = formatColor(styleObj['color']).color;
@@ -141,7 +144,8 @@ function formatHTML(html: string, ratioPx2Pt: number) {
           if (styleObj['vertical-align'] === 'sub') options.subscript = true;
         }
         if (styleObj['text-align']) options.align = styleObj['text-align'] as pptxgen.HAlign;
-        if (styleObj['font-weight']) options.bold = styleObj['font-weight'] === 'bold';
+        if (styleObj['font-weight']) options.bold = styleObj['font-weight'] === 'bold'
+          || (tableCell && Number(styleObj['font-weight']) >= 600);
         if (styleObj['font-style']) options.italic = styleObj['font-style'] === 'italic';
         if (styleObj['font-family']) options.fontFace = styleObj['font-family'];
         if (styleObj['href']) options.hyperlink = { url: styleObj['href'] };
@@ -167,11 +171,35 @@ function formatHTML(html: string, ratioPx2Pt: number) {
         }
 
         slices.push({ text, options });
-      } else if ('children' in item) parse(item.children, styleObj);
+      } else if ('children' in item) {
+        if (tableCell && isBlockTag && !item.children.length) slices.push({ text: '', options: {} });
+        else parse(item.children, styleObj);
+      }
     }
   };
   parse(ast);
   return slices;
+}
+
+function decodeTableText(text: string): string {
+  // Decode each AST text node once. Decoding the entire HTML first would turn
+  // an escaped comparison such as &lt;strong&gt; into markup and lose facts.
+  const decoder = document.createElement('textarea');
+  decoder.innerHTML = text.replaceAll('<', '&lt;').replaceAll('>', '&gt;');
+  return decoder.value.replace(/\r\n?/g, '\n');
+}
+
+function tableCellMargin(padding: string | undefined, ratioPx2Inch: number): pptxgen.Margin | undefined {
+  if (padding === undefined) return undefined;
+  const tokens = padding.trim().split(/\s+/);
+  if (!tokens.length || tokens.length > 4) return undefined;
+  const sizes = tokens.map((token) => {
+    const match = token.match(/^(\d+(?:\.\d+)?)(px|pt)?$/i);
+    return match ? Number(match[1]) / (match[2]?.toLowerCase() === 'pt' ? 72 : ratioPx2Inch) : NaN;
+  });
+  if (sizes.some((size) => !Number.isFinite(size))) return undefined;
+  const [top, right = top, bottom = top, left = right] = sizes;
+  return [top, right, bottom, left];
 }
 
 // ── SVG path → pptxgenjs points ──
@@ -202,44 +230,44 @@ type Points = Array<
   | { close: true }
 >;
 
-function formatPoints(points: SvgPoints, ratioPx2Inch: number, scale = { x: 1, y: 1 }): Points {
+function formatPoints(points: SvgPoints, ratioPx2Inch: number, scale = { x: 1, y: 1 }, origin = { x: 0, y: 0 }): Points {
   return points.map((point) => {
     if (point.close !== undefined) {
       return { close: true };
     } else if (point.type === 'M') {
       return {
-        x: ((point.x as number) / ratioPx2Inch) * scale.x,
-        y: ((point.y as number) / ratioPx2Inch) * scale.y,
+        x: (((point.x as number) - origin.x) / ratioPx2Inch) * scale.x,
+        y: (((point.y as number) - origin.y) / ratioPx2Inch) * scale.y,
         moveTo: true,
       };
     } else if (point.curve) {
       if (point.curve.type === 'cubic') {
         return {
-          x: ((point.x as number) / ratioPx2Inch) * scale.x,
-          y: ((point.y as number) / ratioPx2Inch) * scale.y,
+          x: (((point.x as number) - origin.x) / ratioPx2Inch) * scale.x,
+          y: (((point.y as number) - origin.y) / ratioPx2Inch) * scale.y,
           curve: {
             type: 'cubic' as const,
-            x1: ((point.curve.x1 as number) / ratioPx2Inch) * scale.x,
-            y1: ((point.curve.y1 as number) / ratioPx2Inch) * scale.y,
-            x2: ((point.curve.x2 as number) / ratioPx2Inch) * scale.x,
-            y2: ((point.curve.y2 as number) / ratioPx2Inch) * scale.y,
+            x1: (((point.curve.x1 as number) - origin.x) / ratioPx2Inch) * scale.x,
+            y1: (((point.curve.y1 as number) - origin.y) / ratioPx2Inch) * scale.y,
+            x2: (((point.curve.x2 as number) - origin.x) / ratioPx2Inch) * scale.x,
+            y2: (((point.curve.y2 as number) - origin.y) / ratioPx2Inch) * scale.y,
           },
         };
       } else if (point.curve.type === 'quadratic') {
         return {
-          x: ((point.x as number) / ratioPx2Inch) * scale.x,
-          y: ((point.y as number) / ratioPx2Inch) * scale.y,
+          x: (((point.x as number) - origin.x) / ratioPx2Inch) * scale.x,
+          y: (((point.y as number) - origin.y) / ratioPx2Inch) * scale.y,
           curve: {
             type: 'quadratic' as const,
-            x1: ((point.curve.x1 as number) / ratioPx2Inch) * scale.x,
-            y1: ((point.curve.y1 as number) / ratioPx2Inch) * scale.y,
+            x1: (((point.curve.x1 as number) - origin.x) / ratioPx2Inch) * scale.x,
+            y1: (((point.curve.y1 as number) - origin.y) / ratioPx2Inch) * scale.y,
           },
         };
       }
     }
     return {
-      x: ((point.x as number) / ratioPx2Inch) * scale.x,
-      y: ((point.y as number) / ratioPx2Inch) * scale.y,
+      x: (((point.x as number) - origin.x) / ratioPx2Inch) * scale.x,
+      y: (((point.y as number) - origin.y) / ratioPx2Inch) * scale.y,
     };
   });
 }
@@ -675,13 +703,31 @@ export async function buildPptxBlob(
       // ── LINE ──
       else if (el.type === 'line') {
         const path = getLineElementPath(el);
-        const points = formatPoints(toPoints(path), ratioPx2Inch);
-        const { minX, maxX, minY, maxY } = getElementRange(el);
+        const rawPoints = toPoints(path);
+        // Same-axis endpoints do not bound a curved connector. A zero-width
+        // or zero-height custom-geometry viewport makes Office distort the
+        // curve even when every serialized point looks correct in isolation.
+        // Include the control hull and translate all points together so the
+        // native viewport is finite and global endpoints/controls stay exact.
+        const hull = rawPoints.flatMap((point) => {
+          if (point.close !== undefined) return [];
+          const coordinates = [{ x: point.x as number, y: point.y as number }];
+          if (point.curve) {
+            coordinates.push({ x: point.curve.x1 as number, y: point.curve.y1 as number });
+            if (point.curve.type === 'cubic') coordinates.push({ x: point.curve.x2 as number, y: point.curve.y2 as number });
+          }
+          return coordinates;
+        });
+        const minX = hull.length ? Math.min(...hull.map((point) => point.x)) : 0;
+        const minY = hull.length ? Math.min(...hull.map((point) => point.y)) : 0;
+        const maxX = hull.length ? Math.max(...hull.map((point) => point.x)) : 0;
+        const maxY = hull.length ? Math.max(...hull.map((point) => point.y)) : 0;
+        const points = formatPoints(rawPoints, ratioPx2Inch, { x: 1, y: 1 }, { x: minX, y: minY });
         const c = formatColor(el.color);
 
         const lineOptions: pptxgen.ShapeProps = {
-          x: el.left / ratioPx2Inch,
-          y: el.top / ratioPx2Inch,
+          x: (el.left + minX) / ratioPx2Inch,
+          y: (el.top + minY) / ratioPx2Inch,
           w: (maxX - minX) / ratioPx2Inch,
           h: (maxY - minY) / ratioPx2Inch,
           line: {
@@ -705,7 +751,7 @@ export async function buildPptxBlob(
         for (let i = 0; i < el.data.series.length; i++) {
           const item = el.data.series[i];
           chartData.push({
-            name: `Series ${i + 1}`,
+            name: el.data.legends[i] || `Series ${i + 1}`,
             labels: el.data.labels,
             values: item,
           });
@@ -743,9 +789,25 @@ export async function buildPptxBlob(
         chartOptions.catAxisLabelColor = textColor;
         chartOptions.valAxisLabelColor = textColor;
 
-        const fontSize = 14 / ratioPx2Pt;
+        const fontSize = (el.options?.fontSize ?? 14) / ratioPx2Pt;
         chartOptions.catAxisLabelFontSize = fontSize;
         chartOptions.valAxisLabelFontSize = fontSize;
+        if (el.options?.fontSize) {
+          chartOptions.catAxisLabelFontFace = slide.theme.fontName;
+          chartOptions.valAxisLabelFontFace = slide.theme.fontName;
+          chartOptions.legendFontFace = slide.theme.fontName;
+        }
+        // The native player displays point values on these chart types. Keep
+        // those teaching quantities visible and editable in PowerPoint too;
+        // the library's default integer format would round exact decimals.
+        if (['bar', 'column', 'line', 'area'].includes(el.chartType)) {
+          chartOptions.showValue = true;
+          chartOptions.dataLabelFormatCode = 'General';
+          chartOptions.dataLabelFontSize = fontSize;
+          chartOptions.dataLabelFontFace = slide.theme.fontName;
+          chartOptions.dataLabelColor = textColor;
+          chartOptions.dataLabelPosition = el.chartType === 'bar' || el.chartType === 'column' ? 'ctr' : 't';
+        }
 
         if (el.fill || el.outline) {
           const plotArea: pptxgen.IChartPropsFillLine = {};
@@ -839,10 +901,22 @@ export async function buildPptxBlob(
               italic: cell.style?.em || false,
               underline: { style: cell.style?.underline ? 'sng' : 'none' },
               align: cell.style?.align || 'left',
-              valign: 'middle',
+              valign: cell.vAlign || 'middle',
               fontFace: cell.style?.fontname || DEFAULT_FONT_FAMILY,
-              fontSize: (cell.style?.fontsize ? parseInt(cell.style.fontsize) : 14) / ratioPx2Pt,
+              fontSize: (cell.style?.fontsize ? Number.parseFloat(cell.style.fontsize) : 14) / ratioPx2Pt,
             };
+            const margin = tableCellMargin(cell.padding, ratioPx2Inch);
+            if (margin !== undefined) cellOptions.margin = margin;
+            if (cell.borders) {
+              cellOptions.border = (['top', 'right', 'bottom', 'left'] as const).map((side) => {
+                const border = cell.borders![side];
+                return border ? {
+                  type: border.style === 'solid' ? 'solid' : 'dash',
+                  pt: border.width / ratioPx2Pt,
+                  color: formatColor(border.color).color,
+                } : { type: 'none' };
+              }) as [pptxgen.BorderProps, pptxgen.BorderProps, pptxgen.BorderProps, pptxgen.BorderProps];
+            }
             if (theme && themeColor) {
               let c: FormatColor;
               if (i % 2 === 0) c = subThemeColors[1];
@@ -868,7 +942,11 @@ export async function buildPptxBlob(
             if (cell.style?.color) cellOptions.color = formatColor(cell.style.color).color;
 
             if (!hiddenCells.includes(`${i}_${j}`)) {
-              _row.push({ text: cell.text, options: cellOptions });
+              const text = formatHTML(cell.text, ratioPx2Pt, true);
+              if (cell.style?.strikethrough) {
+                for (const run of text) run.options = { ...run.options, strike: run.options?.strike ?? 'sngStrike' };
+              }
+              _row.push({ text: text.length ? text : '', options: cellOptions });
             }
           }
           if (_row.length) tableData.push(_row);
@@ -881,6 +959,7 @@ export async function buildPptxBlob(
           h: el.height / ratioPx2Inch,
           colW: el.colWidths.map((item) => (el.width * item) / ratioPx2Inch),
         };
+        if (el.rowHeights?.length === el.data.length) tableOptions.rowH = el.rowHeights.map((height) => height / ratioPx2Inch);
         if (el.theme) tableOptions.fill = { color: '#ffffff' };
         if (el.outline.width && el.outline.color) {
           tableOptions.border = {

@@ -4,6 +4,7 @@ import { AnchoredBar } from './AnchoredBar';
 import { ConnectedTextFormatBar } from './text-format-bar';
 import { DeleteButton } from './DeleteButton';
 import { ZOrderButtons } from './ZOrderButtons';
+import { TeachingVisualActions } from './TeachingVisualActions';
 
 interface AnchoredTextBarProps {
   /** The text element being edited, or "" when no text element is being edited. */
@@ -20,12 +21,13 @@ const Separator = () => <div className="h-5 w-px bg-zinc-200 dark:bg-zinc-800" /
 export function AnchoredTextBar({ editingElementId }: AnchoredTextBarProps) {
   return (
     <AnchoredBar elementId={editingElementId}>
-      <div className="flex items-center gap-1">
+      <div className="flex flex-wrap items-center gap-1">
         <ConnectedTextFormatBar elementId={editingElementId} />
         <Separator />
         <ZOrderButtons elementId={editingElementId} />
         <Separator />
         <DeleteButton elementId={editingElementId} />
+        <TeachingVisualActions elementId={editingElementId} />
       </div>
     </AnchoredBar>
   );

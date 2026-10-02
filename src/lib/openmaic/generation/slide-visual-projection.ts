@@ -1,4 +1,4 @@
-import { parseJsonResponse, type AuthoringContentItem } from '@openmaic/generation';
+import { parseJsonResponse, type AuthoringContentItem } from '@openmaic/generation/browser';
 import type { SlidePresentationItem, SlidePresentationProjection } from '@openmaic/dsl';
 import type { SceneOutline } from '../types/generation';
 import type { AICallFn } from './pipeline-types';
@@ -9,7 +9,8 @@ export const SLIDE_VISUAL_LAYOUT_VERSION = 'teaching-infographic-v1' as const;
 export const SLIDE_VISUAL_PROJECTION_OPERATION = 'PPT_VISUAL_PROJECTION_V1';
 
 /** Visual authoring and legacy native authoring have separate saved responses. */
-export function slideVisualOperation(system: string): 'projection' | 'native' {
+export function slideVisualOperation(system: string): 'scene' | 'projection' | 'native' {
+  if (system.includes('PPT_TEACHING_VISUAL_V2')) return 'scene';
   if (system.includes(SLIDE_VISUAL_PROJECTION_OPERATION)) return 'projection';
   return 'native';
 }

@@ -191,6 +191,7 @@ function buildCompleteSceneInner(
       theme: content.theme ?? defaultTheme,
       elements: content.elements,
       ...(content.presentationProjection ? { presentationProjection: content.presentationProjection } : {}),
+      ...(content.teachingVisual ? { teachingVisual: content.teachingVisual } : {}),
       background: content.background,
     };
 

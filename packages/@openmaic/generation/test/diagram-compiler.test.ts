@@ -68,6 +68,31 @@ function onBoundary(point: [number, number], node: PPTShapeElement): boolean {
 }
 
 describe('compileDiagramComponent', () => {
+  it('measures explicit teaching typography for allocations and output while preserving legacy defaults', async () => {
+    const diagram: DiagramComponent = { type: 'diagram', id: 'type-safe', topology: 'sequence',
+      left: 50, top: 140, width: 900, height: 240,
+      nodes: [{ id: 'observe', label: '观察证据' }, { id: 'explain', label: '形成解释' }],
+      edges: [{ from: 'observe', to: 'explain', label: '依据' }] };
+    const requests: Array<{ size: number; lineHeight: number }> = [];
+    const measure: TextMeasure = (input) => {
+      requests.push({ size: input.fontSize, lineHeight: input.lineHeight });
+      return fontMeasure(input);
+    };
+    const typography = { nodeFontSize: 24, edgeFontSize: 18 };
+    const allocations = await measureDiagramAllocations(diagram, measure, {}, typography);
+    const allocation = allocations.find((entry) => entry.width === 900)!;
+    const elements = await compileMeasuredDiagramComponent({ ...diagram, ...allocation }, measure, typography);
+    const nodes = elements.filter((element): element is PPTShapeElement => element.type === 'shape');
+    const labels = elements.filter((element): element is PPTTextElement => element.type === 'text');
+    expect(nodes.every((node) => node.text!.content.includes('font-size:24px') && node.height >= 54)).toBe(true);
+    expect(labels.every((label) => label.content.includes('font-size:18px') && label.height >= 42)).toBe(true);
+    expect(requests).toContainEqual({ size: 24, lineHeight: 1.25 });
+    expect(requests).toContainEqual({ size: 18, lineHeight: 1.2 });
+    const legacy = await compileMeasuredDiagramComponent(diagram, fontMeasure);
+    expect(legacy.filter((element) => element.type === 'shape').every((node) => node.text!.content.includes('font-size:20px'))).toBe(true);
+    expect(legacy.filter((element) => element.type === 'text').every((label) => label.content.includes('font-size:16px'))).toBe(true);
+  });
+
   it('normalizes a kind diagram without changing its graph, styling or authored allocation', () => {
     const { type: _type, ...plan } = branch;
     expect(_type).toBe('diagram');

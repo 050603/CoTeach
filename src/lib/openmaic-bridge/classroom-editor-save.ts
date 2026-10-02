@@ -1,12 +1,14 @@
 import type { Scene, Stage } from '@openmaic/lib/types/stage';
+import type { SceneOutline } from '@openmaic/lib/types/generation';
 
 export interface ClassroomEditorDocument {
   stage: Stage;
   scenes: Scene[];
+  outlines?: SceneOutline[];
 }
 
-export function classroomFingerprint(stage: Stage | null, scenes: Scene[]): string {
-  return JSON.stringify({ stage, scenes });
+export function classroomFingerprint(stage: Stage | null, scenes: Scene[], outlines: SceneOutline[] = []): string {
+  return JSON.stringify({ stage, scenes, outlines });
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -79,5 +81,6 @@ export function reconcileClassroomSave(
   return {
     stage: { ...merged.stage, id: saved.stage.id },
     scenes: merged.scenes.map((scene, order) => ({ ...scene, stageId: saved.stage.id, order })),
+    ...(merged.outlines ? { outlines: merged.outlines } : {}),
   };
 }

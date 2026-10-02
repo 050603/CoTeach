@@ -16,15 +16,28 @@ import type { Scene } from '@openmaic/lib/types/stage';
  * — never another slide's outline.
  */
 export function resolveSceneOutline(scene: Scene, outlines: SceneOutline[]): SceneOutline {
-  const matched = scene.outlineId ? outlines.find((o) => o.id === scene.outlineId) : undefined;
-  return (
-    matched ?? {
+  const matched = outlines.find((outline) => outline.id === (scene.outlineId || scene.id));
+  const metadata: Partial<SceneOutline> = {};
+  for (const key of ['stageKey', 'stageLabel', 'audience', 'generationPurpose', 'companionIds',
+    'companionPrompt', 'activityId', 'parentActivityId', 'lectureSectionId', 'lectureSectionTitle',
+    'detailKind', 'knowledgePointIds', 'teachingUnitIds', 'assessmentUnitIds', 'targetDurationSec',
+    'segmentIndex', 'segmentCount', 'segmentRole', 'segmentGroupId', 'ttsPolicy', 'timingPlan',
+    'resourceTypes', 'narrationMode', 'teachingToolPlan'] as const) {
+    // Assign through the common metadata shape: the key and value remain paired.
+    if (scene[key] !== undefined) Object.assign(metadata, { [key]: scene[key] });
+  }
+  return {
+    ...(matched ?? {
       id: scene.id,
       type: scene.type,
       title: scene.title,
       description: '',
       keyPoints: [],
       order: scene.order,
-    }
-  );
+    }),
+    ...metadata,
+    title: scene.title,
+    order: scene.order,
+    ...(scene.targetDurationSec !== undefined ? { estimatedDuration: scene.targetDurationSec } : {}),
+  };
 }

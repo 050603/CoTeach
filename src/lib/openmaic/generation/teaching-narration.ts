@@ -23,12 +23,22 @@ import { nativeTextRelationCaption } from './native-text-placement';
 import { adoptedPageAuthoringContent, pagePresentationContent } from './adopted-page-content';
 import { slideVisualOperation } from './slide-visual-projection';
 import { sourceSequenceTeachingResponsibilities } from '@/lib/course-generation/source-content-acceptance';
+import { extractVisibleElementText } from './semantic-visual-cues';
 
-export const TEACHING_NARRATION_VERSION = 'section-continuous-narration-v31-reasoned-section-entry';
+export const TEACHING_NARRATION_VERSION = 'section-continuous-narration-v34-native-shape-evidence';
 const SOURCE_NARRATION_AUTHORING_POLICY = 'All originalSourceRefs resolve through the request evidenceCatalog.sources; every textRef, labelRef, sourceLabelRef, originalQuoteRefs and sourceDescriptionRefs resolves through evidenceCatalog.texts. These are unchanged complete source texts, not summaries. When teaching a rigorous source definition, concept description or canonical requirement, compose the segment with textParts instead of text. Each part is {text: your natural spoken wording} or {sourceRef: an exact id from this page originalTeachingSources.authoritativeAnchors}. Canonical source-definition-N and source-list-N-item-M references must preserve the complete supplied defining sentence or condition unchanged. Use {sourceRef: id} for a complete claim. A quote may select an unchanged contiguous excerpt for the chosen explanation, preserving the conditions needed for the claim being taught. Do not read an entire source passage when only one relationship is relevant. A sourceRef expands only your chosen unchanged authoritative text at the position you choose. Use ordinary text parts for your transitions, reasoning and examples, and include punctuation between parts as needed. Read the anchor text when planning the sentence; keep it grammatical and naturally connected. When an anchor is a short heading, supply the grammatical bridge and punctuation before explaining its source meaning. When it already ends with sentence punctuation, do not repeat that punctuation in the following text part. After a precise definition, develop its meaning, reason or example instead of immediately repeating the same definition in different words. Use only this page’s supplied source IDs, and never speak an ID. Do not output both text and textParts for one segment. Ordinary segments may still use text. References are a way to author precise claims, not an instruction to insert every quote or read whole source passages. Teach each owned canonical item once across the section, at its actual explanation page. Author visual anchor quotes from the final combined speech after mentally expanding its sourceRefs.';
 
 function sourceAuthoringDuties(sourcesByPage: ReadonlyMap<string, ReturnType<typeof pageOriginalTeachingSources>>,
-  responsibilities?: ReadonlyMap<string, ReturnType<typeof sourceSequenceTeachingResponsibilities>>) {
+  responsibilities?: ReadonlyMap<string, ReturnType<typeof sourceSequenceTeachingResponsibilities>>,
+  previousActualNarration?: readonly string[]) {
+  const spokenForm = (text: string) => text.normalize('NFKC').replace(/[\p{P}\s]/gu,
+    (character: string, index: number, normalized: string) => (
+      // Decimal separators and numeric signs are conditions, not disposable
+      // sentence punctuation: 1.2 must never satisfy a definition saying 12.
+      /[.,]/u.test(character) && /\d/u.test(normalized[index - 1] ?? '') && /\d/u.test(normalized[index + 1] ?? '')
+        || character === '-' && /\d/u.test(normalized[index + 1] ?? '') ? character : ''
+    ));
+  const priorSpeech = spokenForm((previousActualNarration ?? []).join(''));
   const duties = new Map<string, { text: string; availableReferences: Array<{
     pageId: string; sourceRef: string; sourceDescriptions?: string[]; meaningSourceRef?: string;
   }> }>();
@@ -36,6 +46,11 @@ function sourceAuthoringDuties(sourcesByPage: ReadonlyMap<string, ReturnType<typ
     for (const anchor of sources.authoritativeAnchors) {
       const sourceIdentity = anchor.sourceListId ?? ('sourceDefinitionKey' in anchor ? anchor.sourceDefinitionKey : undefined);
       if (typeof sourceIdentity !== 'string' || !sourceIdentity) continue;
+      // Actual prior speech can satisfy only this identical complete source
+      // definition. Names, partial definitions and planned takeaways cannot.
+      // Keep every passage/anchor available and leave source-list duties alone.
+      const definition = !anchor.sourceListId && anchor.sourceDefinitionKey ? spokenForm(anchor.text) : '';
+      if (definition && priorSpeech.includes(definition)) continue;
       const assignedOwner = anchor.sourceListId ? responsibilities?.get(anchor.sourceListId)?.owners
         .find(({ label }) => label === anchor.sourceLabel)?.owner : undefined;
       // Restrict authoring duties, never the complete original source context.
@@ -538,6 +553,8 @@ function actualSlideForNarration(content: GeneratedSlideContent) {
     readingOrder,
     elements: content.elements.map((element) => {
       const record = element as unknown as Record<string, unknown>;
+      const shapeText = element.type === 'shape' && element.opacity !== 0
+        ? extractVisibleElementText(element) : undefined;
       return {
         id: element.id,
         type: element.type,
@@ -548,7 +565,7 @@ function actualSlideForNarration(content: GeneratedSlideContent) {
           height: element.type === 'line' ? Math.abs(element.end[1] - element.start[1]) : element.height,
         },
         content: typeof record.content === 'string' ? plainText(record.content) : undefined,
-        text: typeof record.text === 'string' ? plainText(record.text) : undefined,
+        text: shapeText || (typeof record.text === 'string' ? plainText(record.text) : undefined),
         alt: typeof record.alt === 'string' ? record.alt : undefined,
         name: typeof record.name === 'string' ? record.name : undefined,
         chart: element.type === 'chart' ? { chartType: record.chartType, data: record.data } : undefined,
@@ -588,12 +605,32 @@ function pageContinuityContract(
   pages: ReadonlyArray<{ outline: SceneOutline; content: GeneratedSlideContent }>,
   index: number,
   context: NarrationContinuityContext,
+  priorActualNarration?: readonly string[],
 ) {
+  // A partial redraw can start inside a section. Preserve that real position
+  // and pass the caller's verified preceding speech without reconstructing it
+  // from the current draft, later pages or planned summaries.
+  if (index === 0 && context.sectionPosition === 'continuation') return {
+    position: 'continuation' as const,
+    previousPageTitle: context.previousPageTitle,
+    priorActualNarration: priorActualNarration ?? [],
+    adoptedCurrentEntryPoint: pages[0]!.outline.teachingBrief?.teachingPlan?.entryPoint,
+    transitionContract: {
+      bridge: pages[0]!.outline.teachingBrief?.teachingPlan?.entryPoint?.bridge,
+      maximumSentences: 2,
+      repeatPreviousTakeaway: false,
+    },
+    currentNewContent: pages[0]!.outline.teachingBrief?.teachingPlan?.newContent,
+    firstActualVisibleEvidence: actualSlideVisibleEvidence(pages[0]!.content),
+    notYetEstablishedOnPreviousPage: pages.slice(1).flatMap(({ outline }) => (
+      outline.teachingBrief?.teachingPlan?.visibleContent ?? []
+    )),
+  };
   if (index === 0) return {
     position: 'section-opening' as const,
     previousSectionTakeaways: context.previousSectionTakeaways ?? [],
     previousSectionQuizFocus: context.previousSectionQuizFocus ?? [],
-    previousSectionActualNarration: context.previousSectionActualNarration ?? [],
+    previousSectionActualNarration: priorActualNarration ?? context.previousSectionActualNarration ?? [],
     currentNewContent: pages[0]!.outline.teachingBrief?.teachingPlan?.newContent,
     firstActualVisibleEvidence: actualSlideVisibleEvidence(pages[0]!.content),
   };
@@ -630,7 +667,8 @@ export async function generateTeachingSectionNarration(input: {
   courseTitle?: string;
   languageDirective?: string;
   courseProgression?: readonly SceneOutline[];
-  /** Spoken evidence from the preceding section, already generated in course order. */
+  /** Verified actual speech before this authoring scope, already in course
+   * order; excludes the current and future scripts, even for a partial section. */
   previousSectionActualNarration?: readonly string[];
   /** Original adopted textbook passages, independent of the slide summary. */
   sourceEvidence?: CourseEvidenceSnapshot;
@@ -658,7 +696,7 @@ export async function generateTeachingSectionNarration(input: {
   }
   const responsibilities = sourceAuthoringResponsibilities(input.courseProgression?.length ? input.courseProgression : outlines,
     input.sourceSequenceContracts);
-  const sourceDuties = sourceAuthoringDuties(originalSourcesByPage, responsibilities).map((duty) => ({ ...duty,
+  const sourceDuties = sourceAuthoringDuties(originalSourcesByPage, responsibilities, input.previousSectionActualNarration).map((duty) => ({ ...duty,
     availableReferences: authoringPageIds ? duty.availableReferences.filter((reference) => authoringPageIds.has(reference.pageId))
       : duty.availableReferences,
   })).filter((duty) => duty.availableReferences.length);
@@ -696,6 +734,7 @@ export async function generateTeachingSectionNarration(input: {
     'Treat the canonical descriptions in requiredSourceLists as short authoritative anchors for the adopted concepts, steps and core requirements. At the point where each item is taught, retain the source defining or qualifying wording once, including its actor, action and conditions, and develop the reasoning around it in natural spoken sentences. Cover these anchors once across the section at their actual page owners, rather than reciting the same list on every page. Do not replace a rigorous source description with its abbreviated slide label. The surrounding examples, transitions and explanations remain in the established teaching voice; this does not require reading the rest of a source passage.',
     SOURCE_NARRATION_AUTHORING_POLICY,
     'sourceAuthoringDuties is the finite list of adopted rigorous definitions and requirements for this section, not extra source material. Complete original lists and anchors remain context even when some items belong to another page or section; do not move those items into this page’s explanation responsibility. For EACH duty, choose exactly one availableReference on the page where its concept or condition is actually taught and use that sourceRef in textParts. source-definition references contain only the original defining sentence; the rest of its source paragraph remains evidence for your explanation, not obligatory reading. Its sourceDescriptions are the original explanation attached to that exact source list item, not a slide summary. Teach their essential mechanism, scope and necessary conditions in your natural reasoning and example; saying only the heading or a generic slide meaning is insufficient. Do not recite the entire description. Explain why it matters in your own natural speech. Do not freely reword a duty in a text part instead of using its reference: even a small omission can change a condition. Each identical duty is taught once across the section, without reading the whole list on every page. Other originalQuotes remain selective evidence; do not insert every quote. Teach the claim directly without saying that the textbook gives a suggestion or announcing its provenance.',
+    'A source definition is excluded from the current sourceAuthoringDuties only when its complete original wording already appears in the verified preceding actual narration. Its unchanged passages and anchors remain available as evidence. Continue from that established definition into this page’s assigned mechanism, reasoning or case instead of teaching the definition again. A concept name, partial wording or planned takeaway is not proof that the full definition was spoken. Source-list requirements retain their own page responsibilities.',
     'Choose each duty’s teaching page using that page’s actual adopted core points and explanation responsibility. Original source passages and shared section goals provide authority and context, not permission to pre-teach all later pages. An overview may briefly name the organizing phases; leave their individual requirements, definitions and worked reasoning to the pages that explain them. For capacity continuations, keep the local presentationContent as the topic boundary while explaining its original source meaning in depth.',
     'Named characteristic references already include their original defining sentence as one complete source claim. Use that claim once at its explanation page, then explain its significance through the adopted case in your natural voice. Do not repeat the definition or read the rest of its source paragraph. meaningSourceRef remains selective evidence for an additional necessary condition or mechanism; select the necessary unchanged clause with {sourceRef: id, quote: an exact contiguous excerpt} when needed. A bare name plus an improvised explanation is insufficient. Canonical source-list condition references must remain complete and cannot be cropped. Choose ordinary sourceQuotes selectively for other necessary definitions. Source claims must enter as complete grammatical clauses: do not put an unfinished prefix such as “就是把” or a repeated topic before a reference that already states its own subject or verb. Inspect the reference text before composing its surrounding words.',
     'The adopted examples in stableTeachingMaterials and examples are part of this page’s explanation, not optional decoration. Preserve the actual case, conditions, actions, observations and the reasoning that connects them to the concept; use your natural teaching voice to walk through it. Do not replace a supplied worked case with a list of abstract definitions or skip it to make room for more source quotations. A continuation may explain the next assigned case step without replaying the whole case. When a page has no adopted example, do not invent one to fill a quota.',
@@ -703,7 +742,8 @@ export async function generateTeachingSectionNarration(input: {
     'Explain the section at the depth this learner and time budget require. Define unfamiliar terms on first use, make intermediate causal or inferential links explicit, and explain how a result follows instead of repeating conclusions.',
     'Advance one line of understanding across pages. Use introduces, deepens, and references as page ownership: teach new nodes where introduced, add the planned relation or application where deepened, and use only a short bridge where referenced.',
     'Treat every page learningBoundary as authoritative learner state. You may rely on prerequisiteKnowledge and previouslyTaughtKnowledge. Establish currentKnowledge before using it in an example, comparison, judgment, or exercise. futureKnowledge may be named only in an agenda or goal; never use it as an explanation premise, example, option, task, or assumed student knowledge.',
-    'Treat each page continuityContract as a closed-world handoff. Within a section, a later page may say the previous page established only a proposition present in establishedVisibleStatements, establishedTakeaway, or previousActualVisibleEvidence. Never claim that the previous page raised, showed, discussed, or left a question, example, term, project or conclusion that is absent from that evidence. Material listed under currentNewContent or notYetEstablishedOnPreviousPage must be introduced as new at its own page. Follow transitionContract with at most one or two short linking sentences; do not paste or restate the full establishedTakeaway at the start of the next page. When no retrospective wording adds value, continue directly from the adopted bridge or current content instead of saying “上一页”.',
+    'Treat each page continuityContract as a closed-world handoff. After the first requested page, a later page may say the previous page established only a proposition present in establishedVisibleStatements, establishedTakeaway, or previousActualVisibleEvidence. Never claim that the previous page raised, showed, discussed, or left a question, example, term, project or conclusion that is absent from that evidence. Material listed under currentNewContent or notYetEstablishedOnPreviousPage must be introduced as new at its own page. Follow transitionContract with at most one or two short linking sentences; do not paste or restate the full establishedTakeaway at the start of the next page. When no retrospective wording adds value, continue directly from the adopted bridge or current content instead of saying “上一页”.',
+    'When the first requested page is a continuation inside an existing section, its continuityContract.priorActualNarration is the complete verified speech before this authoring scope. Use only propositions actually present there as earlier spoken evidence; an empty array proves no prior speech. Keep its real continuation position, use at most a short bridge, and develop its own assigned content. Do not restart the section or promote the current draft, a future script, a page title or a planned takeaway into something learners already heard. This handoff applies only at the start of the requested scope; subsequent pages keep their own closed-world page contracts.',
     'For a section-opening page after another section, use previousSectionTakeaways and previousSectionActualNarration as evidence of what was taught, and previousSectionQuizFocus only as the skill checked, not as proof of any student answer or mastery. Make the new section feel like the next step in the same reasoning: where the adopted entryPoint identifies a need created by the previous understanding, pick up that precise need and show how currentNewContent begins to address it. The intervening quiz will separately explain the full cross-section reason after the learner reviews it, so open this first slide by continuing the idea and teaching its own content, without repeating a quiz announcement or a complete prior-section summary. If no supported connection exists, enter currentNewContent directly rather than fabricate one. Use firstActualVisibleEvidence to explain this section’s first idea. A quiz title is an internal label, not prior knowledge. Do not invent a prior claim, score, class response, or a transition unsupported by these fields.',
     'At adjacent teaching-page boundaries, let the current page end with the concrete reason the next idea is needed, when the adopted plan supports that reason. Let the next page pick up that reason in one or two natural sentences and immediately develop its own new content. Avoid repeating a complete takeaway, reopening the lesson, or adding a separate transition paragraph to every page. Before a quiz, finish with a brief invitation to check understanding; the next section resumes after students have submitted and reviewed it.',
     'Use each page entryPoint as the real way into its reasoning. The standalone AI resource must feel complete even when a teacher-led phase may have introduced the wider lesson earlier. On the first course page, give a brief natural greeting, identify the course or immediate learning focus when useful, and establish the entryPoint through a concrete familiar experience, observable contrast, question, or direct proposition. Let learners notice the relevant feature before explicitly bridging from it to the first new idea. Do not merely prepend a greeting to a definition, recite objectives, announce an abstract agenda, or claim that learners answered. On later pages, connect from the exact idea already established instead of restarting the lesson.',
@@ -765,7 +805,7 @@ export async function generateTeachingSectionNarration(input: {
       timingPlan: outline.timingPlan,
       semanticUnits: buildTeachingNarrationSemantics(outline),
       deliveryContext: deliveryContexts[index],
-      continuityContract: pageContinuityContract(input.pages, index, deliveryContexts[index]!),
+      continuityContract: pageContinuityContract(input.pages, index, deliveryContexts[index]!, input.previousSectionActualNarration),
     })),
     evidenceCatalog: sourceCatalog.catalog,
     sourceAuthoringDuties: sourceDutiesForPrompt(sourceDuties, sourceCatalog),
@@ -1042,8 +1082,11 @@ export function compileTeachingNarrationActions(input: {
   const bindings: SlideElementBinding[] = semantics.visible.flatMap((unit) => {
     const exactId = input.content.elements.find((element) => element.id === unit.id);
     if (exactId) return [{ semanticId: unit.id, elementIds: [exactId.id] }];
+    const wording = unit.text.replace(/\s+/g, ' ').trim();
     const matches = input.content.elements.filter((element) => element.type === 'text'
-      && plainText(unit.text).length > 0 && plainText(element.content).includes(plainText(unit.text)));
+      ? plainText(unit.text).length > 0 && plainText(element.content).includes(plainText(unit.text))
+      : element.type === 'shape' && element.opacity !== 0 && wording.length > 0
+        && extractVisibleElementText(element).replace(/\s+/g, ' ').trim().includes(wording));
     return matches.length === 1 ? [{ semanticId: unit.id, elementIds: [matches[0].id] }] : [];
   });
   const cues: VisualActionCue[] = narration.segments.flatMap((segment) => (segment.anchors ?? []).flatMap((anchor) => {

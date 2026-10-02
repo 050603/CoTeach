@@ -17,6 +17,7 @@ import { callLLM } from '@openmaic/lib/ai/llm';
 import { createLogger } from '@openmaic/lib/logger';
 import type { SceneContext } from '@openmaic/lib/agent/tools/regenerate-scene-actions';
 import { authorizeTemplateRequest } from '@/lib/platform/template-access';
+import { hydrateAgentTeachingSourceContexts } from '@openmaic/lib/agent/server/teaching-source-context';
 
 const log = createLogger('MAIC Agent');
 
@@ -45,7 +46,8 @@ interface AgentEditBody {
    */
   history?: Array<{ role: 'user' | 'assistant'; text: string }>;
   /**
-   * Trusted scene/stage context for every scene the agent may act on.
+   * Current scene/stage editing context. Adopted sources and outlines are
+   * independently hydrated from the authorized course on the server.
    * The client includes the active scene (and all sibling scenes) so the
    * `regenerate_scene_actions` tool can resolve outline + content without
    * relying on model-fabricated arguments.
@@ -92,6 +94,10 @@ export async function POST(req: NextRequest) {
   if (!message) {
     return new Response('message is required', { status: 400 });
   }
+  const sceneContextMap = await hydrateAgentTeachingSourceContexts({
+    authorizedCourseId: courseId || undefined,
+    sceneContextMap: body.sceneContextMap ?? {},
+  });
 
   // Resolve via the 'maic-agent' stage so operators can route the editor agent
   // to a dedicated model via MODEL_ROUTES (per-stage config). When unrouted it
@@ -140,7 +146,6 @@ export async function POST(req: NextRequest) {
     return r.text;
   };
 
-  const sceneContextMap: SceneContextMap = body.sceneContextMap ?? {};
   const tools = buildToolset({
     aiCall,
     getSceneContext: (sceneId) => sceneContextMap[sceneId],

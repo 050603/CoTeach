@@ -1,0 +1,1241 @@
+{
+  "outline": {
+    "id": "teaching-section-6-page-2",
+    "type": "slide",
+    "order": 18,
+    "title": "支架的撤除与支架式教学法的教学过程",
+    "audience": "student",
+    "stageKey": "ai-learning",
+    "keyPoints": [
+      "教学支架的撤除",
+      "支架具有暂时性和渐消性：学生能独立解决问题时，支架的作用完成，需要撤离",
+      "支架不是最后阶段一次性撤销，而是一个一个地随着学生的发展而撤销",
+      "搭脚手架：制定符合学生最近发展区的概念框架，设计有层次性的支架",
+      "独立探索：提供启发式引导后给予自主空间，随学生能力提升逐渐减少、撤出支架",
+      "效果评价：涵盖自我评价、小组互评和教师评价，围绕自主学习能力、协作贡献和意义建构展开"
+    ],
+    "ttsPolicy": "target-duration",
+    "activityId": "teaching-section-6",
+    "detailKind": "knowledge-explanation",
+    "stageLabel": "知识讲授",
+    "timingPlan": {
+      "unit": "cjk-char",
+      "speed": 1,
+      "modelId": "qwen-audio-3.0-tts-plus",
+      "voiceId": "longanlingxin",
+      "language": "zh-CN",
+      "maxUnits": 498,
+      "minUnits": 406,
+      "pageKind": "slide",
+      "videoSec": 0,
+      "profileId": "4::qwen-tts::qwen-audio-3.0-tts-plus::longanlingxin::zh-cn::1",
+      "providerId": "qwen-tts",
+      "contentType": "theory",
+      "feedbackSec": 0,
+      "targetUnits": 452,
+      "narrationSec": 97,
+      "operationSec": 0,
+      "transitionSec": 0,
+      "taskComplexity": "low",
+      "taskFitsBudget": true,
+      "timingRationale": [
+        "Slide pages reserve only a short page-change interval; the remaining budget is natural-speed narration.",
+        "Preserve the approved teaching-blueprint narration, learner-activity, and transition budget."
+      ],
+      "algorithmVersion": 4,
+      "paragraphBudgets": [
+        {
+          "role": "explanation",
+          "unit": "cjk-char",
+          "maxUnits": 498,
+          "minUnits": 406,
+          "targetUnits": 452,
+          "targetDurationSec": 97
+        }
+      ],
+      "calibrationSource": "configured",
+      "targetDurationSec": 97,
+      "naturalSpeedLocked": true,
+      "readingThinkingSec": 0,
+      "studentActivitySec": 0,
+      "effectiveUnitsPerMinute": 279.4,
+      "activityTargetDurationSec": 97,
+      "recommendedStudentActivitySec": 0
+    },
+    "description": "本页把上一页的核心推进到撤除机制与教学过程，讲清支架为什么是暂时、渐消而不是一次性撤销的，并按五个环节完整呈现支架式教学法的教学过程。",
+    "visualIntent": {
+      "diagram": {
+        "edges": [
+          {
+            "to": "c2",
+            "from": "c1"
+          },
+          {
+            "to": "c3",
+            "from": "c2"
+          },
+          {
+            "to": "c4",
+            "from": "c3"
+          },
+          {
+            "to": "c5",
+            "from": "c4"
+          }
+        ],
+        "nodes": [
+          {
+            "id": "c1",
+            "label": "搭脚手架"
+          },
+          {
+            "id": "c2",
+            "label": "进入情境"
+          },
+          {
+            "id": "c3",
+            "label": "独立探索"
+          },
+          {
+            "id": "c4",
+            "label": "协作学习"
+          },
+          {
+            "id": "c5",
+            "label": "效果评价"
+          }
+        ],
+        "topology": "sequence",
+        "annotation": "支架在独立探索环节随学生能力提升而逐渐减少、撤出，这些支架是一个一个地随着学生发展而撤销的，而不是在最后阶段一次性撤销；教学中需要把握支架的进入和退出时刻。"
+      },
+      "rationale": "五个环节有真实的时间推进顺序，用原生流程图整体呈现能让学生一次看清完整链条，也能看到独立探索处于支架开始减少的位置；文字清单会丢掉这个位置关系。",
+      "representation": "native-diagram",
+      "observationGoal": "支架式教学法五个教学环节及其先后位置。"
+    },
+    "narrationMode": "standalone-course",
+    "plannedTiming": {
+      "role": "teaching",
+      "narrationSec": 97,
+      "transitionSec": 0,
+      "learnerActivitySec": 0
+    },
+    "resourceTypes": [
+      "ppt"
+    ],
+    "sourcePageIds": [
+      "teaching-section-6-page-2"
+    ],
+    "teachingBrief": {
+      "evidence": [
+        {
+          "quote": "支架式教学法是一种以学生为中心的教学模式,支架式教学法的核心在于教师为学生提供适当的、小步调的线索或提示,这些“支架”随着学生能力的提高而逐渐减少,直至学生能够独立完成任务。",
+          "sourceId": "course-source"
+        },
+        {
+          "quote": "维果斯基的“最近发展区”理论指出,教学应领先于学生的现有发展水平,引领他们从能够独立解决问题的实际水平,向在教师指导下可能达到的潜在水平提升。",
+          "sourceId": "course-source"
+        },
+        {
+          "quote": "这些支架并不是在最后阶段一次性撤销的,而是一个一个地随着学生的不断发展而撤销的。",
+          "sourceId": "course-source"
+        }
+      ],
+      "examples": [],
+      "conditions": [],
+      "explanation": "教学支架具有暂时性和渐消性。支架式教学法中的教学支架是为了帮助学生穿过最近发展区、从现有发展水平到达潜在发展水平而设计的，当学生逐步学习和发展到能独立解决问题时，支架的作用也就完成了，在这个时候需要将教学支架撤离。 学生顺着教学支架向上攀登、最终达到理想水平的过程是循序渐进的，过程中需要运用多个支架来帮助完成阶段性的任务。因此这些支架并不是在最后阶段一次性撤销的，而是一个一个地随着学生的不断发展而撤销的。在教学中需要把握教学支架的进入和退出时刻，以达到最佳的教学效果。\n支架式教学法的教学过程包括五个环节：搭脚手架、进入情境、独立探索、协作学习、效果评价。 搭脚手架环节要求教师根据学生的认知水平、教学目标和学习主题，制定符合学生最近发展区的概念框架，设计具有层次性的教学支架。进入情境环节要求教师设计贴近学生生活的问题情境，把学生引入其中的特定节点，并可以为其提供范例支架、引导其把复杂问题分解。独立探索环节中，教师先提供启发式引导和基础概念原理的铺垫，随后给予学生充足的时间和空间自主探索，并根据不同学习水平和学习阶段提供个性化支架，同时随着学生能力提升而逐渐减少、撤出支架。协作学习环节组织学生讨论交流，在共享观点和相互启发中调整并完善对概念的理解。效果评价环节包括学生的自我评价、小组的互相评价和教师评价，围绕自主学习能力、对小组协作的贡献以及知识意义建构的完成情况展开。\n支架式教学法是一种以学生为中心的教学模式，它的核心在于教师为学生提供适当的、小步调的线索或提示，这些“支架”随着学生能力的提高而逐渐减少，直至学生能够独立完成任务。 这一做法的依据来自维果斯基的“最近发展区”理论。该理论指出，教学应领先于学生的现有发展水平，引领他们从能够独立解决问题的实际水平，向在教师指导下可能达到的潜在水平提升。为此，必须为学生构建一个支持其学习的概念框架。支架式教学法正是通过构建助力学生理解和能力提升的“脚手架”，帮助他们分解复杂学习任务，逐步深化理解。\n教师为学生搭建的教学支架类型繁多，包括引导知识建构的认知支架、激发学习动力的情感支架、提供学习策略能力支持的能力支架等。这些支架在不同的学习环节中扮演各异的角色，发挥特定的辅助功能。 教学支架是可调节的。多数教学支架是教师在授课前根据学生的学情和教学活动预设的，但在实际教学中，可能会发现某些支架并不适合学生，或学生遇到的实际问题需要不同类型的支架。因此教师在教学前应预判学生可能遇到的问题并据此设计支架，同时具备应变能力，根据实际情况对支架进行增减或调整；在设计支架时还要考虑学生的不同层次，有针对性地设计符合每个学生需求的支架。",
+      "reviewItems": [],
+      "teachingPlan": {
+        "deepens": [
+          "teaching-section-6-unit-1-node-1",
+          "teaching-section-6-unit-1-node-2"
+        ],
+        "purpose": "学生能说明支架为什么必须逐个撤除，并按五个环节描述支架式教学法的教学过程。",
+        "takeaway": "教学支架的撤除；支架具有暂时性和渐消性：学生能独立解决问题时，支架的作用完成，需要撤离；支架不是最后阶段一次性撤销，而是一个一个地随着学生的发展而撤销；搭脚手架：制定符合学生最近发展区的概念框架，设计有层次性的支架；独立探索：提供启发式引导后给予自主空间，随学生能力提升逐渐减少、撤出支架；效果评价：涵盖自我评价、小组互评和教师评价，围绕自主学习能力、协作贡献和意义建构展开",
+        "entryPoint": {
+          "kind": "continuation",
+          "bridge": "支架既然是为了帮助学生穿过最近发展区，它就不可能一直留着。这一页要看的是支架怎样被撤除，以及支架式教学法在课堂上按什么过程展开。",
+          "object": "上一页已经建立的认识：支架式教学法以学生为中心，教师为学生提供适当的、小步调的线索或提示；教学应领先于学生现有发展水平，引领他们从能独立解决问题的实际水平，向在教师指导下可能达到的潜在水平提升。"
+        },
+        "introduces": [
+          "teaching-section-6-unit-1-node-3",
+          "teaching-section-6-unit-1-node-4"
+        ],
+        "newContent": "教学支架具有暂时性和渐消性。支架式教学法中的教学支架是为了帮助学生穿过最近发展区、从现有发展水平到达潜在发展水平而设计的，当学生逐步学习和发展到能独立解决问题时，支架的作用也就完成了，在这个时候需要将教学支架撤离。 学生顺着教学支架向上攀登、最终达到理想水平的过程是循序渐进的，过程中需要运用多个支架来帮助完成阶段性的任务。因此这些支架并不是在最后阶段一次性撤销的，而是一个一个地随着学生的不断发展而撤销的。在教学中需要把握教学支架的进入和退出时刻，以达到最佳的教学效果。\n支架式教学法的教学过程包括五个环节：搭脚手架、进入情境、独立探索、协作学习、效果评价。 搭脚手架环节要求教师根据学生的认知水平、教学目标和学习主题，制定符合学生最近发展区的概念框架，设计具有层次性的教学支架。进入情境环节要求教师设计贴近学生生活的问题情境，把学生引入其中的特定节点，并可以为其提供范例支架、引导其把复杂问题分解。独立探索环节中，教师先提供启发式引导和基础概念原理的铺垫，随后给予学生充足的时间和空间自主探索，并根据不同学习水平和学习阶段提供个性化支架，同时随着学生能力提升而逐渐减少、撤出支架。协作学习环节组织学生讨论交流，在共享观点和相互启发中调整并完善对概念的理解。效果评价环节包括学生的自我评价、小组的互相评价和教师评价，围绕自主学习能力、对小组协作的贡献以及知识意义建构的完成情况展开。\n支架式教学法是一种以学生为中心的教学模式，它的核心在于教师为学生提供适当的、小步调的线索或提示，这些“支架”随着学生能力的提高而逐渐减少，直至学生能够独立完成任务。 这一做法的依据来自维果斯基的“最近发展区”理论。该理论指出，教学应领先于学生的现有发展水平，引领他们从能够独立解决问题的实际水平，向在教师指导下可能达到的潜在水平提升。为此，必须为学生构建一个支持其学习的概念框架。支架式教学法正是通过构建助力学生理解和能力提升的“脚手架”，帮助他们分解复杂学习任务，逐步深化理解。\n教师为学生搭建的教学支架类型繁多，包括引导知识建构的认知支架、激发学习动力的情感支架、提供学习策略能力支持的能力支架等。这些支架在不同的学习环节中扮演各异的角色，发挥特定的辅助功能。 教学支架是可调节的。多数教学支架是教师在授课前根据学生的学情和教学活动预设的，但在实际教学中，可能会发现某些支架并不适合学生，或学生遇到的实际问题需要不同类型的支架。因此教师在教学前应预判学生可能遇到的问题并据此设计支架，同时具备应变能力，根据实际情况对支架进行增减或调整；在设计支架时还要考虑学生的不同层次，有针对性地设计符合每个学生需求的支架。",
+        "references": [],
+        "narrationFocus": [
+          "教学支架具有暂时性和渐消性。支架式教学法中的教学支架是为了帮助学生穿过最近发展区、从现有发展水平到达潜在发展水平而设计的，当学生逐步学习和发展到能独立解决问题时，支架的作用也就完成了，在这个时候需要将教学支架撤离。 学生顺着教学支架向上攀登、最终达到理想水平的过程是循序渐进的，过程中需要运用多个支架来帮助完成阶段性的任务。因此这些支架并不是在最后阶段一次性撤销的，而是一个一个地随着学生的不断发展而撤销的。在教学中需要把握教学支架的进入和退出时刻，以达到最佳的教学效果。",
+          "支架式教学法的教学过程包括五个环节：搭脚手架、进入情境、独立探索、协作学习、效果评价。 搭脚手架环节要求教师根据学生的认知水平、教学目标和学习主题，制定符合学生最近发展区的概念框架，设计具有层次性的教学支架。进入情境环节要求教师设计贴近学生生活的问题情境，把学生引入其中的特定节点，并可以为其提供范例支架、引导其把复杂问题分解。独立探索环节中，教师先提供启发式引导和基础概念原理的铺垫，随后给予学生充足的时间和空间自主探索，并根据不同学习水平和学习阶段提供个性化支架，同时随着学生能力提升而逐渐减少、撤出支架。协作学习环节组织学生讨论交流，在共享观点和相互启发中调整并完善对概念的理解。效果评价环节包括学生的自我评价、小组的互相评价和教师评价，围绕自主学习能力、对小组协作的贡献以及知识意义建构的完成情况展开。",
+          "支架式教学法是一种以学生为中心的教学模式，它的核心在于教师为学生提供适当的、小步调的线索或提示，这些“支架”随着学生能力的提高而逐渐减少，直至学生能够独立完成任务。 这一做法的依据来自维果斯基的“最近发展区”理论。该理论指出，教学应领先于学生的现有发展水平，引领他们从能够独立解决问题的实际水平，向在教师指导下可能达到的潜在水平提升。为此，必须为学生构建一个支持其学习的概念框架。支架式教学法正是通过构建助力学生理解和能力提升的“脚手架”，帮助他们分解复杂学习任务，逐步深化理解。",
+          "教师为学生搭建的教学支架类型繁多，包括引导知识建构的认知支架、激发学习动力的情感支架、提供学习策略能力支持的能力支架等。这些支架在不同的学习环节中扮演各异的角色，发挥特定的辅助功能。 教学支架是可调节的。多数教学支架是教师在授课前根据学生的学情和教学活动预设的，但在实际教学中，可能会发现某些支架并不适合学生，或学生遇到的实际问题需要不同类型的支架。因此教师在教学前应预判学生可能遇到的问题并据此设计支架，同时具备应变能力，根据实际情况对支架进行增减或调整；在设计支架时还要考虑学生的不同层次，有针对性地设计符合每个学生需求的支架。"
+        ],
+        "priorKnowledge": "支架式教学法；以学生为中心，核心在于教师提供适当的、小步调的线索或提示，这些支架随学生能力提高逐渐减少，直至学生能独立完成任务；教学应领先于学生的现有发展水平，引领他们从实际水平向潜在水平提升；支架类型包括认知支架、情感支架和能力支架，各自发挥不同的辅助功能；教学支架是可调节的：根据需要增减或调整，并考虑学生的不同层次",
+        "reasoningSteps": [],
+        "taskConnection": {
+          "mode": "none",
+          "rationale": "本页要讲清支架的撤除机制和五个教学环节，用原生流程图呈现完整顺序最清楚；教案任务的背景会让学生把注意力转向写法而不是撤除时机。"
+        },
+        "visibleContent": [
+          "教学支架的撤除",
+          "支架具有暂时性和渐消性：学生能独立解决问题时，支架的作用完成，需要撤离",
+          "支架不是最后阶段一次性撤销，而是一个一个地随着学生的发展而撤销",
+          "搭脚手架：制定符合学生最近发展区的概念框架，设计有层次性的支架",
+          "独立探索：提供启发式引导后给予自主空间，随学生能力提升逐渐减少、撤出支架",
+          "效果评价：涵盖自我评价、小组互评和教师评价，围绕自主学习能力、协作贡献和意义建构展开"
+        ],
+        "learnerQuestion": "",
+        "presentationItems": [
+          {
+            "role": "heading",
+            "text": "教学支架的撤除",
+            "nodeIds": [
+              "teaching-section-6-unit-1-node-3"
+            ]
+          },
+          {
+            "role": "key-point",
+            "text": "支架具有暂时性和渐消性：学生能独立解决问题时，支架的作用完成，需要撤离",
+            "nodeIds": [
+              "teaching-section-6-unit-1-node-3"
+            ]
+          },
+          {
+            "role": "key-point",
+            "text": "支架不是最后阶段一次性撤销，而是一个一个地随着学生的发展而撤销",
+            "nodeIds": [
+              "teaching-section-6-unit-1-node-3"
+            ]
+          },
+          {
+            "role": "key-point",
+            "text": "搭脚手架：制定符合学生最近发展区的概念框架，设计有层次性的支架",
+            "nodeIds": [
+              "teaching-section-6-unit-1-node-4"
+            ]
+          },
+          {
+            "role": "key-point",
+            "text": "独立探索：提供启发式引导后给予自主空间，随学生能力提升逐渐减少、撤出支架",
+            "nodeIds": [
+              "teaching-section-6-unit-1-node-4"
+            ]
+          },
+          {
+            "role": "key-point",
+            "text": "效果评价：涵盖自我评价、小组互评和教师评价，围绕自主学习能力、协作贡献和意义建构展开",
+            "nodeIds": [
+              "teaching-section-6-unit-1-node-4"
+            ]
+          }
+        ],
+        "sourceSequenceUses": [
+          {
+            "coverage": "complete",
+            "resourceId": "source-sequence:a4aff44c-21f2-5824-a4a3-ea8176d5cf9b"
+          },
+          {
+            "coverage": "complete",
+            "resourceId": "source-sequence:1097af8f-4de0-54ea-962d-2a72ff744ac0"
+          }
+        ],
+        "visualRelationship": {
+          "kind": "sequence",
+          "diagram": {
+            "edges": [
+              {
+                "to": "c2",
+                "from": "c1"
+              },
+              {
+                "to": "c3",
+                "from": "c2"
+              },
+              {
+                "to": "c4",
+                "from": "c3"
+              },
+              {
+                "to": "c5",
+                "from": "c4"
+              }
+            ],
+            "nodes": [
+              {
+                "id": "c1",
+                "label": "搭脚手架"
+              },
+              {
+                "id": "c2",
+                "label": "进入情境"
+              },
+              {
+                "id": "c3",
+                "label": "独立探索"
+              },
+              {
+                "id": "c4",
+                "label": "协作学习"
+              },
+              {
+                "id": "c5",
+                "label": "效果评价"
+              }
+            ],
+            "topology": "sequence",
+            "annotation": "支架在独立探索环节随学生能力提升而逐渐减少、撤出，这些支架是一个一个地随着学生发展而撤销的，而不是在最后阶段一次性撤销；教学中需要把握支架的进入和退出时刻。"
+          },
+          "rationale": "五个环节有真实的时间推进顺序，用原生流程图整体呈现能让学生一次看清完整链条，也能看到独立探索处于支架开始减少的位置；文字清单会丢掉这个位置关系。",
+          "description": "支架式教学法五个教学环节及其先后位置。",
+          "readingOrder": [
+            "从搭脚手架开始，依次读到效果评价"
+          ],
+          "preferredForm": "diagram"
+        },
+        "presentationContent": [
+          "教学支架的撤除",
+          "支架具有暂时性和渐消性：学生能独立解决问题时，支架的作用完成，需要撤离",
+          "支架不是最后阶段一次性撤销，而是一个一个地随着学生的发展而撤销",
+          "搭脚手架：制定符合学生最近发展区的概念框架，设计有层次性的支架",
+          "独立探索：提供启发式引导后给予自主空间，随学生能力提升逐渐减少、撤出支架",
+          "效果评价：涵盖自我评价、小组互评和教师评价，围绕自主学习能力、协作贡献和意义建构展开"
+        ],
+        "presentationTypography": {
+          "profile": "reference-lecture-v1",
+          "bodyFontSize": 18,
+          "titleFontSize": 32,
+          "minimumBodyFontSize": 16,
+          "minimumTitleFontSize": 28
+        }
+      },
+      "designVersion": "teaching-blueprint-v5-compiled-v23-core-presentation",
+      "schemaVersion": 1,
+      "sharedContext": {
+        "caseId": "",
+        "caseFacts": [],
+        "stableTerms": [
+          "支架式教学法",
+          "最近发展区",
+          "概念框架",
+          "支架的撤除",
+          "抛锚式教学法",
+          "锚"
+        ],
+        "fixedWording": [
+          "支架式教学法是一种以学生为中心的教学模式，支架式教学法的核心在于教师为学生提供适当的、小步调的线索或提示，这些“支架”随着学生能力的提高而逐渐减少，直至学生能够独立完成任务。",
+          "在抛锚式教学法中，“锚”指的是教师为学生构建的真实而复杂的问题情境，通常是一个故事或情景，它通过技术手段来创设和展示。"
+        ],
+        "learningPurpose": "理解教师支持怎样随学生能力提高而撤除、真实复杂的问题情境怎样决定教学的内容和流程，学生才能根据学习阶段和任务性质选择合适的方法，而不是把所有支持都做成同一个样子。",
+        "conceptBoundaries": [
+          "支架不是最后阶段一次性撤销的，而是一个一个地随着学生的发展而撤销的。",
+          "抛锚式教学法中的“锚”是真实而复杂的问题情境，它决定教学的内容和流程；这一情境需要为学生探究不同的问题求解方法提供自由空间。",
+          "支架式与抛锚式各自适合不同的学习阶段，二者不是互相排斥的关系。"
+        ]
+      },
+      "requirementIds": [
+        "requirement-highlight-03e0cb868688",
+        "requirement-difficulty-522c3ba6e5d8",
+        "requirement-stage-requirement-0db7fc9f81ef"
+      ],
+      "assessmentFocus": "依据支架渐撤与锚问题驱动区分支架式与抛锚式教学法，并说明各自的适合阶段与核心作用。；针对给定的AI教学内容与学生基础，说明选用支架式或抛锚式的理由，或说明在一节课的不同环节如何结合使用这两种方法。；设计至少两级由扶到放的支架并说明每一级的撤除时机，或为一个AI课设定真实且具挑战性的锚问题并说明它为什么能支撑多角度探索。",
+      "learningBoundary": {
+        "futureKnowledge": [
+          {
+            "id": "kp-11",
+            "name": "抛锚式教学法的特征"
+          },
+          {
+            "id": "kp-12",
+            "name": "支架式与抛锚式的适用场景对比与选用"
+          }
+        ],
+        "currentKnowledge": [],
+        "prerequisiteKnowledge": [],
+        "previouslyTaughtKnowledge": [
+          {
+            "id": "kp-1",
+            "name": "教学理论、教学模式与教学方法的三层概念辨析"
+          },
+          {
+            "id": "kp-2",
+            "name": "建构主义的核心主张与同化、顺应的认知机制"
+          },
+          {
+            "id": "kp-3",
+            "name": "建构主义的教学设计主张与七步设计步骤"
+          },
+          {
+            "id": "kp-4",
+            "name": "具身认知的核心观点与身体参与、环境交互"
+          },
+          {
+            "id": "kp-5",
+            "name": "具身认知的教学设计原则与动态生成"
+          },
+          {
+            "id": "kp-6",
+            "name": "项目式教学模式及其基本流程"
+          },
+          {
+            "id": "kp-7",
+            "name": "探究式与问题式教学模式的特点与适用场景"
+          },
+          {
+            "id": "kp-8",
+            "name": "任务驱动式教学法的定义与趣味情景创设"
+          },
+          {
+            "id": "topic-5-item-任务与知识的融合",
+            "name": "任务与知识的融合"
+          },
+          {
+            "id": "kp-10",
+            "name": "支架式教学法的核心与支架的撤除"
+          }
+        ]
+      },
+      "difficultyStrategies": [
+        {
+          "requirementId": "requirement-difficulty-522c3ba6e5d8",
+          "learnerObstacle": "学生容易把支架理解成“老师多给一点提示”，做出形式化的支架，例如把完整答案拆成几个小问题，但没有真正降低认知负荷，也没有设计撤除时机。",
+          "teachingApproach": "先讲清支架是为了帮助学生穿越最近发展区，它的作用是把复杂任务分解为学生够得着的步骤；再讲清支架的可调节性和渐消性，强调支架要一个一个地随学生发展而撤除，而不是最后一次性撤销。随后让学生针对一节AI课设计两级由扶到放的支架，并写明观察到学生什么表现后撤除。",
+          "understandingEvidence": "学生能设计出至少两级支架，每一级都对应一个具体的认知困难，并说明观察到什么表现后撤除该级支架。"
+        }
+      ],
+      "understandingCriteria": {
+        "goals": [
+          "能说明支架式教学法的核心与最近发展区的关系",
+          "能说明支架为什么是暂时、渐消而不是一次性撤销的",
+          "能说出抛锚式教学法中“锚”的含义与核心地位",
+          "能说出抛锚式教学法的主要特征",
+          "能依据学习阶段与任务性质说明选用支架式或抛锚式的理由"
+        ],
+        "misconceptions": [
+          "把支架理解成一直保留的提示，而不是随学生能力提高逐个撤除的支持",
+          "把抛锚式教学法的“锚”理解成一个只通向唯一答案的问题",
+          "认为支架式与抛锚式互相排斥，不能在一节课的不同环节结合使用"
+        ],
+        "answerEssentials": [
+          "支架式教学法以学生为中心，教师提供适当的、小步调的线索或提示，这些支架随学生能力提高逐渐减少，直至学生能独立完成任务",
+          "支架具有暂时性和渐消性，是一个一个地随着学生的发展而撤销的，而不是最后阶段一次性撤销",
+          "抛锚式教学法中“锚”是教师构建的真实而复杂的问题情境，它是核心，决定教学的内容和流程",
+          "支架式更适合技能习得的初期，通过细化步骤降低认知负荷；抛锚式更适合综合应用阶段，通过完整而真实的情境培养解决复杂问题的能力",
+          "选用理由可以依据当前学生处在技能习得初期还是综合应用阶段，以及任务需要分解步骤还是需要完整真实的情境"
+        ],
+        "supportingUnitIds": [
+          "teaching-section-6-unit-1",
+          "teaching-section-6-unit-2",
+          "teaching-section-6-unit-3"
+        ]
+      }
+    },
+    "teachingUnitIds": [
+      "teaching-section-6-unit-1"
+    ],
+    "lectureSectionId": "teaching-section-6",
+    "parentActivityId": "teaching-section-6",
+    "estimatedDuration": 97,
+    "generationPurpose": "knowledge-teaching",
+    "knowledgePointIds": [
+      "kp-10"
+    ],
+    "targetDurationSec": 97,
+    "teachingObjective": "学生能说明支架为什么必须逐个撤除，并按五个环节描述支架式教学法的教学过程。",
+    "sectionPlanVersion": "bff2a18654965661",
+    "lectureSectionTitle": "支架式与抛锚式教学法",
+    "teachingStageTiming": {
+      "stageKey": "ai-learning",
+      "pageCount": 23,
+      "acceptance": "stage-total-only",
+      "allocation": "content-weighted",
+      "schemaVersion": 1,
+      "maxDurationSec": 1980,
+      "minDurationSec": 1620,
+      "targetDurationSec": 1800,
+      "reservedDurationSec": 198,
+      "narrationTargetDurationSec": 1602
+    },
+    "courseLanguageDirective": "Deliver the entire course in Simplified Chinese. All learner-facing slide text, quiz copy, interactive labels, and every speech narration segment must be written in natural Simplified Chinese. Keep English only for unavoidable proper nouns, standard abbreviations, code, or terms whose English form is itself being taught, and explain the term in Chinese in the same context. Never switch a complete sentence or a complete narration segment to English."
+  },
+  "baseline": {
+    "sourceEvidence": {
+      "items": [
+        {
+          "id": "07d64579-b564-5f1a-9ba5-a000990058dc",
+          "kind": "source-block",
+          "title": "中小学人工智能教育的教学理论与方法 / 人工智能教育的教学方法 / 支架式教学法 / 支架式教学法的教学过程",
+          "source": {
+            "quote": "1. 搭脚手架:明确任务",
+            "sectionId": "2561b216-8dac-5293-94f3-6952d62eb5e2",
+            "revisionId": "b0f10612-a5eb-40d7-a00f-bbb448392972",
+            "textbookId": "41497b8b-32f0-48af-9ec5-9cf814743ff0",
+            "sectionPath": [
+              "中小学人工智能教育的教学理论与方法",
+              "人工智能教育的教学方法",
+              "支架式教学法",
+              "支架式教学法的教学过程"
+            ],
+            "sourceBlockId": "1097af8f-4de0-54ea-962d-2a72ff744ac0",
+            "textbookTitle": "人工智能学科教师素养提升（第三章）",
+            "sourceBlockIds": [
+              "1097af8f-4de0-54ea-962d-2a72ff744ac0",
+              "7e56a72e-111f-5b7a-aec2-9f4264f0c49f",
+              "32cf5476-d6f7-5ac6-90ed-999364864e26",
+              "78b66b83-cd18-525a-92a3-9ead13dc9dc3",
+              "cdb3067c-43fc-5818-93b2-bc2bcf176686",
+              "63ae7dd8-86cc-5c26-8453-203efa29c071",
+              "81c30135-f1e4-5265-99cb-8ae57054a7ae",
+              "896198a6-a072-5fa8-8c59-0a86ecc7790b",
+              "2a7e9aef-a183-5386-9bd6-ff5d2f7c9cc9",
+              "af528357-c5ea-5f45-9752-ea5b18ddbd9b",
+              "4cf742c2-858c-5a1d-8dec-da223ac893ff"
+            ],
+            "revisionVersion": 1,
+            "sectionPosition": 349,
+            "sectionHierarchy": [
+              {
+                "id": "27fb9e10-aeac-5e6a-a0f1-1001cd7864f6",
+                "kind": "CHAPTER",
+                "level": 0,
+                "title": "中小学人工智能教育的教学理论与方法"
+              },
+              {
+                "id": "02cdc1f6-bd3b-52ae-9c56-177d65bc3c35",
+                "kind": "SECTION",
+                "level": 1,
+                "title": "人工智能教育的教学方法"
+              },
+              {
+                "id": "b4eb7c00-5c73-5ef5-ae6d-82a6b868794c",
+                "kind": "SUBSECTION",
+                "level": 2,
+                "title": "支架式教学法"
+              },
+              {
+                "id": "2561b216-8dac-5293-94f3-6952d62eb5e2",
+                "kind": "SUBSECTION",
+                "level": 3,
+                "title": "支架式教学法的教学过程"
+              }
+            ],
+            "sourceBlockPosition": 350
+          },
+          "content": "1. 搭脚手架:明确任务\n在教学之初,教师需根据学生的认知水平、教学目标和学习主题,制定符合学生“最近发展区”的概念框架。这一环节要求教师在课前做好充分的准备,通过分析学生的现有知识,设计具有层次性的教学支架,帮助学生逐步构建对新知识的理解。\n2. 进入情境:分析问题\n教师应设计贴近学生生活的问题情境,并将学生引入其中,也就是概念框架中的特定节点,通过让学生体验需要解决的实际问题,激发他们的探究兴趣。在此环节,教师可以为学生提供范例支架,并引导学生明确学习目标,将复杂问题分解,让学生在问题分析中逐步深入理解知识背景。\n3. 独立探索:解决问题\n在探索环节的初期,教师要为学生提供启发式的引导,并通过演示、指导等形式提供基础概念原理的知识铺垫。在此之后给予学生充足的时间和空间进行自主探索,允许他们自主选择探索方向和方法。在探索中,教师要根据学生的不同学习水平和学习阶段,提供个性化的支架辅助,鼓励他们自主分析和解决问题,帮助他们沿着概念框架不断进步,并随着学生能力的提升而逐渐减少、撤出支架。\n4. 协作学习:集思广益\n教师要组织学生进行讨论,促进学生之间的交流理解。通过小组讨论和协作,学生能够共享观点,相互启发,在交流过程中不断调整和完善对概念的理解,实现群体观点的整合,从而形成一个更加全面和准确的知识结构,帮助他们解决实际问题,拓展思考。\n5. 效果评价:完成建构\n支架式教学法的最后阶段是对学生学习效果的评价,包括了学生的自我评价、小组的互相评价和教师评价,评价内容围绕着学生的自主学习能力、对小组协作的贡献以及知识意义建构的完成情况开展,旨在帮助学生反思学习过程,明确自己的学习成就和需要改进的地方。\n教学支架是学生进行自主学习、解决复杂问题时不可或缺的助力。支架式教学法为问题式、项目式教学模式过程中的教学支持设计提供了很好的参考,也是教师在开展人工智能教学中需要掌握的重要方法。",
+          "figureIds": [],
+          "figureRefs": [],
+          "retrievalScore": 0.03131981575727918,
+          "figureSequences": [],
+          "sourceSequences": [
+            {
+              "kind": "ordered-steps",
+              "steps": [
+                {
+                  "label": "搭脚手架",
+                  "excerpt": "明确任务",
+                  "sourceBlockId": "1097af8f-4de0-54ea-962d-2a72ff744ac0",
+                  "excerptBlockId": "1097af8f-4de0-54ea-962d-2a72ff744ac0"
+                },
+                {
+                  "label": "进入情境",
+                  "excerpt": "分析问题",
+                  "sourceBlockId": "32cf5476-d6f7-5ac6-90ed-999364864e26",
+                  "excerptBlockId": "32cf5476-d6f7-5ac6-90ed-999364864e26"
+                },
+                {
+                  "label": "独立探索",
+                  "excerpt": "解决问题",
+                  "sourceBlockId": "cdb3067c-43fc-5818-93b2-bc2bcf176686",
+                  "excerptBlockId": "cdb3067c-43fc-5818-93b2-bc2bcf176686"
+                },
+                {
+                  "label": "协作学习",
+                  "excerpt": "集思广益",
+                  "sourceBlockId": "81c30135-f1e4-5265-99cb-8ae57054a7ae",
+                  "excerptBlockId": "81c30135-f1e4-5265-99cb-8ae57054a7ae"
+                },
+                {
+                  "label": "效果评价",
+                  "excerpt": "完成建构",
+                  "sourceBlockId": "2a7e9aef-a183-5386-9bd6-ff5d2f7c9cc9",
+                  "excerptBlockId": "2a7e9aef-a183-5386-9bd6-ff5d2f7c9cc9"
+                }
+              ],
+              "anchorSourceBlockId": "1097af8f-4de0-54ea-962d-2a72ff744ac0"
+            }
+          ],
+          "figureSequencesResolved": true,
+          "sourceSequencesResolved": true,
+          "sourceSequencePolicyVersion": 2
+        },
+        {
+          "id": "f81cab4c-ae89-5a15-8125-6899e31cf00e",
+          "kind": "source-block",
+          "title": "中小学人工智能教育的教学理论与方法 / 人工智能教育的教学方法 / 支架式教学法 / 支架式教学法的概念",
+          "source": {
+            "quote": "维果斯基的“最近发展区”理论指出,教学应领先于学生的现有发展水平,引领他们从能够独立解决问题的实际水平,向在教师指导下可能达到的潜在水平提升。为此,必须为学生构建一个支持其学习的概念框架。支架式教学法正是通过构建助力学生理解和能力提升的“脚手架”,帮助他们分解复杂学习任务,逐步深化理解(何克抗,1997)。",
+            "sectionId": "2f1755b7-b8e3-57b8-b458-2dc2f11c464a",
+            "revisionId": "b0f10612-a5eb-40d7-a00f-bbb448392972",
+            "textbookId": "41497b8b-32f0-48af-9ec5-9cf814743ff0",
+            "sectionPath": [
+              "中小学人工智能教育的教学理论与方法",
+              "人工智能教育的教学方法",
+              "支架式教学法",
+              "支架式教学法的概念"
+            ],
+            "sourceBlockId": "04e22631-2e5b-5c5e-82e8-bebc04efe8c5",
+            "textbookTitle": "人工智能学科教师素养提升（第三章）",
+            "sourceBlockIds": [
+              "04e22631-2e5b-5c5e-82e8-bebc04efe8c5",
+              "ffbaa528-5b65-51c1-bcf9-c590ce72729a",
+              "92840471-3b91-57f8-8034-f2d401ca774d",
+              "a4aff44c-21f2-5824-a4a3-ea8176d5cf9b",
+              "18b419bb-c258-5f82-9e45-02b5d5f2a9a1",
+              "c50a71eb-fc8e-5873-b1f2-8ab70926c817",
+              "2d6c6039-e026-50e4-b3e4-0d1d224e7a78"
+            ],
+            "revisionVersion": 1,
+            "sectionPosition": 340,
+            "sectionHierarchy": [
+              {
+                "id": "27fb9e10-aeac-5e6a-a0f1-1001cd7864f6",
+                "kind": "CHAPTER",
+                "level": 0,
+                "title": "中小学人工智能教育的教学理论与方法"
+              },
+              {
+                "id": "02cdc1f6-bd3b-52ae-9c56-177d65bc3c35",
+                "kind": "SECTION",
+                "level": 1,
+                "title": "人工智能教育的教学方法"
+              },
+              {
+                "id": "b4eb7c00-5c73-5ef5-ae6d-82a6b868794c",
+                "kind": "SUBSECTION",
+                "level": 2,
+                "title": "支架式教学法"
+              },
+              {
+                "id": "2f1755b7-b8e3-57b8-b458-2dc2f11c464a",
+                "kind": "SUBSECTION",
+                "level": 3,
+                "title": "支架式教学法的概念"
+              }
+            ],
+            "sourceBlockPosition": 341
+          },
+          "content": "维果斯基的“最近发展区”理论指出,教学应领先于学生的现有发展水平,引领他们从能够独立解决问题的实际水平,向在教师指导下可能达到的潜在水平提升。为此,必须为学生构建一个支持其学习的概念框架。支架式教学法正是通过构建助力学生理解和能力提升的“脚手架”,帮助他们分解复杂学习任务,逐步深化理解(何克抗,1997)。\n图 33 教学支架帮助学生穿越最近发展区\n教师为学生搭建的教学支架类型繁多,包括引导知识建构的认知支架、激发学习动力的情感支架、提供学习策略能力支持的能力支架等(周维娟,2013)。这些支架在不同的学习环节中扮演各异的角色,发挥特定的辅助功能。然而,在设计及实施这些支架时,需注意以下几点.\n1. 教学支架是可调节的\n多数教学支架是教师在授课前根据学生的学情和教学活动预设的。然而,在实际教学中,可能会发现某些支架并不适合学生,或学生遇到的实际问题需要不同类型的支架。因此,教师在教学前应预判学生可能遇到的问题,并据此设计支架;同时,教师需具备应变能力,根据实际情况对支架进行增减或调整。此外,在设计支架时,教师应考虑学生的不同层次,有针对性地设计符合每个学生需求的教学支架,以提供个性化的支持。\n2. 教学支架具有暂时性和渐消性\n支架式教学法中的教学支架是为了帮助学生穿过最近发展区,从现有发展水平到达潜在发展水平而设计的,当学生逐步学习和发展到能独立解决问题时,支架的作用也就完成了,在这个时候需要将教学支架撤离。而学生顺着教学支架向上攀登,最终达到理想水平的过程是循序渐进的,过程中需要运用到多个支架,帮助学生完成阶段性的任务。因此,这些支架并不是在最后阶段一次性撤销的,而是一个一个地随着学生的不断发展而撤销的。在教学中需要把握教学支架的进入和退出时刻,以达到最佳的教学效果。",
+          "figureIds": [
+            "6f634c36-e902-5f5e-87cc-5dcdc4547b2e"
+          ],
+          "figureRefs": [
+            {
+              "direct": true,
+              "figureId": "6f634c36-e902-5f5e-87cc-5dcdc4547b2e",
+              "groupKey": "source-block:ffbaa528-5b65-51c1-bcf9-c590ce72729a",
+              "relation": "source-block-direct"
+            }
+          ],
+          "retrievalScore": 0.03053713053613054,
+          "figureSequences": [],
+          "sourceSequences": [
+            {
+              "kind": "ordered-steps",
+              "steps": [
+                {
+                  "label": "教学支架是可调节的",
+                  "excerpt": "多数教学支架是教师在授课前根据学生的学情和教学活动预设的。然而,在实际教学中,可能会发现某些支架并不适合学生,或学生遇到的实际问题需要不同类型的支架。因此,教师在教学前应预判学生可能遇到的问题,并据此设计支架;同时,教师需具备应变能力,根据实际情况对支架进行增减或调整。此外,在设计支架时,教师应考虑学生的不同层次,有针对性地设计符合每个学生需求的教学支架,以提供个性化的支持。",
+                  "sourceBlockId": "a4aff44c-21f2-5824-a4a3-ea8176d5cf9b",
+                  "excerptBlockId": "18b419bb-c258-5f82-9e45-02b5d5f2a9a1"
+                },
+                {
+                  "label": "教学支架具有暂时性和渐消性",
+                  "excerpt": "支架式教学法中的教学支架是为了帮助学生穿过最近发展区,从现有发展水平到达潜在发展水平而设计的,当学生逐步学习和发展到能独立解决问题时,支架的作用也就完成了,在这个时候需要将教学支架撤离。而学生顺着教学支架向上攀登,最终达到理想水平的过程是循序渐进的,过程中需要运用到多个支架,帮助学生完成阶段性的任务。因此,这些支架并不是在最后阶段一次性撤销的,而是一个一个地随着学生的不断发展而撤销的。在教学中需要把握教学支架的进入和退出时刻,以达到最佳的教学效果。",
+                  "sourceBlockId": "c50a71eb-fc8e-5873-b1f2-8ab70926c817",
+                  "excerptBlockId": "2d6c6039-e026-50e4-b3e4-0d1d224e7a78"
+                }
+              ],
+              "anchorSourceBlockId": "a4aff44c-21f2-5824-a4a3-ea8176d5cf9b"
+            }
+          ],
+          "figureSequencesResolved": true,
+          "sourceSequencesResolved": true,
+          "sourceSequencePolicyVersion": 2
+        },
+        {
+          "id": "e4d66882-499f-5889-8eb2-b7cffaf7e671",
+          "kind": "concept",
+          "title": "支架式教学法",
+          "source": {
+            "quote": "支架式教学法是一种以学生为中心的教学模式,支架式教学法的核心在于教师为学生提供适当的、小步调的线索或提示,这些“支架”随着学生能力的提高而逐渐减少,直至学生能够独立完成任务。",
+            "sectionId": "b4eb7c00-5c73-5ef5-ae6d-82a6b868794c",
+            "quoteStart": 0,
+            "revisionId": "b0f10612-a5eb-40d7-a00f-bbb448392972",
+            "textbookId": "41497b8b-32f0-48af-9ec5-9cf814743ff0",
+            "sectionPath": [
+              "中小学人工智能教育的教学理论与方法",
+              "人工智能教育的教学方法",
+              "支架式教学法"
+            ],
+            "sourceBlockId": "de9f320c-8ff7-58d6-ba85-284f9a421dcc",
+            "textbookTitle": "人工智能学科教师素养提升（第三章）",
+            "sourceBlockIds": [
+              "de9f320c-8ff7-58d6-ba85-284f9a421dcc"
+            ],
+            "revisionVersion": 1,
+            "sectionPosition": 338,
+            "sectionHierarchy": [
+              {
+                "id": "27fb9e10-aeac-5e6a-a0f1-1001cd7864f6",
+                "kind": "CHAPTER",
+                "level": 0,
+                "title": "中小学人工智能教育的教学理论与方法"
+              },
+              {
+                "id": "02cdc1f6-bd3b-52ae-9c56-177d65bc3c35",
+                "kind": "SECTION",
+                "level": 1,
+                "title": "人工智能教育的教学方法"
+              },
+              {
+                "id": "b4eb7c00-5c73-5ef5-ae6d-82a6b868794c",
+                "kind": "SUBSECTION",
+                "level": 2,
+                "title": "支架式教学法"
+              }
+            ],
+            "sourceBlockPosition": 339
+          },
+          "aliases": [],
+          "content": "支架式教学法是一种以学生为中心的教学模式,支架式教学法的核心在于教师为学生提供适当的、小步调的线索或提示,这些“支架”随着学生能力的提高而逐渐减少,直至学生能够独立完成任务。",
+          "figureIds": [],
+          "figureRefs": [],
+          "retrievalScore": 0.03278788524590164,
+          "figureSequences": [],
+          "sourceSequences": [],
+          "figureSequencesResolved": true,
+          "sourceSequencesResolved": true,
+          "sourceSequencePolicyVersion": 2
+        },
+        {
+          "id": "5bb2df00-9dd5-5732-bdcf-45648f3ce135",
+          "kind": "source-block",
+          "title": "中小学人工智能教育的教学理论与方法 / 人工智能教育的教学方法 / 支架式教学法",
+          "source": {
+            "quote": "支架式教学法是一种以学生为中心的教学模式,支架式教学法的核心在于教师为学生提供适当的、小步调的线索或提示,这些“支架”随着学生能力的提高而逐渐减少,直至学生能够独立完成任务。",
+            "sectionId": "b4eb7c00-5c73-5ef5-ae6d-82a6b868794c",
+            "revisionId": "b0f10612-a5eb-40d7-a00f-bbb448392972",
+            "textbookId": "41497b8b-32f0-48af-9ec5-9cf814743ff0",
+            "sectionPath": [
+              "中小学人工智能教育的教学理论与方法",
+              "人工智能教育的教学方法",
+              "支架式教学法"
+            ],
+            "sourceBlockId": "de9f320c-8ff7-58d6-ba85-284f9a421dcc",
+            "textbookTitle": "人工智能学科教师素养提升（第三章）",
+            "sourceBlockIds": [
+              "de9f320c-8ff7-58d6-ba85-284f9a421dcc"
+            ],
+            "revisionVersion": 1,
+            "sectionPosition": 338,
+            "sectionHierarchy": [
+              {
+                "id": "27fb9e10-aeac-5e6a-a0f1-1001cd7864f6",
+                "kind": "CHAPTER",
+                "level": 0,
+                "title": "中小学人工智能教育的教学理论与方法"
+              },
+              {
+                "id": "02cdc1f6-bd3b-52ae-9c56-177d65bc3c35",
+                "kind": "SECTION",
+                "level": 1,
+                "title": "人工智能教育的教学方法"
+              },
+              {
+                "id": "b4eb7c00-5c73-5ef5-ae6d-82a6b868794c",
+                "kind": "SUBSECTION",
+                "level": 2,
+                "title": "支架式教学法"
+              }
+            ],
+            "sourceBlockPosition": 339
+          },
+          "content": "支架式教学法是一种以学生为中心的教学模式,支架式教学法的核心在于教师为学生提供适当的、小步调的线索或提示,这些“支架”随着学生能力的提高而逐渐减少,直至学生能够独立完成任务。",
+          "figureIds": [],
+          "figureRefs": [],
+          "retrievalScore": 0.02736598731424429,
+          "figureSequences": [],
+          "sourceSequences": [],
+          "figureSequencesResolved": true,
+          "sourceSequencesResolved": true,
+          "sourceSequencePolicyVersion": 2
+        }
+      ],
+      "version": 1,
+      "mappings": [],
+      "warnings": [],
+      "createdAt": "2026-10-01T10:18:26.642Z",
+      "selections": [
+        {
+          "primary": true,
+          "revisionId": "b0f10612-a5eb-40d7-a00f-bbb448392972",
+          "sectionIds": []
+        }
+      ],
+      "fingerprint": "ad2e2cabbdabdf17df62150adc3bc7f6ca416f0bcfae8211becf169c961d6985",
+      "retrievalMode": "hybrid",
+      "schemaVersion": 2
+    },
+    "sourceKnowledgePoints": [
+      {
+        "id": "kp-10",
+        "evidenceItemIds": [
+          "e4d66882-499f-5889-8eb2-b7cffaf7e671",
+          "5bb2df00-9dd5-5732-bdcf-45648f3ce135",
+          "f81cab4c-ae89-5a15-8125-6899e31cf00e",
+          "07d64579-b564-5f1a-9ba5-a000990058dc"
+        ],
+        "sourceKnowledgePointIds": [
+          "topic-支架式与抛锚式教学法",
+          "topic-6-item-支架式教学法的核心"
+        ]
+      }
+    ],
+    "sourceSequenceContracts": [
+      {
+        "resourceId": "source-sequence:1097af8f-4de0-54ea-962d-2a72ff744ac0",
+        "required": false,
+        "coveragePolicy": "authored-scope",
+        "knowledgePointIds": [
+          "kp-10",
+          "kp-12"
+        ],
+        "orderedSteps": [
+          {
+            "label": "搭脚手架",
+            "excerpt": "明确任务",
+            "sourceBlockId": "1097af8f-4de0-54ea-962d-2a72ff744ac0",
+            "excerptBlockId": "1097af8f-4de0-54ea-962d-2a72ff744ac0"
+          },
+          {
+            "label": "进入情境",
+            "excerpt": "分析问题",
+            "sourceBlockId": "32cf5476-d6f7-5ac6-90ed-999364864e26",
+            "excerptBlockId": "32cf5476-d6f7-5ac6-90ed-999364864e26"
+          },
+          {
+            "label": "独立探索",
+            "excerpt": "解决问题",
+            "sourceBlockId": "cdb3067c-43fc-5818-93b2-bc2bcf176686",
+            "excerptBlockId": "cdb3067c-43fc-5818-93b2-bc2bcf176686"
+          },
+          {
+            "label": "协作学习",
+            "excerpt": "集思广益",
+            "sourceBlockId": "81c30135-f1e4-5265-99cb-8ae57054a7ae",
+            "excerptBlockId": "81c30135-f1e4-5265-99cb-8ae57054a7ae"
+          },
+          {
+            "label": "效果评价",
+            "excerpt": "完成建构",
+            "sourceBlockId": "2a7e9aef-a183-5386-9bd6-ff5d2f7c9cc9",
+            "excerptBlockId": "2a7e9aef-a183-5386-9bd6-ff5d2f7c9cc9"
+          }
+        ],
+        "scope": "knowledge-point",
+        "sequenceSemantics": "ordered-steps"
+      },
+      {
+        "resourceId": "source-sequence:a4aff44c-21f2-5824-a4a3-ea8176d5cf9b",
+        "required": false,
+        "coveragePolicy": "authored-scope",
+        "knowledgePointIds": [
+          "kp-10",
+          "kp-12"
+        ],
+        "orderedSteps": [
+          {
+            "label": "教学支架是可调节的",
+            "excerpt": "多数教学支架是教师在授课前根据学生的学情和教学活动预设的。然而,在实际教学中,可能会发现某些支架并不适合学生,或学生遇到的实际问题需要不同类型的支架。因此,教师在教学前应预判学生可能遇到的问题,并据此设计支架;同时,教师需具备应变能力,根据实际情况对支架进行增减或调整。此外,在设计支架时,教师应考虑学生的不同层次,有针对性地设计符合每个学生需求的教学支架,以提供个性化的支持。",
+            "sourceBlockId": "a4aff44c-21f2-5824-a4a3-ea8176d5cf9b",
+            "excerptBlockId": "18b419bb-c258-5f82-9e45-02b5d5f2a9a1"
+          },
+          {
+            "label": "教学支架具有暂时性和渐消性",
+            "excerpt": "支架式教学法中的教学支架是为了帮助学生穿过最近发展区,从现有发展水平到达潜在发展水平而设计的,当学生逐步学习和发展到能独立解决问题时,支架的作用也就完成了,在这个时候需要将教学支架撤离。而学生顺着教学支架向上攀登,最终达到理想水平的过程是循序渐进的,过程中需要运用到多个支架,帮助学生完成阶段性的任务。因此,这些支架并不是在最后阶段一次性撤销的,而是一个一个地随着学生的不断发展而撤销的。在教学中需要把握教学支架的进入和退出时刻,以达到最佳的教学效果。",
+            "sourceBlockId": "c50a71eb-fc8e-5873-b1f2-8ab70926c817",
+            "excerptBlockId": "2d6c6039-e026-50e4-b3e4-0d1d224e7a78"
+          }
+        ],
+        "scope": "knowledge-point",
+        "sequenceSemantics": "enumerated-items"
+      }
+    ],
+    "visualBaseline": {
+      "id": "pBzcfnTF2BGvNO7KPxxRc",
+      "viewportSize": 1000,
+      "viewportRatio": 0.5625,
+      "theme": {
+        "backgroundColor": "#ffffff",
+        "themeColors": [
+          "#5b9bd5",
+          "#ed7d31",
+          "#a5a5a5",
+          "#ffc000",
+          "#4472c4"
+        ],
+        "fontColor": "#333333",
+        "fontName": "Microsoft YaHei",
+        "outline": {
+          "color": "#d14424",
+          "width": 2,
+          "style": "solid"
+        },
+        "shadow": {
+          "h": 0,
+          "v": 0,
+          "blur": 10,
+          "color": "#000000"
+        }
+      },
+      "elements": [
+        {
+          "id": "page-title",
+          "top": 50,
+          "left": 60,
+          "type": "text",
+          "width": 880,
+          "height": 70,
+          "rotate": 0,
+          "content": "<p style=\"font-size:32px;color:#1E3A8A;font-weight:bold;\">支架的撤除与支架式教学法的教学过程</p>",
+          "defaultColor": "#1E3A8A",
+          "defaultFontName": "Microsoft YaHei"
+        },
+        {
+          "id": "title-underline",
+          "top": 124,
+          "fill": "#BFDBFE",
+          "left": 70,
+          "path": "M 0 0 L 1 0 L 1 1 L 0 1 Z",
+          "type": "shape",
+          "width": 860,
+          "height": 2,
+          "rotate": 0,
+          "viewBox": [
+            1,
+            1
+          ],
+          "fixedRatio": false
+        },
+        {
+          "id": "column-divider",
+          "top": 142,
+          "fill": "#E2E8F0",
+          "left": 502,
+          "path": "M 0 0 L 1 0 L 1 1 L 0 1 Z",
+          "type": "shape",
+          "width": 1,
+          "height": 344,
+          "rotate": 0,
+          "viewBox": [
+            1,
+            1
+          ],
+          "fixedRatio": false
+        },
+        {
+          "id": "adopted-removal-mechanism",
+          "top": 134,
+          "left": 60,
+          "type": "text",
+          "width": 435,
+          "height": 198,
+          "rotate": 0,
+          "vAlign": "top",
+          "content": "<p style=\"font-size:18px;color:#334155;font-weight:400;text-align:left\"><span style=\"color:#1E3A8A;font-weight:700\">教学支架的撤除</span><br><br>支架具有<span style=\"color:#1E40AF;font-weight:700\">暂时性和渐消性</span>：学生能独立解决问题时，支架的作用完成，需要撤离<br><br>支架不是最后阶段一次性撤销，而是<span style=\"color:#C62828;font-weight:700\">一个一个地随着学生的发展而撤销</span></p>",
+          "textType": "content",
+          "lineHeight": 1.5,
+          "defaultColor": "#334155",
+          "paragraphSpace": 5,
+          "defaultFontName": "Noto Sans SC"
+        },
+        {
+          "id": "adopted-process-points",
+          "top": 307,
+          "left": 60,
+          "type": "text",
+          "width": 435,
+          "height": 225,
+          "rotate": 0,
+          "vAlign": "top",
+          "content": "<p style=\"font-size:18px;color:#334155;font-weight:400;text-align:left\"><span style=\"color:#1E40AF;font-weight:700\">搭脚手架</span>：制定符合学生最近发展区的概念框架，设计有层次性的支架<br><br><span style=\"color:#1E40AF;font-weight:700\">独立探索</span>：提供启发式引导后给予自主空间，随学生能力提升逐渐减少、撤出支架<br><br><span style=\"color:#1E40AF;font-weight:700\">效果评价</span>：涵盖自我评价、小组互评和教师评价，围绕自主学习能力、协作贡献和意义建构展开</p>",
+          "textType": "content",
+          "lineHeight": 1.5,
+          "defaultColor": "#334155",
+          "paragraphSpace": 5,
+          "defaultFontName": "Noto Sans SC"
+        },
+        {
+          "id": "teaching-section-6-page-2-component-0-edge-0",
+          "end": [
+            43.60000000000014,
+            0
+          ],
+          "top": 329,
+          "left": 633.5999999999999,
+          "type": "line",
+          "color": "#D97706",
+          "start": [
+            0,
+            0
+          ],
+          "style": "solid",
+          "width": 3,
+          "points": [
+            "",
+            "arrow"
+          ],
+          "rotate": 0
+        },
+        {
+          "id": "teaching-section-6-page-2-component-0-edge-1",
+          "end": [
+            43.60000000000014,
+            0
+          ],
+          "top": 329,
+          "left": 782.8,
+          "type": "line",
+          "color": "#D97706",
+          "start": [
+            0,
+            0
+          ],
+          "style": "solid",
+          "width": 3,
+          "points": [
+            "",
+            "arrow"
+          ],
+          "rotate": 0
+        },
+        {
+          "id": "teaching-section-6-page-2-component-0-edge-2",
+          "end": [
+            0,
+            36
+          ],
+          "top": 366,
+          "left": 804.6,
+          "type": "line",
+          "color": "#D97706",
+          "cubic": [
+            [
+              74.60000000000002,
+              18
+            ],
+            [
+              0,
+              18
+            ]
+          ],
+          "start": [
+            74.60000000000002,
+            0
+          ],
+          "style": "solid",
+          "width": 3,
+          "points": [
+            "",
+            "arrow"
+          ],
+          "rotate": 0
+        },
+        {
+          "id": "teaching-section-6-page-2-component-0-edge-3",
+          "end": [
+            0,
+            0
+          ],
+          "top": 439,
+          "left": 708.1999999999999,
+          "type": "line",
+          "color": "#D97706",
+          "start": [
+            43.60000000000014,
+            0
+          ],
+          "style": "solid",
+          "width": 3,
+          "points": [
+            "",
+            "arrow"
+          ],
+          "rotate": 0
+        },
+        {
+          "id": "teaching-section-6-page-2-component-0-node-c1",
+          "top": 292,
+          "fill": "#FFF4E8",
+          "left": 528,
+          "path": "M 12 0 H 88 Q 100 0 100 12 V 88 Q 100 100 88 100 H 12 Q 0 100 0 88 V 12 Q 0 0 12 0 Z",
+          "text": {
+            "align": "middle",
+            "content": "<p style=\"margin:0;text-align:center;font-family:Noto Sans SC;font-size:20px;font-weight:700;line-height:1.25\">搭脚<br>手架</p>",
+            "lineHeight": 1.25,
+            "defaultColor": "#30343A",
+            "paragraphSpace": 0,
+            "defaultFontName": "Noto Sans SC"
+          },
+          "type": "shape",
+          "width": 105.6,
+          "height": 74,
+          "rotate": 0,
+          "outline": {
+            "color": "#D97706",
+            "style": "solid",
+            "width": 2
+          },
+          "viewBox": [
+            100,
+            100
+          ],
+          "fixedRatio": false
+        },
+        {
+          "id": "teaching-section-6-page-2-component-0-node-c2",
+          "top": 292,
+          "fill": "#FFF4E8",
+          "left": 677.2,
+          "path": "M 12 0 H 88 Q 100 0 100 12 V 88 Q 100 100 88 100 H 12 Q 0 100 0 88 V 12 Q 0 0 12 0 Z",
+          "text": {
+            "align": "middle",
+            "content": "<p style=\"margin:0;text-align:center;font-family:Noto Sans SC;font-size:20px;font-weight:700;line-height:1.25\">进入<br>情境</p>",
+            "lineHeight": 1.25,
+            "defaultColor": "#30343A",
+            "paragraphSpace": 0,
+            "defaultFontName": "Noto Sans SC"
+          },
+          "type": "shape",
+          "width": 105.6,
+          "height": 74,
+          "rotate": 0,
+          "outline": {
+            "color": "#D97706",
+            "style": "solid",
+            "width": 2
+          },
+          "viewBox": [
+            100,
+            100
+          ],
+          "fixedRatio": false
+        },
+        {
+          "id": "teaching-section-6-page-2-component-0-node-c3",
+          "top": 292,
+          "fill": "#FFF4E8",
+          "left": 826.4000000000001,
+          "path": "M 12 0 H 88 Q 100 0 100 12 V 88 Q 100 100 88 100 H 12 Q 0 100 0 88 V 12 Q 0 0 12 0 Z",
+          "text": {
+            "align": "middle",
+            "content": "<p style=\"margin:0;text-align:center;font-family:Noto Sans SC;font-size:20px;font-weight:700;line-height:1.25\">独立<br>探索</p>",
+            "lineHeight": 1.25,
+            "defaultColor": "#30343A",
+            "paragraphSpace": 0,
+            "defaultFontName": "Noto Sans SC"
+          },
+          "type": "shape",
+          "width": 105.6,
+          "height": 74,
+          "rotate": 0,
+          "outline": {
+            "color": "#D97706",
+            "style": "solid",
+            "width": 2
+          },
+          "viewBox": [
+            100,
+            100
+          ],
+          "fixedRatio": false
+        },
+        {
+          "id": "teaching-section-6-page-2-component-0-node-c4",
+          "top": 402,
+          "fill": "#FFF4E8",
+          "left": 751.8000000000001,
+          "path": "M 12 0 H 88 Q 100 0 100 12 V 88 Q 100 100 88 100 H 12 Q 0 100 0 88 V 12 Q 0 0 12 0 Z",
+          "text": {
+            "align": "middle",
+            "content": "<p style=\"margin:0;text-align:center;font-family:Noto Sans SC;font-size:20px;font-weight:700;line-height:1.25\">协作<br>学习</p>",
+            "lineHeight": 1.25,
+            "defaultColor": "#30343A",
+            "paragraphSpace": 0,
+            "defaultFontName": "Noto Sans SC"
+          },
+          "type": "shape",
+          "width": 105.6,
+          "height": 74,
+          "rotate": 0,
+          "outline": {
+            "color": "#D97706",
+            "style": "solid",
+            "width": 2
+          },
+          "viewBox": [
+            100,
+            100
+          ],
+          "fixedRatio": false
+        },
+        {
+          "id": "teaching-section-6-page-2-component-0-node-c5",
+          "top": 402,
+          "fill": "#FFF4E8",
+          "left": 602.6,
+          "path": "M 12 0 H 88 Q 100 0 100 12 V 88 Q 100 100 88 100 H 12 Q 0 100 0 88 V 12 Q 0 0 12 0 Z",
+          "text": {
+            "align": "middle",
+            "content": "<p style=\"margin:0;text-align:center;font-family:Noto Sans SC;font-size:20px;font-weight:700;line-height:1.25\">效果<br>评价</p>",
+            "lineHeight": 1.25,
+            "defaultColor": "#30343A",
+            "paragraphSpace": 0,
+            "defaultFontName": "Noto Sans SC"
+          },
+          "type": "shape",
+          "width": 105.6,
+          "height": 74,
+          "rotate": 0,
+          "outline": {
+            "color": "#D97706",
+            "style": "solid",
+            "width": 2
+          },
+          "viewBox": [
+            100,
+            100
+          ],
+          "fixedRatio": false
+        },
+        {
+          "id": "teaching-section-6-page-2-component-0-annotation",
+          "top": 134,
+          "left": 510,
+          "type": "text",
+          "width": 440,
+          "height": 128,
+          "rotate": 0,
+          "vAlign": "top",
+          "content": "<p style=\"font-size:18px;font-weight:700;text-align:left\">支架在独立探索环节随学生能力提升而逐渐减少、撤出，这些支架是一个一个地随着学生发展而撤销的，而不是在最后阶段一次性撤销；教学中需要把握支架的进入和退出时刻。</p>",
+          "textType": "content",
+          "lineHeight": 1.5,
+          "defaultColor": "#30343A",
+          "paragraphSpace": 5,
+          "defaultFontName": "Noto Sans SC"
+        }
+      ],
+      "background": {
+        "type": "solid",
+        "color": "#ffffff"
+      }
+    }
+  }
+}

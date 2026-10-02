@@ -275,6 +275,45 @@ describe('generated JSON Schema — SerializedScene', () => {
   it('accepts a well-formed slide scene', () => {
     expect(v(slideScene)).toBe(true);
   });
+  it('round-trips visual scenes, source ownership and protected deletions without changing legacy slides', () => {
+    const teachingVisual = {
+      scene: { schemaVersion: 1, designVersion: 'teaching-visual-v2', pages: [{ id: 'page', title: '观察对象', focus: '解释关系',
+        components: [{ id: 'state', kind: 'state-change', nodes: [{ id: 'object', label: '独立完成', sourceContentIds: ['source-1'], supportLevel: 'withdrawn' }] }] }] },
+      pageId: 'page', candidateId: 'visual-1', components: [{ id: 'state', kind: 'state-change', elementIds: ['deleted-object'],
+        sourceContentIds: ['source-1'], locked: true, modified: true }], compilerVersion: 'compiler-v2', themeVersion: 'theme-v2',
+      sourceCatalog: [{ id: 'source-1', text: '原始完整教学责任' }], manualElementIds: ['deleted-object'], modifiedSlide: true,
+    };
+    const saved = JSON.parse(JSON.stringify({ ...slideScene, content: { ...slideScene.content,
+      canvas: { ...slideScene.content.canvas, teachingVisual } } }));
+    expect(v(saved), JSON.stringify(v.errors)).toBe(true);
+    expect(saved.content.canvas.teachingVisual).toEqual(teachingVisual);
+    saved.content.canvas.teachingVisual.scene.designVersion = 'unsupported';
+    expect(v(saved)).toBe(false);
+    expect(v(slideScene)).toBe(true);
+  });
+  it('preserves optional visual hierarchy and finite semantic icons with schema version 1', () => {
+    const teachingVisual = {
+      scene: { schemaVersion: 1, designVersion: 'teaching-visual-v2', pages: [{ id: 'page', title: '观察', focus: '记录现象', components: [
+        { id: 'main', kind: 'process', role: 'primary', nodes: [{ id: 'observe', label: '观察', icon: 'search', sourceContentIds: ['source-1'] }] },
+        { id: 'conditions', kind: 'text', role: 'support', anchorNodeId: 'observe', nodes: [{ id: 'record', text: '记录原始现象', icon: 'document', sourceContentIds: ['source-2'] }] },
+      ] }] }, pageId: 'page', candidateId: 'visual-1', components: [], compilerVersion: 'compiler-v2', themeVersion: 'theme-v2',
+    };
+    const saved = JSON.parse(JSON.stringify({ ...slideScene, content: { ...slideScene.content,
+      canvas: { ...slideScene.content.canvas, teachingVisual } } }));
+    expect(v(saved), JSON.stringify(v.errors)).toBe(true);
+    expect(saved.content.canvas.teachingVisual).toEqual(teachingVisual);
+    const components = saved.content.canvas.teachingVisual.scene.pages[0].components;
+    components[0].nodes[0].icon = 'arbitrary-svg';
+    expect(v(saved)).toBe(false);
+    components[0].nodes[0].icon = 'search';
+    components[1].role = 'decorative';
+    expect(v(saved)).toBe(false);
+    components[1].role = 'takeaway';
+    expect(v(saved), JSON.stringify(v.errors)).toBe(true);
+    components[1].anchorNodeId = 12;
+    expect(v(saved)).toBe(false);
+    expect(v(slideScene)).toBe(true);
+  });
   it('accepts adopted chart font sizes while keeping historical charts optional', () => {
     const chart = { id: 'chart', type: 'chart', chartType: 'bar', left: 50, top: 140, width: 900, height: 300,
       rotate: 0, data: { labels: ['甲', '乙'], legends: ['数量'], series: [[12, 20]] }, themeColors: ['#123456'] };

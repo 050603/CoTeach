@@ -1,0 +1,259 @@
+{
+  "origin": "Unmodified production response from model-refinement-20261002-v2, approved-long-english-1; no handwritten scene.",
+  "outline": {
+    "id": "approved-long-english",
+    "title": "From observations to a qualified conclusion",
+    "type": "slide",
+    "order": 0,
+    "description": "Define an observable claim and state which possible observations would support or contradict it.\nRecord the measurement procedure and keep the comparison conditions consistent before collecting observations.\nCompare the recorded observations with the claim and explain both supporting and conflicting evidence.\nState a conclusion limited to the observed conditions; an association alone does not establish causation.",
+    "teachingObjective": "Define an observable claim and state which possible observations would support or contradict it.\nRecord the measurement procedure and keep the comparison conditions consistent before collecting observations.\nCompare the recorded observations with the claim and explain both supporting and conflicting evidence.\nState a conclusion limited to the observed conditions; an association alone does not establish causation.",
+    "keyPoints": [
+      "Define an observable claim and state which possible observations would support or contradict it.",
+      "Record the measurement procedure and keep the comparison conditions consistent before collecting observations.",
+      "Compare the recorded observations with the claim and explain both supporting and conflicting evidence.",
+      "State a conclusion limited to the observed conditions; an association alone does not establish causation."
+    ],
+    "audience": "student",
+    "generationPurpose": "knowledge-teaching",
+    "targetDurationSec": 60,
+    "estimatedDuration": 60,
+    "courseLanguageDirective": "Use English for learner-facing text. Preserve every condition and the supplied directed relationships.",
+    "teachingBrief": {
+      "schemaVersion": 1,
+      "explanation": "Define an observable claim and state which possible observations would support or contradict it.\nRecord the measurement procedure and keep the comparison conditions consistent before collecting observations.\nCompare the recorded observations with the claim and explain both supporting and conflicting evidence.\nState a conclusion limited to the observed conditions; an association alone does not establish causation.",
+      "examples": [],
+      "conditions": [],
+      "assessmentFocus": "",
+      "evidence": [
+        {
+          "sourceId": "fixed-benchmark:approved-long-english",
+          "quote": "Define an observable claim and state which possible observations would support or contradict it."
+        },
+        {
+          "sourceId": "fixed-benchmark:approved-long-english",
+          "quote": "Record the measurement procedure and keep the comparison conditions consistent before collecting observations."
+        },
+        {
+          "sourceId": "fixed-benchmark:approved-long-english",
+          "quote": "Compare the recorded observations with the claim and explain both supporting and conflicting evidence."
+        },
+        {
+          "sourceId": "fixed-benchmark:approved-long-english",
+          "quote": "State a conclusion limited to the observed conditions; an association alone does not establish causation."
+        }
+      ],
+      "teachingPlan": {
+        "purpose": "Define an observable claim and state which possible observations would support or contradict it.\nRecord the measurement procedure and keep the comparison conditions consistent before collecting observations.\nCompare the recorded observations with the claim and explain both supporting and conflicting evidence.\nState a conclusion limited to the observed conditions; an association alone does not establish causation.",
+        "priorKnowledge": "",
+        "newContent": "Define an observable claim and state which possible observations would support or contradict it.\nRecord the measurement procedure and keep the comparison conditions consistent before collecting observations.\nCompare the recorded observations with the claim and explain both supporting and conflicting evidence.\nState a conclusion limited to the observed conditions; an association alone does not establish causation.",
+        "learnerQuestion": "",
+        "reasoningSteps": [
+          "Define an observable claim and state which possible observations would support or contradict it.",
+          "Record the measurement procedure and keep the comparison conditions consistent before collecting observations.",
+          "Compare the recorded observations with the claim and explain both supporting and conflicting evidence.",
+          "State a conclusion limited to the observed conditions; an association alone does not establish causation."
+        ],
+        "takeaway": "Define an observable claim and state which possible observations would support or contradict it.; Record the measurement procedure and keep the comparison conditions consistent before collecting observations.; Compare the recorded observations with the claim and explain both supporting and conflicting evidence.; State a conclusion limited to the observed conditions; an association alone does not establish causation.",
+        "visibleContent": [
+          "Define an observable claim and state which possible observations would support or contradict it.",
+          "Record the measurement procedure and keep the comparison conditions consistent before collecting observations.",
+          "Compare the recorded observations with the claim and explain both supporting and conflicting evidence.",
+          "State a conclusion limited to the observed conditions; an association alone does not establish causation."
+        ],
+        "presentationContent": [
+          "Define an observable claim and state which possible observations would support or contradict it.",
+          "Record the measurement procedure and keep the comparison conditions consistent before collecting observations.",
+          "Compare the recorded observations with the claim and explain both supporting and conflicting evidence.",
+          "State a conclusion limited to the observed conditions; an association alone does not establish causation."
+        ],
+        "presentationItems": [
+          {
+            "role": "key-point",
+            "text": "Define an observable claim and state which possible observations would support or contradict it.",
+            "nodeIds": []
+          },
+          {
+            "role": "key-point",
+            "text": "Record the measurement procedure and keep the comparison conditions consistent before collecting observations.",
+            "nodeIds": []
+          },
+          {
+            "role": "key-point",
+            "text": "Compare the recorded observations with the claim and explain both supporting and conflicting evidence.",
+            "nodeIds": []
+          },
+          {
+            "role": "key-point",
+            "text": "State a conclusion limited to the observed conditions; an association alone does not establish causation.",
+            "nodeIds": []
+          }
+        ],
+        "narrationFocus": [
+          "Define an observable claim and state which possible observations would support or contradict it.",
+          "Record the measurement procedure and keep the comparison conditions consistent before collecting observations.",
+          "Compare the recorded observations with the claim and explain both supporting and conflicting evidence.",
+          "State a conclusion limited to the observed conditions; an association alone does not establish causation."
+        ]
+      }
+    },
+    "visualIntent": {
+      "observationGoal": "Define an observable claim and state which possible observations would support or contradict it.\nRecord the measurement procedure and keep the comparison conditions consistent before collecting observations.\nCompare the recorded observations with the claim and explain both supporting and conflicting evidence.\nState a conclusion limited to the observed conditions; an association alone does not establish causation.",
+      "representation": "native-diagram",
+      "diagram": {
+        "topology": "sequence",
+        "nodes": [
+          {
+            "id": "claim",
+            "label": "Define an observable and falsifiable claim"
+          },
+          {
+            "id": "measure",
+            "label": "Record measurements under comparable conditions"
+          },
+          {
+            "id": "compare",
+            "label": "Compare supporting and conflicting observations"
+          },
+          {
+            "id": "conclude",
+            "label": "State a conclusion within the observed scope"
+          }
+        ],
+        "edges": [
+          {
+            "from": "claim",
+            "to": "measure"
+          },
+          {
+            "from": "measure",
+            "to": "compare"
+          },
+          {
+            "from": "compare",
+            "to": "conclude"
+          }
+        ]
+      }
+    }
+  },
+  "response": "{\n  \"schemaVersion\": 1,\n  \"designVersion\": \"teaching-visual-v2\",\n  \"pages\": [\n    {\n      \"id\": \"p1\",\n      \"title\": \"From observations to a qualified conclusion\",\n      \"focus\": \"Observe the four-step sequence from claim to conclusion and the two limiting conditions: comparison conditions must be fixed before collecting, and an association alone cannot establish causation.\",\n      \"components\": [\n        {\n          \"id\": \"seq\",\n          \"kind\": \"process\",\n          \"role\": \"primary\",\n          \"useAdoptedDiagram\": true,\n          \"nodes\": [\n            {\n              \"id\": \"ann-claim\",\n              \"anchorId\": \"claim\",\n              \"text\": \"Name observations that would support or contradict it.\",\n              \"sourceContentIds\": [\"adopted-content-1\"],\n              \"sourceEvidenceIds\": [\"source-quote-1\"]\n            },\n            {\n              \"id\": \"ann-measure\",\n              \"anchorId\": \"measure\",\n              \"text\": \"Record the measurement procedure.\",\n              \"sourceContentIds\": [\"adopted-content-2\"],\n              \"sourceEvidenceIds\": [\"source-quote-2\"]\n            },\n            {\n              \"id\": \"ann-compare\",\n              \"anchorId\": \"compare\",\n              \"text\": \"Compare each recording with the claim.\",\n              \"sourceContentIds\": [\"adopted-content-3\"],\n              \"sourceEvidenceIds\": [\"source-quote-3\"]\n            }\n          ]\n        },\n        {\n          \"id\": \"measure-conditions\",\n          \"kind\": \"text\",\n          \"role\": \"support\",\n          \"anchorNodeId\": \"measure\",\n          \"nodes\": [\n            {\n              \"id\": \"cond-before\",\n              \"text\": \"Keep the comparison conditions consistent before collecting observations.\",\n              \"icon\": \"checklist\",\n              \"emphasis\": [\"before collecting observations\"],\n              \"sourceContentIds\": [\"adopted-content-2\"],\n              \"sourceEvidenceIds\": [\"source-quote-2\"]\n            }\n          ]\n        },\n        {\n          \"id\": \"compare-evidence\",\n          \"kind\": \"text\",\n          \"role\": \"support\",\n          \"anchorNodeId\": \"compare\",\n          \"nodes\": [\n            {\n              \"id\": \"cond-evidence\",\n              \"text\": \"Explain both supporting and conflicting evidence.\",\n              \"emphasis\": [\"both supporting and conflicting\"],\n              \"sourceContentIds\": [\"adopted-content-3\"],\n              \"sourceEvidenceIds\": [\"source-quote-3\"]\n            }\n          ]\n        },\n        {\n          \"id\": \"conclusion-boundary\",\n          \"kind\": \"text\",\n          \"role\": \"takeaway\",\n          \"anchorNodeId\": \"conclude\",\n          \"nodes\": [\n            {\n              \"id\": \"bound-causation\",\n              \"text\": \"An association alone does not establish causation.\",\n              \"icon\": \"flag\",\n              \"emphasis\": [\"does not establish causation\"],\n              \"sourceContentIds\": [\"adopted-content-4\"],\n              \"sourceEvidenceIds\": [\"source-quote-4\"]\n            }\n          ]\n        }\n      ]\n    }\n  ]\n}",
+  "scene": {
+    "schemaVersion": 1,
+    "designVersion": "teaching-visual-v2",
+    "pages": [
+      {
+        "id": "approved-long-english",
+        "title": "From observations to a qualified conclusion",
+        "focus": "Observe the four-step sequence from claim to conclusion and the two limiting conditions: comparison conditions must be fixed before collecting, and an association alone cannot establish causation.",
+        "components": [
+          {
+            "id": "seq",
+            "kind": "process",
+            "nodes": [
+              {
+                "id": "ann-claim",
+                "sourceContentIds": [
+                  "adopted-content-1"
+                ],
+                "text": "Name observations that would support or contradict it.",
+                "anchorId": "claim",
+                "sourceEvidenceIds": [
+                  "source-quote-1"
+                ]
+              },
+              {
+                "id": "ann-measure",
+                "sourceContentIds": [
+                  "adopted-content-2"
+                ],
+                "text": "Record the measurement procedure.",
+                "anchorId": "measure",
+                "sourceEvidenceIds": [
+                  "source-quote-2"
+                ]
+              },
+              {
+                "id": "ann-compare",
+                "sourceContentIds": [
+                  "adopted-content-3"
+                ],
+                "text": "Compare each recording with the claim.",
+                "anchorId": "compare",
+                "sourceEvidenceIds": [
+                  "source-quote-3"
+                ]
+              }
+            ],
+            "role": "primary",
+            "useAdoptedDiagram": true
+          },
+          {
+            "id": "measure-conditions",
+            "kind": "text",
+            "nodes": [
+              {
+                "id": "cond-before",
+                "sourceContentIds": [
+                  "adopted-content-2"
+                ],
+                "text": "Keep the comparison conditions consistent before collecting observations.",
+                "sourceEvidenceIds": [
+                  "source-quote-2"
+                ],
+                "emphasis": [
+                  "before collecting observations"
+                ],
+                "icon": "checklist"
+              }
+            ],
+            "role": "support",
+            "anchorNodeId": "measure"
+          },
+          {
+            "id": "compare-evidence",
+            "kind": "text",
+            "nodes": [
+              {
+                "id": "cond-evidence",
+                "sourceContentIds": [
+                  "adopted-content-3"
+                ],
+                "text": "Explain both supporting and conflicting evidence.",
+                "sourceEvidenceIds": [
+                  "source-quote-3"
+                ],
+                "emphasis": [
+                  "both supporting and conflicting"
+                ]
+              }
+            ],
+            "role": "support",
+            "anchorNodeId": "compare"
+          },
+          {
+            "id": "conclusion-boundary",
+            "kind": "text",
+            "nodes": [
+              {
+                "id": "bound-causation",
+                "sourceContentIds": [
+                  "adopted-content-4"
+                ],
+                "text": "An association alone does not establish causation.",
+                "sourceEvidenceIds": [
+                  "source-quote-4"
+                ],
+                "emphasis": [
+                  "does not establish causation"
+                ],
+                "icon": "flag"
+              }
+            ],
+            "role": "takeaway",
+            "anchorNodeId": "conclude"
+          }
+        ]
+      }
+    ]
+  }
+}

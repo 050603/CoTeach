@@ -15,6 +15,7 @@ import {
 import { AnchoredTextBar } from './AnchoredTextBar';
 import { AnchoredElementBar } from './AnchoredElementBar';
 import { ElementPickLayer } from './ElementPickLayer';
+import { TeachingVisualSelectionBar } from './TeachingVisualActions';
 
 /**
  * The slide surface's canvas. Reuses the unmodified slide renderer
@@ -70,6 +71,7 @@ export function SlideCanvas() {
       </SceneProvider>
       <AnchoredTextBar editingElementId={editingElementId} />
       <AnchoredElementBar element={nonTextElement} />
+      <TeachingVisualSelectionBar />
       {/* Canvas-side element picker for the timeline's element-bound cues. */}
       <ElementPickLayer />
     </div>

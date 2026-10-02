@@ -355,6 +355,34 @@ describe('complete original-content draft fallback', () => {
     const failure = new Error('Actual browser measurement unavailable');
     await expect(compileOriginalSlideDraft(outline, sources, { measure: () => { throw failure; } })).rejects.toBe(failure);
   });
+
+  it('contains a readable original image and its measured caption in a v2 fallback without changing facts or fonts', async () => {
+    const sources = [
+      { id: 'code', text: "Example code: def divide(a, b): if b == 0: raise ValueError('zero divisor'); return a / b." },
+      { id: 'guard', text: 'The guard rejects a zero divisor before division is evaluated.' },
+      { id: 'scope', text: 'The return expression runs only when the guard permits it; the example focuses on control flow, not input type validation.' },
+    ];
+    const image = { id: 'division', src: '/adopted-division.svg', width: 640, height: 400,
+      caption: '来源：固定基准代码观察区，第1页' };
+    const result = await compileOriginalSlideDraft({ ...outline, title: 'Annotate a safe division function' }, sources,
+      { measure: measureAuthoredSlideText, images: [image], bodyFontSize: 20, fitImagesToPage: true });
+    expect(result.qualityDiagnostics).toEqual([]);
+    for (const element of result.elements) if (element.type !== 'line') {
+      expect(element.top + element.height, element.id).toBeLessThanOrEqual(512.5);
+    }
+    const picture = result.elements.find((element) => element.id === image.id);
+    expect(picture?.type).toBe('image');
+    if (picture?.type !== 'image') throw new Error('Original image was lost');
+    expect(picture.width).toBeGreaterThanOrEqual(120);
+    expect(picture.height).toBeGreaterThanOrEqual(100);
+    expect(picture.width / picture.height).toBeCloseTo(1.6);
+    for (const source of sources) {
+      const body = result.elements.find((element) => element.id === source.id) as PPTTextElement;
+      expect(body.content).toContain('font-size:20px');
+      expect(strip(body.content).replace(/&lt;/gu, '<').replace(/&gt;/gu, '>')).toBe(source.text);
+    }
+    expect(result.elements.find((element) => element.id === 'division-caption')).toHaveProperty('content', expect.stringContaining(image.caption));
+  });
 });
 
 

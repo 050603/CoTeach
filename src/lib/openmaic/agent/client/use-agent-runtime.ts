@@ -28,7 +28,9 @@ import type { SceneContextMap } from '@/app/api/openmaic/agent/edit/route';
 import { mergeAssistantParts, type PiPart } from './merge-assistant-parts';
 import { resolveSceneOutline } from './resolve-scene-outline';
 import { planRegenerateApply, type RegenerateDetails } from './apply-regenerate';
-import { applyScenePatchInSync } from './apply-slide-content';
+import { applyScenePatchInSync, applySceneRangeInSync } from './apply-slide-content';
+import type { Scene } from '@openmaic/lib/types/stage';
+import type { SceneOutline } from '@openmaic/lib/types/generation';
 import { useRegenSnapshots } from './regen-snapshots';
 import {
   createSession,
@@ -113,6 +115,9 @@ function reseedReasoningTimers(saved: SerializedMessage[] | undefined): void {
 export function useAgentRuntime(opts: UseAgentRuntimeOptions) {
   const [messages, setMessages] = useState<ThreadMessageLike[]>([]);
   const [isRunning, setIsRunning] = useState(false);
+  const requestScenesRef = useRef(new Map<string, Scene>());
+  const requestOutlinesRef = useRef(new Map<string, SceneOutline>());
+  const requestStoredOutlinesRef = useRef(new Map<string, SceneOutline>());
 
   // Mirror the latest committed messages so `onNew` (which is not re-created on
   // every message change) can read the prior conversation to send as history.
@@ -435,10 +440,18 @@ export function useAgentRuntime(opts: UseAgentRuntimeOptions) {
         // Decide what to apply: regenerate_scene applies content (+actions) and
         // snapshots the pre-state for restore; regenerate_scene_actions applies
         // actions only. Empty actions are never applied (would wipe narration).
+        const state = useStageStore.getState();
         const scene = details.sceneId
-          ? useStageStore.getState().getSceneById(details.sceneId)
+          ? state.getSceneById(details.sceneId)
           : null;
-        const { snapshot, patch, error: applyError } = planRegenerateApply(details, scene, e.toolName);
+        const { snapshot, patch, sceneRange, error: planError } = planRegenerateApply(details, scene, e.toolName, {
+          scenes: state.scenes,
+          outlines: state.outlines,
+          requestScene: details.sceneId ? requestScenesRef.current.get(details.sceneId) : undefined,
+          requestOutline: details.sceneId ? requestOutlinesRef.current.get(details.sceneId) : undefined,
+          requestStoredOutline: details.sceneId ? requestStoredOutlinesRef.current.get(details.sceneId) : undefined,
+        });
+        const applyError = planError ?? (sceneRange ? applySceneRangeInSync(sceneRange) : undefined);
         if (applyError) {
           toolResultsRef.current.set(e.toolCallId, {
             isError: true,
@@ -530,6 +543,12 @@ export function useAgentRuntime(opts: UseAgentRuntimeOptions) {
           outline.lectureSectionId ?? outline.parentActivityId ?? outline.activityId ?? outline.id
         );
         const sceneContextMap: SceneContextMap = {};
+        requestScenesRef.current = new Map(scenes.map((scene) => [scene.id, structuredClone(scene)]));
+        requestOutlinesRef.current = new Map(scenes.map((scene, index) => [scene.id, structuredClone(allOutlines[index]!)]));
+        requestStoredOutlinesRef.current = new Map(scenes.flatMap((scene) => {
+          const stored = scene.outlineId ? outlines.find((outline) => outline.id === scene.outlineId) : undefined;
+          return stored ? [[scene.id, structuredClone(stored)] as const] : [];
+        }));
         for (let sceneIndex = 0; sceneIndex < scenes.length; sceneIndex++) {
           const scene = scenes[sceneIndex]!;
           const outline = allOutlines[sceneIndex]!;

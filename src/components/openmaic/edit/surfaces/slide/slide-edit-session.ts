@@ -18,6 +18,7 @@
  */
 
 import { create } from 'zustand';
+import { isEqual } from 'lodash';
 import { commitSlideEdit } from '@openmaic/lib/edit/scene-edit-bridge';
 import { migrateSlideContent } from '@openmaic/lib/edit/slide-schema';
 import {
@@ -25,10 +26,12 @@ import {
   createSlideEditHistory,
   redoSlideEditOperation,
   undoSlideEditOperation,
+  MAX_HISTORY,
 } from '@openmaic/lib/edit/slide-ops';
 import type { SlideEditHistory, SlideEditOperation } from '@openmaic/lib/edit/slide-ops';
 import { useStageStore } from '@openmaic/lib/store/stage';
 import type { SlideContent } from '@openmaic/lib/types/stage';
+import { isRendererUserEdit, preserveTeachingVisualEdits } from '@openmaic/lib/edit/teaching-visual-edits';
 
 interface SlideEditSessionState {
   sceneId: string | null;
@@ -40,10 +43,11 @@ interface SlideEditSessionState {
   applyOp: (op: SlideEditOperation) => void;
   /**
    * Fold a renderer-committed snapshot in. `isUserEdit` is the causal
-   * discriminator: a real gesture commits synchronously inside a pointer
+   * gesture hint: a real geometry gesture commits synchronously inside a pointer
    * interaction, whereas the renderer's ResizeObserver normalization (text
    * auto-height) commits with no pointer gesture in flight. Non-user
-   * commits update `present` only — no new undo step, so `past` is left
+   * commits update `present` only. Debounced rich text changes are also user
+   * edits even without a pointer gesture. No new normalization undo step, so `past` is left
    * untouched (the reflow can chase a user resize and wiping the undo
    * stack would silently break undo). `future` IS cleared, though: once
    * `present` is replaced by the normalized content it has diverged from
@@ -51,6 +55,8 @@ interface SlideEditSessionState {
    * longer valid continuations.
    */
   commitContent: (next: SlideContent, isUserEdit: boolean) => void;
+  /** Apply a measured composition only if the teacher has not edited meanwhile. */
+  commitComposition: (expected: SlideContent, next: SlideContent) => boolean;
   undo: () => void;
   redo: () => void;
   /** Tear the session down on exit from edit mode. */
@@ -104,7 +110,8 @@ export const useSlideEditSession = create<SlideEditSessionState>((set, get) => {
     commitContent: (next, isUserEdit) => {
       const { history } = get();
       if (!history) return;
-      if (!isUserEdit) {
+      if (history.present === next) return;
+      if (!isRendererUserEdit(history.present, next, isUserEdit)) {
         // ResizeObserver / auto-height normalization: don't push an undo
         // step (the reflow can chase a user resize and wiping `past` would
         // silently break undo), but DO write through — the auto-fit height
@@ -118,6 +125,22 @@ export const useSlideEditSession = create<SlideEditSessionState>((set, get) => {
         return;
       }
       replace(commitSlideEdit(history, next));
+    },
+
+    commitComposition: (expected, next) => {
+      const { history } = get();
+      if (!history || history.present !== expected) return false;
+      next = preserveTeachingVisualEdits(expected, next);
+      if (!isEqual(expected, next)) {
+        // Composition changes geometry, not authorship. Do not feed it through
+        // commitSlideEdit, which correctly marks direct teacher gestures.
+        replace({
+          past: [...history.past, expected].slice(-MAX_HISTORY),
+          present: createSlideEditHistory(next).present,
+          future: [],
+        });
+      }
+      return true;
     },
 
     undo: () => {

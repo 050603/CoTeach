@@ -1,12 +1,20 @@
 import type { PPTElement, PPTImageElement, PPTLineElement, PPTShapeElement, PPTTableElement, PPTTextElement, SlidePresentationItem, SlidePresentationProjection, TableCell } from '@openmaic/dsl';
-import { compileMeasuredDiagramComponent, DiagramAllocationError, measureDiagramAllocations, resolveDiagramSequenceGroups, type TextMeasure } from '@openmaic/generation';
+import { compileMeasuredDiagramComponent, DiagramAllocationError, measureDiagramAllocations, type DiagramTypographyOptions, type TextMeasure } from '@openmaic/generation';
 import type { GeneratedSlideContent, SceneOutline } from '../types/generation';
 import { slideTypography } from './slide-presentation-typography';
 import { adoptedPageAuthoringContent, pagePresentationContent } from './adopted-page-content';
+import { adoptedDiagramEdges, renderableAdoptedDiagramPlan } from './adopted-diagram-plan';
 
 type Rect = { left: number; top: number; width: number; height: number };
 type ImageInput = { id: string; src: string; width: number; height: number; caption?: string };
-type Options = { measure: TextMeasure; images?: ImageInput[] };
+type Options = { measure: TextMeasure; images?: ImageInput[];
+  /** Initial typography of the chosen pipeline; never reduced after a miss. */
+  bodyFontSize?: number;
+  /** Shared by native graph allocation, measurement and output. Omission keeps
+   * legacy node/edge fonts; teaching callers explicitly supply their minimum. */
+  diagramTypography?: DiagramTypographyOptions;
+  /** Contain original assets in their measured remaining space when readable. */
+  fitImagesToPage?: boolean };
 type Block = { elements: PPTElement[]; height: number; boxes: Map<string, Rect>; mapping: Record<string, string[]> };
 const PALETTE = { title: '#1E3A8A', text: '#334155', muted: '#64748B', pale: '#EFF6FF', line: '#CBD5E1', accent: '#ED7D31' };
 const LEFT = 50, WIDTH = 900, BOTTOM = 512.5, GAP = 22;
@@ -218,18 +226,54 @@ async function nodeExplanations(items: SlidePresentationItem[], nodes: PPTShapeE
 
 /** Tighten only an already compiled straight horizontal graph, using its real
  * native geometry. Complex topology retains its full measured allocation. */
-function diagramRegion(elements: PPTElement[], top: number, allocatedHeight: number): { elements: PPTElement[]; height: number } {
+function diagramRegion(elements: PPTElement[], top: number, allocatedHeight: number, tightenComplex = false): { elements: PPTElement[]; height: number } {
   const nodes = elements.filter((element) => element.type === 'shape');
   const straight = nodes.length > 0 && new Set(nodes.map((node) => node.top)).size === 1
     && elements.every((element) => element.type !== 'line' || (!element.cubic && !element.curve && !element.broken && !element.broken2
       && element.start[1] === element.end[1]));
-  if (!straight) return { elements, height: allocatedHeight };
+  if (!straight && !tightenComplex) return { elements, height: allocatedHeight };
+  if (!elements.length) return { elements, height: allocatedHeight };
   const geometry = elements.map((element) => element.type === 'line'
-    ? { top: element.top + Math.min(element.start[1], element.end[1]) - 6, bottom: element.top + Math.max(element.start[1], element.end[1]) + 6 }
+    ? (() => {
+      // Curves stay inside the convex hull of their control points. Include
+      // every routing point and the arrow margin; tightening only translates
+      // the complete graph, never changes its native paths or font sizes.
+      const ys = [element.start[1], element.end[1], ...(element.cubic?.map((point) => point[1]) ?? []),
+        ...[element.curve, element.broken, element.broken2].flatMap((point) => point ? [point[1]] : [])];
+      return { top: element.top + Math.min(...ys) - 6, bottom: element.top + Math.max(...ys) + 6 };
+    })()
     : { top: element.top, bottom: element.top + element.height });
   const first = Math.min(...geometry.map((box) => box.top)) - 4;
   const last = Math.max(...geometry.map((box) => box.bottom)) + 4;
   return { elements: elements.map((element) => ({ ...element, top: element.top + top - first })), height: last - first };
+}
+
+/** The review compiler retains source text even after a capacity miss. Its
+ * editable allocations still need honest measurement at their emitted fonts. */
+async function diagramTextDiagnostics(elements: PPTElement[], measure: TextMeasure): Promise<string[]> {
+  const diagnostics: string[] = [];
+  for (const element of elements) {
+    if (element.type !== 'text' && !(element.type === 'shape' && element.text)) continue;
+    const shapeText = element.type === 'shape' ? element.text : undefined;
+    const html = element.type === 'text' ? element.content : shapeText!.content;
+    const text = html.replace(/<br\s*\/?\s*>/giu, '\n').replace(/<[^>]+>/gu, '')
+      .replace(/&lt;/gu, '<').replace(/&gt;/gu, '>').replace(/&quot;/gu, '"').replace(/&#39;/gu, "'").replace(/&amp;/gu, '&');
+    const fontSize = Number(html.match(/font-size\s*:\s*([\d.]+)px/iu)?.[1] ?? (shapeText ? 20 : 16));
+    const fontWeight = Number(html.match(/font-weight\s*:\s*(\d+)/iu)?.[1] ?? (shapeText ? 700 : 400)) >= 600 ? 700 : 400;
+    const actual = await measure({ html, text, width: element.width, fontSize, fontWeight, fontFamily: FONT,
+      padding: 10, lineHeight: shapeText?.lineHeight ?? (element.type === 'text' ? element.lineHeight : undefined) ?? 1.2,
+      paragraphSpace: shapeText?.paragraphSpace ?? (element.type === 'text' ? element.paragraphSpace : undefined) ?? 0,
+      align: 'center', preserveRichText: true });
+    if (!Number.isFinite(actual.height) || actual.height <= 0 || !Number.isFinite(actual.naturalWidth)
+      || actual.inkBottom !== undefined && !Number.isFinite(actual.inkBottom)
+      || actual.inkRight !== undefined && !Number.isFinite(actual.inkRight)) {
+      throw new Error('Original diagram text measurement returned invalid geometry');
+    }
+    const height = Math.max(actual.height, actual.inkBottom ?? 0);
+    if (height > element.height + 0.5) diagnostics.push(`Original diagram ${element.type === 'shape' ? 'node' : 'label'} ${element.id}: text needs ${height}px at ${fontSize}px; allocation provides ${element.height}px`);
+    if (actual.inkRight !== undefined && actual.inkRight > element.width + 0.5) diagnostics.push(`Original diagram label ${element.id}: visible text reaches x=${actual.inkRight}px beyond allocation width ${element.width}px at ${fontSize}px`);
+  }
+  return diagnostics;
 }
 
 function moveBlock(block: { elements: PPTElement[]; height: number }, offset: number): { elements: PPTElement[]; height: number } {
@@ -282,7 +326,7 @@ export async function compileSlideInfographic(outline: SceneOutline, projection:
   if (!projection.verified || projection.schemaVersion !== 1 || projection.layoutVersion !== 'teaching-infographic-v1' || !projection.items.length
     || projection.items.some((item) => !item.id || !item.text.trim() || !item.sourceContentIds.length)
     || new Set(projection.items.map((item) => item.id)).size !== projection.items.length) return null;
-  const font = slideTypography(outline).bodyFontSize;
+  const font = options.bodyFontSize ?? slideTypography(outline).bodyFontSize;
   const title = await textElement('infographic-title', outline.title, { left: LEFT, top: 50, width: WIDTH }, 32, options.measure, { bold: true, color: PALETTE.title });
   const top = Math.max(126, title.top + title.height + 18);
   if (top >= BOTTOM) return null;
@@ -291,18 +335,20 @@ export async function compileSlideInfographic(outline: SceneOutline, projection:
   const annotationItems = originalDiagram ? projection.items.filter((item) => !linkedIds.has(item.id) && item.sourceContentIds.every((source) => source === 'diagram-annotation')) : [];
   const items = projection.items.filter((item) => !annotationItems.includes(item));
   const sharedAnnotation = items.some((item) => item.sourceContentIds.includes('diagram-annotation'));
-  const diagram = originalDiagram ? { ...originalDiagram, accentColor: PALETTE.title, nodeFill: PALETTE.pale, textColor: PALETTE.text,
+  const diagram = originalDiagram ? { ...renderableAdoptedDiagramPlan(originalDiagram), edges: adoptedDiagramEdges(originalDiagram),
+    accentColor: PALETTE.title, nodeFill: PALETTE.pale, textColor: PALETTE.text,
     ...(annotationItems.length ? { annotation: annotationItems.map((item) => `${item.label ? `${item.label}：` : ''}${item.text}`).join('；') }
       : sharedAnnotation ? { annotation: undefined } : {}) } : undefined;
   let diagramElements: PPTElement[] = [], diagramHeight = 0;
   if (diagram) {
     try {
-      const allocations = await measureDiagramAllocations(diagram, options.measure, { left: LEFT, top, maxWidth: WIDTH, maxHeight: BOTTOM - top });
+      const allocations = await measureDiagramAllocations(diagram, options.measure, { left: LEFT, top, maxWidth: WIDTH, maxHeight: BOTTOM - top }, options.diagramTypography);
       const allocation = allocations.find((item) => item.width === WIDTH);
       if (!allocation) return null;
       diagramHeight = allocation.height;
-      diagramElements = await compileMeasuredDiagramComponent({ ...diagram, type: 'diagram', id: 'infographic-diagram', left: LEFT, top, ...allocation }, options.measure);
+      diagramElements = await compileMeasuredDiagramComponent({ ...diagram, type: 'diagram', id: 'infographic-diagram', left: LEFT, top, ...allocation }, options.measure, options.diagramTypography);
       if (annotationItems.length === 1) diagramElements = diagramElements.map((element) => element.id === 'infographic-diagram-annotation' ? { ...element, id: annotationItems[0]!.id } : element);
+      if (options.diagramTypography && (await diagramTextDiagnostics(diagramElements, options.measure)).length) return null;
     } catch (error) {
       if (error instanceof DiagramAllocationError) return null;
       throw error;
@@ -327,7 +373,7 @@ export async function compileSlideInfographic(outline: SceneOutline, projection:
     return withSemanticTargetAliases(outline, { elements, background: { type: 'solid', color: '#FFFFFF' }, presentationProjection: { ...projection, elementIdsBySource: mapping } });
   };
   if (diagram) {
-    const graph = diagramRegion(diagramElements, top, diagramHeight);
+    const graph = diagramRegion(diagramElements, top, diagramHeight, options.diagramTypography !== undefined);
     const linked = remainingItems.filter((item) => linkedIds.has(item.id));
     const ordinary = remainingItems.filter((item) => !linkedIds.has(item.id));
     const count = linked.length || ordinary.length;
@@ -390,7 +436,7 @@ export async function compileOriginalSlideDraft(outline: SceneOutline, sourceCon
   if (sourceContent.some((item) => !item.id || !item.text.trim()) || new Set(sourceContent.map((item) => item.id)).size !== sourceContent.length) {
     throw new Error('Original slide source needs unique IDs and nonempty text');
   }
-  const font = slideTypography(outline).bodyFontSize;
+  const font = options.bodyFontSize ?? slideTypography(outline).bodyFontSize;
   const title = await textElement('original-title', outline.title, { left: LEFT, top: 50, width: WIDTH }, 32, options.measure, { bold: true, color: PALETTE.title });
   const top = title.top + title.height + 18;
   const original = outline.visualIntent?.diagram;
@@ -400,18 +446,13 @@ export async function compileOriginalSlideDraft(outline: SceneOutline, sourceCon
   const diagnostics: string[] = [];
   let graph: { elements: PPTElement[]; height: number } = { elements: [], height: 0 };
   if (original) {
-    const groups = resolveDiagramSequenceGroups(original);
-    const implicit = original.topology === 'branch' ? [] : groups
-      ? groups.flatMap((group) => group.nodeIds.slice(0, -1).map((from, index) => ({ from, to: group.nodeIds[index + 1]! })))
-      : original.nodes.slice(0, original.topology === 'cycle' ? undefined : -1).map((node, index) => ({ from: node.id, to: original.nodes[(index + 1) % original.nodes.length]!.id }));
-    const edges = [...(original.edges ?? [])];
-    for (const edge of implicit) if (!edges.some((existing) => existing.from === edge.from && existing.to === edge.to)) edges.push(edge);
-    const plan = { ...original, edges, annotation: undefined, accentColor: PALETTE.title, nodeFill: PALETTE.pale, textColor: PALETTE.text };
+    const plan = { ...renderableAdoptedDiagramPlan(original), edges: adoptedDiagramEdges(original), annotation: undefined,
+      accentColor: PALETTE.title, nodeFill: PALETTE.pale, textColor: PALETTE.text };
     let allocation = { width: WIDTH, height: 260 }, elements: PPTElement[];
     try {
-      const allocations = await measureDiagramAllocations(plan, options.measure, { left: LEFT, top: 50, maxWidth: WIDTH, maxHeight: 462.5 });
+      const allocations = await measureDiagramAllocations(plan, options.measure, { left: LEFT, top: 50, maxWidth: WIDTH, maxHeight: 462.5 }, options.diagramTypography);
       allocation = allocations.find((item) => item.width === WIDTH) ?? allocations[0]!;
-      elements = await compileMeasuredDiagramComponent({ ...plan, type: 'diagram', id: 'original-diagram', left: LEFT, top: 50, ...allocation }, options.measure);
+      elements = await compileMeasuredDiagramComponent({ ...plan, type: 'diagram', id: 'original-diagram', left: LEFT, top: 50, ...allocation }, options.measure, options.diagramTypography);
     } catch (error) {
       if (!(error instanceof DiagramAllocationError)) throw error;
       diagnostics.push(error.message);
@@ -424,24 +465,13 @@ export async function compileOriginalSlideDraft(outline: SceneOutline, sourceCon
         catch (cause) { measurementFailed = true; measurementError = cause; throw cause; }
       };
       elements = await compileMeasuredDiagramComponent({ ...plan, type: 'diagram', id: 'original-diagram', left: LEFT, top: 50, ...allocation }, measured,
-        { onDiagnostic: (detail) => diagnostics.push(detail) });
+        { ...options.diagramTypography, onDiagnostic: (detail) => diagnostics.push(detail) });
       if (measurementFailed) throw measurementError;
-      for (const element of elements) if (element.type === 'shape' && element.text) {
-        const node = original.nodes.find((node) => element.id === `original-diagram-node-${node.id}`)!;
-        const actual = await options.measure({ html: element.text.content, text: node.label, width: element.width, fontSize: 20, fontWeight: 700,
-          fontFamily: FONT, padding: 10, lineHeight: 1.25, paragraphSpace: 0, align: 'center', preserveRichText: true });
-        if (!Number.isFinite(actual.height) || actual.height <= 0) throw new Error('Original diagram text measurement returned invalid geometry');
-        if (actual.height > element.height + 0.5) diagnostics.push(`Original diagram node ${node.id}: text needs ${actual.height}px; node provides ${element.height}px`);
-      }
-      for (const element of elements) if (element.type === 'text') {
-        const actual = await options.measure({ html: element.content, text: element.content.replace(/<[^>]+>/gu, ''), width: element.width,
-          fontSize: Number(element.content.match(/font-size:(\d+)px/u)?.[1] ?? 16), fontWeight: 400,
-          fontFamily: FONT, padding: 10, lineHeight: element.lineHeight ?? 1.2, paragraphSpace: element.paragraphSpace ?? 0, align: 'center', preserveRichText: true });
-        if (!Number.isFinite(actual.height) || actual.height <= 0) throw new Error('Original diagram label measurement returned invalid geometry');
-        if (actual.height > element.height + 0.5) diagnostics.push(`Original diagram label ${element.id}: text needs ${actual.height}px; allocation provides ${element.height}px`);
-      }
     }
-    graph = { elements, height: allocation.height };
+    const textDiagnostics = await diagramTextDiagnostics(elements, options.measure);
+    diagnostics.push(...textDiagnostics);
+    graph = options.diagramTypography && !textDiagnostics.length
+      ? diagramRegion(elements, 50, allocation.height, true) : { elements, height: allocation.height };
     if (annotation) {
       const note = await textElement('original-diagram-annotation', annotation, { left: LEFT, top: 50, width: WIDTH }, font, options.measure);
       graph = { elements: [note, ...moveBlock(graph, note.height + GAP).elements], height: note.height + GAP + graph.height };
@@ -466,15 +496,21 @@ export async function compileOriginalSlideDraft(outline: SceneOutline, sourceCon
       const imageTop = bottom + GAP, heights: number[] = [];
       for (const [column, input] of images.slice(start, start + imageColumns).entries()) {
         if (!input.src || !Number.isFinite(input.width) || !Number.isFinite(input.height) || input.width <= 0 || input.height <= 0) throw new Error(`Original image ${input.id} has invalid dimensions or source`);
-        const left = LEFT + column * (width + GAP), scale = Math.min(width / input.width, 220 / input.height);
+        const left = LEFT + column * (width + GAP);
+        const caption = input.caption ? await textElement(`${input.id}-caption`, input.caption,
+          { left, top: imageTop, width }, font, options.measure) : undefined;
+        const available = BOTTOM - imageTop - (caption ? caption.height + 6 : 0);
+        const readableScale = Math.min(width / input.width, available / input.height);
+        const maxHeight = options.fitImagesToPage && input.width * readableScale >= 120 && input.height * readableScale >= 100
+          ? Math.min(220, available) : 220;
+        const scale = Math.min(width / input.width, maxHeight / input.height);
         const image: PPTImageElement = { type: 'image', id: input.id, src: input.src, left: left + (width - input.width * scale) / 2,
           top: imageTop, width: input.width * scale, height: input.height * scale, rotate: 0, fixedRatio: true };
         elements.push(image);
         let height = image.height;
         const ids = [image.id];
-        if (input.caption) {
-          const caption = await textElement(`${input.id}-caption`, input.caption, { left, top: imageTop + height + 6, width }, font, options.measure);
-          elements.push(caption); ids.push(caption.id); height += caption.height + 6;
+        if (caption) {
+          elements.push({ ...caption, top: imageTop + height + 6 }); ids.push(caption.id); height += caption.height + 6;
         }
         if (image.width < 120 || image.height < 100) localDiagnostics.push(`Original image ${input.id}: contained size ${image.width}×${image.height}px is below the 120×100px reading allocation`);
         addMapping(mapping, [input.id, `image:${input.id}`], ids); heights.push(height);

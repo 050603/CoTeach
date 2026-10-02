@@ -43,11 +43,15 @@ import { formatLecturePresentationReference } from './lecture-presentation-refer
 import { nativeAuthoringEnvelopeContract, normalizeNativeAuthoringEnvelope } from './native-authoring-envelope';
 import { buildNativeTextPlacementPlan, expandNativeTextPlacements, formatNativeTextPlacementPlan, formatNativeTextRelationCaption } from './native-text-placement';
 import type { SemanticPageCapacityAssessment } from './semantic-page-capacity';
+import type { TeachingVisualScene } from '@openmaic/dsl';
 import { buildAuthoringSourceCatalog, pageOriginalTeachingSources, type SourceGroundingKnowledgePoint } from './source-grounding';
 import type { CourseEvidenceSnapshot } from '@/lib/textbook/course-evidence-types';
 import type { FigureSequenceContract } from '@/lib/textbook/course-visual-binding';
 import { generateSlideVisualProjection, slideVisualSourceContent, usesSlideVisualProjection } from './slide-visual-projection';
 import { compileOriginalSlideDraft, compileSlideInfographic } from './slide-infographic-layout';
+import { generateTeachingVisualScene, usesTeachingVisualScene } from './teaching-visual-scene';
+import { compileTeachingVisualScene } from './teaching-visual-compiler';
+import { TEACHING_VISUAL_THEME } from './teaching-visual-theme';
 
 export const OPENMAIC_GENERATION_BASELINE = {
   release: 'v1.0.3',
@@ -222,6 +226,9 @@ export async function generateOpenMaicBaselineOutlines(
 }
 
 export interface BaselineContentOptions {
+  /** Production teaching diagrams; the legacy projection stays available for frozen replays. */
+  teachingVisual?: boolean;
+  recentVisualCandidateIds?: readonly string[];
   /** CoTeach-only, single-call infographic composition. Legacy callers opt out by omission. */
   visualProjection?: boolean;
   /** An isolated redraw may retain an existing usable draft if no improvement fits. */
@@ -282,11 +289,18 @@ export async function generateOpenMaicBaselineContent(
   if (outline.type !== 'slide' && outline.type !== 'interactive') {
     throw new Error(`OpenMAIC baseline content adapter does not own ${outline.type} scenes`);
   }
-  if (options.visualProjection && usesSlideVisualProjection(outline) && options.componentAuthoring
+  if (options.visualProjection && (options.teachingVisual ? usesTeachingVisualScene(outline) : usesSlideVisualProjection(outline)) && options.componentAuthoring
     && options.textMeasure && !options.editDirective && !options.baselineContent) {
-    const result = await generateSlideVisualProjection(outline, aiCall, options);
+    const result = options.teachingVisual
+      ? await generateTeachingVisualScene(outline, aiCall, { ...options,
+        availableResources: (options.assignedImages ?? []).map((image) => ({ id: image.id, type: 'image' as const,
+          required: true, description: image.sourceTitle ?? '本页已采用教材图片' })) })
+      : await generateSlideVisualProjection(outline, aiCall, options);
     if (result) {
       qualityDiagnostics.push(...result.diagnostics.map((detail) => `PPT visual projection: ${detail}`));
+      if ('normalizationDiagnostics' in result && Array.isArray(result.normalizationDiagnostics)) {
+        qualityDiagnostics.push(...result.normalizationDiagnostics.filter((detail): detail is string => typeof detail === 'string'));
+      }
       const images = await Promise.all((options.assignedImages ?? []).map(async (image) => {
         let width = image.width ?? 0, height = image.height ?? 0;
         // Hydrated legacy source images can omit dimensions. Read their real
@@ -317,9 +331,11 @@ export async function generateOpenMaicBaselineContent(
       if (result.diagnostics.length && originalDraft) return { ...originalDraft,
         qualityDiagnostics: [...new Set([...(originalDraft.qualityDiagnostics ?? []), ...qualityDiagnostics,
           'PPT redraw retained the existing usable draft; the proposed source mapping was not adopted.'])] };
-      const visual = await compileSlideInfographic(outline, result.projection, {
-        measure: options.textMeasure, images,
-      });
+      const visual = 'scene' in result
+        ? await compileTeachingVisualScene(outline, result.scene as TeachingVisualScene, { measure: options.textMeasure, images,
+          sourceCatalog: slideVisualSourceContent(outline), previous: originalDraft,
+          recentCandidateIds: options.recentVisualCandidateIds })
+        : await compileSlideInfographic(outline, result.projection, { measure: options.textMeasure, images });
       if (visual) return { ...visual,
         qualityDiagnostics: [...new Set([...(visual.qualityDiagnostics ?? []), ...qualityDiagnostics])] };
       qualityDiagnostics.push('PPT infographic candidates did not fit the complete measured content.');
@@ -330,6 +346,8 @@ export async function generateOpenMaicBaselineContent(
       // a second authoring request. Any remaining overflow stays diagnostic.
       const complete = await compileOriginalSlideDraft(outline, slideVisualSourceContent(outline), {
         measure: options.textMeasure, images,
+        ...(options.teachingVisual ? { bodyFontSize: TEACHING_VISUAL_THEME.body, fitImagesToPage: true,
+          diagramTypography: { nodeFontSize: TEACHING_VISUAL_THEME.body, edgeFontSize: TEACHING_VISUAL_THEME.minimum } } : {}),
       });
       return { ...complete,
         qualityDiagnostics: [...new Set([...(complete.qualityDiagnostics ?? []), ...qualityDiagnostics])] };

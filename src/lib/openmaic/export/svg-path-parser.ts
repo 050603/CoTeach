@@ -1,5 +1,4 @@
 import { SVGPathData } from 'svg-pathdata';
-import arcToBezier from 'svg-arc-to-cubic-bezier';
 import { createLogger } from '@openmaic/lib/logger';
 
 const log = createLogger('SvgPathParser');
@@ -44,7 +43,10 @@ export type SvgPath = ReturnType<typeof parseSvgPath>;
 export const toPoints = (d: string) => {
   let pathData: SVGPathData;
   try {
-    pathData = new SVGPathData(d);
+    // PowerPoint custom geometry accepts absolute M/L/C/Q/Z points. Normalize
+    // H/V, relative and shorthand curves before projection; silently dropping
+    // H/V removed learner torsos, supports and rectangular node backgrounds.
+    pathData = new SVGPathData(d).toAbs().normalizeHVZ(false, true, true).normalizeST().aToC();
   } catch (err) {
     log.warn(`Failed to parse SVG path "${d}":`, err);
     return [];
@@ -88,40 +90,6 @@ export const toPoints = (d: string) => {
         relative: item.relative,
         type,
       });
-    } else if (item.type === 512) {
-      const lastPoint = points[points.length - 1];
-      // An arc may appear before any anchor point (e.g. a path that starts with
-      // "A", or one whose leading commands push no point). Without `lastPoint`
-      // there is nothing to arc from, so skip it instead of throwing — this keeps
-      // the documented "malformed path returns []" contract.
-      if (!lastPoint || !['M', 'L', 'Q', 'C'].includes(lastPoint.type)) continue;
-
-      const cubicBezierPoints = arcToBezier({
-        px: lastPoint.x as number,
-        py: lastPoint.y as number,
-        cx: item.x,
-        cy: item.y,
-        rx: item.rX,
-        ry: item.rY,
-        xAxisRotation: item.xRot,
-        largeArcFlag: item.lArcFlag,
-        sweepFlag: item.sweepFlag,
-      });
-      for (const cbPoint of cubicBezierPoints) {
-        points.push({
-          x: cbPoint.x,
-          y: cbPoint.y,
-          curve: {
-            type: 'cubic',
-            x1: cbPoint.x1,
-            y1: cbPoint.y1,
-            x2: cbPoint.x2,
-            y2: cbPoint.y2,
-          },
-          relative: false,
-          type: 'C',
-        });
-      }
     } else if (item.type === 1) {
       points.push({ close: true, type });
     } else continue;

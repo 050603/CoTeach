@@ -129,6 +129,10 @@ const INTERACTIVE_WIDGET_ACTIONS = [
 
 export interface SceneContentOptions {
   visualProjection?: boolean;
+  teachingVisual?: boolean;
+  /** Current usable page retained when an explicitly requested visual redesign cannot fit. */
+  visualBaseline?: GeneratedSlideContent;
+  recentVisualCandidateIds?: readonly string[];
   /** Production authors questions and their three spoken phases in one response. */
   singlePassQuiz?: boolean;
   quizNarrationContext?: string;
@@ -556,6 +560,9 @@ export async function generateSceneContent(
         websiteReferenceContext,
         componentAuthoring,
         visualProjection: options.visualProjection,
+        teachingVisual: options.teachingVisual,
+        visualBaseline: options.visualBaseline,
+        recentVisualCandidateIds: options.recentVisualCandidateIds,
         slideAuthoring,
         textMeasure,
         pageCapacityAssessment: options.pageCapacityAssessment,
@@ -1920,13 +1927,14 @@ export function createSceneWithActions(
       // The upstream assembler owns the slide theme. Do not let a legacy
       // CoTeach content-side theme override reintroduce the retired visual
       // planner's palette or font into newly generated classrooms.
-      theme: content.presentationProjection?.verified ? { ...defaultTheme,
+      theme: content.teachingVisual ? content.theme ?? defaultTheme : content.presentationProjection?.verified ? { ...defaultTheme,
         fontName: 'Noto Sans SC', fontColor: '#334155',
         themeColors: ['#1E3A8A', '#64748B', '#ED7D31'],
       } : defaultTheme,
       elements: content.elements,
       background: content.background,
       ...(content.presentationProjection ? { presentationProjection: content.presentationProjection } : {}),
+      ...(content.teachingVisual ? { teachingVisual: content.teachingVisual } : {}),
     };
 
     const sceneResult = api.scene.create({

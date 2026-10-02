@@ -3,7 +3,7 @@ import type { Prisma } from '@prisma/client';
 import { authorizeTemplateRequest } from '@/lib/platform/template-access';
 import { prisma } from '@/lib/db/client';
 import { getCourse, updateCourse } from '@/lib/session/server-store';
-import type { Course, OpenMaicSceneOutlineSnapshot } from '@/lib/session/types';
+import type { Course } from '@/lib/session/types';
 import {
   ClassroomRevisionConflictError,
   copyClassroomMedia,
@@ -14,7 +14,10 @@ import {
 import {
   InvalidClassroomEditError,
   prepareClassroomEdit,
+  rewriteClassroomMediaReferences,
 } from '@openmaic/lib/server/classroom-edit';
+import { prepareClassroomEditOutlines } from '@openmaic/lib/server/classroom-edit-outlines';
+import { canonicalClassroomOutlines } from '@/lib/openmaic-bridge/classroom-editor-outlines';
 import type { Scene, Stage } from '@openmaic/lib/types/stage';
 import {
   persistClassroomAudioUploads,
@@ -38,6 +41,7 @@ type ClassroomEditBody = {
   revision?: unknown;
   stage?: unknown;
   scenes?: unknown;
+  outlines?: unknown;
   audioUploads?: unknown;
 };
 
@@ -58,51 +62,6 @@ async function classroomHasHistoricalVersion(courseId: string, classroomId: stri
     },
     select: { id: true },
   }));
-}
-
-function syncSceneOutlines(
-  course: Course,
-  scenes: Scene[],
-): OpenMaicSceneOutlineSnapshot[] {
-  const current = course.content._openmaicSceneOutlines ?? [];
-  const byId = new Map(current.map((outline) => [outline.id, outline]));
-  return scenes.map((scene, index) => {
-    const outlineId = scene.outlineId || scene.id;
-    const previous = byId.get(outlineId) ?? byId.get(scene.id);
-    return {
-      ...(previous ?? {}),
-      id: outlineId,
-      type: scene.type,
-      title: scene.title,
-      description: previous?.description || scene.title,
-      keyPoints: previous?.keyPoints ?? [],
-      estimatedDuration:
-        scene.targetDurationSec
-        ?? previous?.targetDurationSec
-        ?? previous?.estimatedDuration
-        ?? 60,
-      order: index,
-      stageKey: scene.stageKey ?? previous?.stageKey ?? 'ai-learning',
-      stageLabel: scene.stageLabel ?? previous?.stageLabel,
-      audience: scene.audience ?? previous?.audience ?? 'student',
-      generationPurpose:
-        scene.generationPurpose
-        ?? previous?.generationPurpose
-        ?? 'knowledge-teaching',
-      parentActivityId: scene.parentActivityId ?? previous?.parentActivityId,
-      detailKind: scene.detailKind ?? previous?.detailKind,
-      knowledgePointIds: scene.knowledgePointIds ?? previous?.knowledgePointIds ?? [],
-      targetDurationSec:
-        scene.targetDurationSec
-        ?? previous?.targetDurationSec
-        ?? previous?.estimatedDuration
-        ?? 60,
-      ttsPolicy: scene.ttsPolicy ?? previous?.ttsPolicy,
-      timingPlan: scene.timingPlan ?? previous?.timingPlan,
-      resourceTypes: scene.resourceTypes ?? previous?.resourceTypes,
-      teachingToolPlan: scene.teachingToolPlan ?? previous?.teachingToolPlan,
-    } satisfies OpenMaicSceneOutlineSnapshot;
-  });
 }
 
 function sceneVisualMeaning(scene: Scene): unknown {
@@ -159,7 +118,8 @@ export async function GET(
   if (!classroomId) return Response.json({ error: '学生 AI 课堂尚未生成' }, { status: 404 });
   const classroom = await readClassroom(classroomId);
   if (!classroom) return Response.json({ error: '课堂资源不存在' }, { status: 404 });
-  return Response.json({ success: true, classroom });
+  return Response.json({ success: true, classroom,
+    outlines: canonicalClassroomOutlines(course.content._openmaicSceneOutlines, classroom.scenes) });
 }
 
 export async function PATCH(
@@ -226,6 +186,11 @@ export async function PATCH(
       scenes: body.scenes as Scene[],
       targetClassroomId,
     });
+    // Validate responsibilities before media or classroom writes. The submitted
+    // outline is a local display plan, never a new source of textbook evidence.
+    const proposedOutlines = prepareClassroomEditOutlines({
+      course, existing, stage: body.stage as Stage, scenes: body.scenes as Scene[], outlines: body.outlines,
+    });
     const audio = prepareClassroomAudioUploads({
       uploads: body.audioUploads,
       submittedScenes: body.scenes as Scene[],
@@ -258,6 +223,8 @@ export async function PATCH(
         id: targetClassroomId,
         stage: prepared.stage,
         scenes: prepared.scenes,
+        teachingSource: existing.teachingSource?.courseId === courseId
+          ? existing.teachingSource : { courseId, classroomId: existing.id },
       });
     } else {
       classroom = await updatePersistedClassroomForEditing(
@@ -273,13 +240,19 @@ export async function PATCH(
       classroomRevision: classroom.revision ?? revisionState.classroomRevision,
     };
 
+    let syncedOutlines = rewriteClassroomMediaReferences(proposedOutlines, sourceClassroomId, targetClassroomId);
     await updateCourse(courseId, (current) => {
       // This updater runs under the course database lock. Two tabs forking the
       // same published resource must not both replace the course's draft link.
       if (classroomIdFor(current) !== sourceClassroomId) {
         throw new ClassroomRevisionConflictError(body.revision as number, actualRevision);
       }
-      const syncedOutlines = syncSceneOutlines(current, prepared.scenes);
+      // Recompute against the locked current course, preserving every unrelated
+      // canonical record instead of replacing the whole course plan from a tab.
+      syncedOutlines = rewriteClassroomMediaReferences(prepareClassroomEditOutlines({
+        course: current, existing, stage: body.stage as Stage,
+        scenes: body.scenes as Scene[], outlines: body.outlines,
+      }), sourceClassroomId, targetClassroomId);
       const teacherReviewItems = collectGeneratedTeacherReviewItems({
         outlines: syncedOutlines as unknown as SceneOutline[],
         scenes: prepared.scenes,
@@ -323,6 +296,7 @@ export async function PATCH(
     return Response.json({
       success: true,
       classroom,
+      outlines: canonicalClassroomOutlines(syncedOutlines, prepared.scenes),
       forkedDraft: forkPublishedClassroom,
       narrationChanged,
       dependencyInvalidation: persistedRevisionState,

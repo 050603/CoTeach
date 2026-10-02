@@ -33,6 +33,7 @@ import type {
   GeneratedInteractiveContent,
   GeneratedPBLContent,
 } from '@openmaic/lib/types/generation';
+import type { SceneContentOptions } from '@openmaic/lib/generation/scene-generator';
 import type { SceneContent } from '@openmaic/lib/types/stage';
 import type { LlmStage } from '@openmaic/lib/server/model-routes';
 import { whiteboardBlocks } from '@openmaic/lib/edit/whiteboard-blocks';
@@ -66,6 +67,10 @@ export interface SceneContext {
   agents?: AgentInfo[];
   /** Optional language directive forwarded to the generator. */
   languageDirective?: string;
+  /** Adopted original evidence, hydrated by the authorized server course scope. */
+  teachingSources?: Pick<SceneContentOptions, 'sourceEvidence' | 'sourceKnowledgePoints' | 'sourceSequenceContracts'>;
+  /** A missing or changed source identity retains the existing page and audio. */
+  teachingSourceDiagnostic?: string;
   /**
    * Runtime errors the interactive iframe reported for this scene (captured by
    * the error shim, see lib/utils/iframe.ts). Surfaced to the model by

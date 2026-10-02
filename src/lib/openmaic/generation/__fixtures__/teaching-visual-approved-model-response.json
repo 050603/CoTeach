@@ -1,0 +1,173 @@
+{
+  "source": "Isolated real production response, original page 19, 2026-10-02; unchanged raw response, no handwritten visual plan.",
+  "scene": {
+    "schemaVersion": 1,
+    "designVersion": "teaching-visual-v2",
+    "pages": [
+      {
+        "id": "page-removal",
+        "title": "教学支架的撤除：什么条件下撤",
+        "focus": "看清支架从在场到撤离的条件变化",
+        "components": [
+          {
+            "id": "comp-removal-state",
+            "kind": "state-change",
+            "role": "primary",
+            "title": "支架在场 → 支架撤离",
+            "nodes": [
+              {
+                "id": "state-hold",
+                "label": "支架在场",
+                "text": "学生还不能独立解决问题时，支架助其从现有水平走向潜在水平",
+                "sourceContentIds": [
+                  "adopted-content-2"
+                ],
+                "sourceEvidenceIds": [
+                  "f81cab4c-ae89-5a15-8125-6899e31cf00e"
+                ]
+              },
+              {
+                "id": "state-out",
+                "label": "支架撤离",
+                "text": "暂时性：学生能独立解决问题时，支架作用完成，需要撤离",
+                "sourceContentIds": [
+                  "adopted-content-1",
+                  "adopted-content-2"
+                ],
+                "sourceEvidenceIds": [
+                  "f81cab4c-ae89-5a15-8125-6899e31cf00e"
+                ],
+                "emphasis": [
+                  "需要撤离"
+                ]
+              }
+            ],
+            "edges": [
+              {
+                "from": "state-hold",
+                "to": "state-out",
+                "kind": "sequence"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "id": "page-process",
+        "title": "支架式教学法的教学过程与支架撤除的位置",
+        "focus": "看清五个环节的先后顺序，以及支架在独立探索中逐渐撤出的位置",
+        "components": [
+          {
+            "id": "comp-five-steps",
+            "kind": "process",
+            "role": "primary",
+            "title": "五个环节的先后顺序",
+            "useAdoptedDiagram": true,
+            "nodes": [
+              {
+                "id": "anno-c1",
+                "anchorId": "c1",
+                "text": "按最近发展区设计概念框架，支架有层次性",
+                "sourceContentIds": [
+                  "adopted-content-4"
+                ],
+                "sourceEvidenceIds": [
+                  "07d64579-b564-5f1a-9ba5-a000990058dc"
+                ]
+              },
+              {
+                "id": "anno-c3",
+                "anchorId": "c3",
+                "text": "启发式引导后给予自主探索空间",
+                "sourceContentIds": [
+                  "adopted-content-5"
+                ],
+                "sourceEvidenceIds": [
+                  "07d64579-b564-5f1a-9ba5-a000990058dc"
+                ]
+              },
+              {
+                "id": "anno-c5a",
+                "anchorId": "c5",
+                "text": "自我评价 · 小组互评 · 教师评价",
+                "sourceContentIds": [
+                  "adopted-content-6"
+                ],
+                "sourceEvidenceIds": [
+                  "07d64579-b564-5f1a-9ba5-a000990058dc"
+                ]
+              },
+              {
+                "id": "anno-c5b",
+                "anchorId": "c5",
+                "text": "围绕自主学习能力 · 协作贡献 · 意义建构",
+                "sourceContentIds": [
+                  "adopted-content-6"
+                ],
+                "sourceEvidenceIds": [
+                  "07d64579-b564-5f1a-9ba5-a000990058dc"
+                ]
+              }
+            ]
+          },
+          {
+            "id": "comp-fade",
+            "kind": "text",
+            "role": "support",
+            "title": "支架的渐退与时机",
+            "anchorNodeId": "anno-c3",
+            "nodes": [
+              {
+                "id": "fade-rule",
+                "label": "支架渐退",
+                "text": "随学生能力提升逐渐减少、撤出支架",
+                "sourceContentIds": [
+                  "adopted-content-2",
+                  "adopted-content-5"
+                ],
+                "sourceEvidenceIds": [
+                  "f81cab4c-ae89-5a15-8125-6899e31cf00e",
+                  "07d64579-b564-5f1a-9ba5-a000990058dc"
+                ]
+              },
+              {
+                "id": "fade-timing",
+                "text": "须把握支架的进入和退出时刻",
+                "sourceContentIds": [
+                  "diagram-annotation"
+                ],
+                "sourceEvidenceIds": [
+                  "f81cab4c-ae89-5a15-8125-6899e31cf00e"
+                ]
+              }
+            ]
+          },
+          {
+            "id": "comp-boundary",
+            "kind": "text",
+            "role": "takeaway",
+            "title": "撤除方式的边界",
+            "nodes": [
+              {
+                "id": "boundary-one-by-one",
+                "text": "支架不是最后阶段一次性撤销，而是一个一个地随着学生的发展而撤销",
+                "sourceContentIds": [
+                  "adopted-content-3",
+                  "diagram-annotation"
+                ],
+                "sourceEvidenceIds": [
+                  "source-quote-3",
+                  "f81cab4c-ae89-5a15-8125-6899e31cf00e"
+                ],
+                "emphasis": [
+                  "不是最后阶段一次性撤销",
+                  "一个一个"
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  }
+}

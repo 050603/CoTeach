@@ -10,7 +10,7 @@
 import { Redo2, Undo2 } from 'lucide-react';
 import { useI18n } from '@openmaic/lib/hooks/use-i18n';
 import { useRegenSnapshots } from '@openmaic/lib/agent/client/regen-snapshots';
-import { applyScenePatchInSync } from '@openmaic/lib/agent/client/apply-slide-content';
+import { applyScenePatchInSync, applySceneRangeInSync } from '@openmaic/lib/agent/client/apply-slide-content';
 import { useStageStore } from '@openmaic/lib/store/stage';
 import { toast } from 'sonner';
 
@@ -21,7 +21,7 @@ export function RestoreButton({ toolCallId }: { toolCallId: string }) {
 
   // Undone but with no captured post-edit state (e.g. a card restored from
   // storage after a refresh) → terminal undone state, nothing to resume.
-  if (snap.restored && !snap.redo) {
+  if (snap.restored && !snap.redo && !snap.sceneRange) {
     return (
       <span
         title={t('edit.regenScene.restored')}
@@ -45,7 +45,8 @@ export function RestoreButton({ toolCallId }: { toolCallId: string }) {
         const error = useRegenSnapshots
           .getState()
           .restore(toolCallId, (id, patch) => applyScenePatchInSync(id, patch),
-            (id) => useStageStore.getState().getSceneById(id)?.actions);
+            (id) => useStageStore.getState().getSceneById(id)?.actions, applySceneRangeInSync,
+            (id) => useStageStore.getState().getSceneById(id));
         if (error) toast.error(error);
       }}
       className="grid size-6 place-items-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"

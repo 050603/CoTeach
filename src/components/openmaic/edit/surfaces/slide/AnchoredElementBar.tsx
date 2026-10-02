@@ -5,6 +5,7 @@ import { AnchoredBar } from './AnchoredBar';
 import { DeleteButton } from './DeleteButton';
 import { ImageActions } from './ImageActions';
 import { ZOrderButtons } from './ZOrderButtons';
+import { TeachingVisualActions } from './TeachingVisualActions';
 
 interface AnchoredElementBarProps {
   /** The selected non-text element, or null when none is selected. */
@@ -23,7 +24,7 @@ export function AnchoredElementBar({ element }: AnchoredElementBarProps) {
   const elementId = element?.id ?? '';
   return (
     <AnchoredBar elementId={elementId}>
-      <div className="flex items-center gap-1">
+      <div className="flex flex-wrap items-center gap-1">
         {element?.type === 'image' && (
           <>
             <ImageActions element={element} />
@@ -33,6 +34,7 @@ export function AnchoredElementBar({ element }: AnchoredElementBarProps) {
         <ZOrderButtons elementId={elementId} />
         <Separator />
         <DeleteButton elementId={elementId} />
+        <TeachingVisualActions elementId={elementId} />
       </div>
     </AnchoredBar>
   );

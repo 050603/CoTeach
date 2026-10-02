@@ -98,7 +98,8 @@ import { withAuxiliaryAuthoring, isAuxiliaryAuthoringError, type AuxiliaryAuthor
 import { hasCompatibleOutlinePlan, resolveGenerationOutlineSelection,
   type TestLessonGenerationTarget } from '@/lib/course-generation/generation-scope';
 import { OPENMAIC_GENERATION_BASELINE } from '@openmaic/lib/generation/openmaic-baseline';
-import { slideVisualOperation, usesSlideVisualProjection } from '@openmaic/lib/generation/slide-visual-projection';
+import { slideVisualOperation } from '@openmaic/lib/generation/slide-visual-projection';
+import { usesTeachingVisualScene } from '@openmaic/lib/generation/teaching-visual-scene';
 import { slideVisualContentFingerprint, slideVisualRequestFingerprint } from '@/lib/course-generation/slide-visual-checkpoints';
 import {
   resolveCourseLanguagePolicy,
@@ -1665,7 +1666,7 @@ async function generateClassroomInternal(
   const stableCourseProgression = (pages: SceneOutline[]) => [...new Map(pages.map((page) => [
     page.spatialParentId ?? page.id,
     { id: page.spatialParentId ?? page.id, sectionId: page.lectureSectionId,
-      title: page.title, description: page.spatialSourceContext?.description ?? page.description },
+      title: page.spatialSourceContext?.title ?? page.title, description: page.spatialSourceContext?.description ?? page.description },
   ])).values()];
   // Preparation can redistribute one section. That derived plan is not a new
   // course request and must not invalidate unchanged pages throughout the course.
@@ -1745,6 +1746,7 @@ async function generateClassroomInternal(
   // Ordinary teaching slides are prepared in two phases below: all visuals in
   // a section first, then one continuous narration call. Specialized resource
   // pages retain their native action contract.
+  const recentVisuals = new Map<string, { order: number; candidates: string[] }>();
   const generateSceneDraft = async (
     outline: SceneOutline,
     index: number,
@@ -1797,14 +1799,17 @@ async function generateClassroomInternal(
       // scene here could reintroduce narration authored against a stale
       // neighboring slide. Restore the independently fingerprinted stages
       // below instead.
-      let identityCheckpoint = prepared.contentOnly ? null : await options.loadSceneCheckpoint?.(
+      // Tool-driven pages keep their already completed scene. Preparing their
+      // visual content before expansion must not force accepted actions to run again.
+      const restoreCompleted = !prepared.contentOnly || !independentNarration;
+      let identityCheckpoint = !restoreCompleted ? null : await options.loadSceneCheckpoint?.(
         safeOutline,
         index,
         stageId,
         generationModelFingerprint,
         pageInputFingerprint,
       );
-      if (!identityCheckpoint && !prepared.contentOnly) {
+      if (!identityCheckpoint && restoreCompleted) {
         for (const fingerprint of new Set(compatiblePageFingerprints)) {
           if (fingerprint === pageInputFingerprint) continue;
           identityCheckpoint = await options.loadSceneCheckpoint?.(safeOutline, index, stageId,
@@ -1941,7 +1946,7 @@ async function generateClassroomInternal(
       };
       const generateContentDraft = async () => {
         await reportPageStage(index, safeOutline.title, 'content');
-        const visualProjection = options.slideVisualProjection !== false && usesSlideVisualProjection(safeOutline);
+        const visualProjection = options.slideVisualProjection !== false && usesTeachingVisualScene(safeOutline);
         const contentInputFingerprint = visualProjection
           ? slideVisualContentFingerprint(safeOutline, pageInputFingerprint) : pageInputFingerprint;
         const restoredContentPayload = prepared.content ? null : await loadStage('content', contentInputFingerprint)
@@ -2016,6 +2021,9 @@ async function generateClassroomInternal(
                 pblProfile: requirements.pblProfile, allowProceduralSkill: vocationalActive,
                 componentAuthoring: safeOutline.type === 'slide',
                 visualProjection,
+                teachingVisual: visualProjection,
+                recentVisualCandidateIds: [...recentVisuals.values()].filter((page) => page.order < safeOutline.order)
+                  .sort((a, b) => a.order - b.order).slice(-3).flatMap((page) => page.candidates).slice(-3),
                 slideAuthoring: 'native',
                 textMeasure: measureAuthoredSlideText,
                 pageCapacityAssessment: measured,
@@ -2102,6 +2110,8 @@ async function generateClassroomInternal(
         recordQualityDiagnostic(`${safeOutline.title}：${diagnostic}`);
       }
       if ('elements' in content) {
+        recentVisuals.set(safeOutline.id, { order: safeOutline.order, candidates: [content, ...(content.continuationPages ?? [])]
+          .flatMap((page) => page.teachingVisual ? [page.teachingVisual.candidateId] : []) });
         for (const page of [content, ...(content.continuationPages ?? [])]) {
           const diagnostics = page.qualityDiagnostics;
           for (const diagnostic of diagnostics ?? []) recordQualityDiagnostic(`${safeOutline.title}：${diagnostic}`);
@@ -2264,23 +2274,26 @@ async function generateClassroomInternal(
       }
     };
   // A quiz depends on completed speech, not merely on the intention to teach.
-  // First create every ordinary slide in a section, then write that section's
-  // narration as one continuous unit and split it back into page checkpoints.
+  // Compile every splittable visual before actions, including pages that need
+  // whiteboard/widget tools. Only ordinary slides share section narration.
   let indexed = outlines.map((outline, index) => ({ outline, index }));
-  let narratable = indexed.filter(({ outline }) => {
+  const contentFirst = indexed.filter(({ outline }) => {
     if (outline.type === 'quiz') return false;
     const safe = applyOutlineFallbacks(outline, true, {
       allowProceduralSkill: vocationalActive,
       personalProject: requirements.pblProfile?.projectMode === 'personal',
     });
-    return canUseIndependentTeachingNarration(safe);
+    return canUseIndependentTeachingNarration(safe)
+      || options.slideVisualProjection !== false && usesTeachingVisualScene(safe);
   });
-  const preparedContentDrafts = await mapWithConcurrencySettledOnError(narratable, sceneConcurrency,
+  let narratable = indexed.filter(({ index }) => narrationPageNumbers.has(index + 1));
+  const preparedContentDrafts = await mapWithConcurrencySettledOnError(contentFirst, sceneConcurrency,
     ({ outline, index }) => generateSceneDraft(outline, index, '', { contentOnly: true }),
     { shouldContinue: () => !options.signal?.aborted });
   const preparedByIndex = new Map<number, PreparedTeachingPage>();
-  const contentById = new Map(preparedContentDrafts.flatMap((draft) => draft ? [[draft.outline.id, draft.content] as const] : []));
-  const expanded = new Map(preparedContentDrafts.flatMap((draft) => draft && 'elements' in draft.content
+  const completedDraftsById = new Map(preparedContentDrafts.flatMap((draft) => draft?.scene ? [[draft.outline.id, draft] as const] : []));
+  const contentById = new Map(preparedContentDrafts.flatMap((draft) => draft && !draft.scene ? [[draft.outline.id, draft.content] as const] : []));
+  const expanded = new Map(preparedContentDrafts.flatMap((draft) => draft && !draft.scene && 'elements' in draft.content
     && draft.content.continuationPages?.length
     ? [[draft.outline.id, expandCompiledSlidePages(draft.outline, draft.content)] as const] : []));
   if (expanded.size) {
@@ -2329,7 +2342,7 @@ async function generateClassroomInternal(
       await options.onSceneStageCompleted?.(safe, 'content', { content }, generationModelFingerprint, pageFingerprint(safe));
     }
   }
-  for (const { outline, index } of narratable) {
+  for (const { outline, index } of indexed) {
     const content = contentById.get(outline.id);
     if (content) {
       preparedByIndex.set(index, { content });
@@ -2411,7 +2424,8 @@ async function generateClassroomInternal(
         // compare the entire actual body; do not loosen any speech/audio gate.
         const authoredScene = { ...scene, content: { ...scene.content,
           canvas: { ...scene.content.canvas, elements: content.elements, background: content.background,
-            ...(content.presentationProjection ? { presentationProjection: content.presentationProjection } : {}) } } } as Scene;
+            ...(content.presentationProjection ? { presentationProjection: content.presentationProjection } : {}),
+            ...(content.teachingVisual ? { teachingVisual: content.teachingVisual } : {}) } } } as Scene;
         const promoted = reusePersistedSceneAssets(authoredScene, scene);
         return promoted.content.type === 'slide'
           && fingerprintGenerationValue({ elements: promoted.content.canvas.elements, background: promoted.content.canvas.background })
@@ -2462,7 +2476,8 @@ async function generateClassroomInternal(
           : current?.outputKind === 'text'
             ? '正在接收整节讲稿'
             : '正在等待整节讲稿';
-        return `已保存 ${preparedByIndex.size}/${narratable.length} 页正文，${activity} · ${first.outline.title}`;
+        const preparedCount = narratable.filter(({ index }) => preparedByIndex.has(index)).length;
+        return `已保存 ${preparedCount}/${narratable.length} 页正文，${activity} · ${first.outline.title}`;
       };
       await reportSceneProgress({
         step: 'generating_scenes',
@@ -2549,7 +2564,12 @@ async function generateClassroomInternal(
   }
   const teachingDrafts = await mapWithConcurrencySettledOnError(
     indexed.filter(({ outline }) => outline.type !== 'quiz'), sceneConcurrency,
-    ({ outline, index }) => generateSceneDraft(outline, index, '', preparedByIndex.get(index)),
+    ({ outline, index }) => {
+      const completed = completedDraftsById.get(outline.id);
+      return completed ? Promise.resolve({ ...completed, outline, index,
+        scene: { ...completed.scene!, order: outline.order, title: outline.title } })
+        : generateSceneDraft(outline, index, '', preparedByIndex.get(index));
+    },
     { shouldContinue: () => !options.signal?.aborted },
   );
   const completedTeaching = teachingDrafts.flatMap((draft) => draft?.scene ? [{

@@ -5,6 +5,7 @@ import { TEACHING_BLUEPRINT_COMPILED_BRIEF_VERSION } from '../generation/teachin
 import { REFERENCE_LECTURE_TYPOGRAPHY } from '../generation/slide-presentation-typography';
 import type { GeneratedSlideContent, SceneOutline } from '../types/generation';
 import type { Scene } from '../types/stage';
+import type { TeachingVisualScene } from '@openmaic/dsl';
 import type { SlideSpatialBudget } from '../generation/slide-spatial-types';
 import type { CourseEvidenceSnapshot } from '@/lib/textbook/course-evidence-types';
 import type { FigureSequenceContract } from '@/lib/textbook/course-visual-binding';
@@ -91,10 +92,10 @@ vi.mock('../generation/teaching-narration', async (original) => ({
   }) => {
     mocks.narrationInput(input);
     const { sectionId, pages, aiCall } = input;
-    const raw = JSON.parse(await aiCall('Section teaching narration', JSON.stringify(pages))) as Array<{ type: string; content: string }>;
+    const raw = JSON.parse(await aiCall('Section teaching narration', JSON.stringify(pages))) as Array<{ type: string; content: string; pageId?: string }>;
     return { sectionId, pages: pages.map(({ outline: saved }) => ({
       pageId: saved.id,
-      segments: raw.filter((item) => item.type === 'text').map((item, index) => ({
+      segments: raw.filter((item) => item.type === 'text' && (!item.pageId || item.pageId === saved.id)).map((item, index) => ({
         id: `${saved.id}:speech-${index + 1}`, pageId: saved.id,
         text: item.content, semanticIds: [`${saved.id}:teaching`],
       })),
@@ -117,6 +118,7 @@ import { fingerprintGenerationValue, fingerprintSceneOutline, restoreSceneCheckp
 import { TEACHING_ENHANCEMENT_VERSION } from '../generation/teaching-enhancement';
 import { COURSE_GENERATION_POLICY_VERSION } from '../generation/course-generation-policy';
 import { COURSE_FIRST_PASS_CONTRACT_VERSION } from '@/lib/course-generation/first-pass-policy';
+import { TEACHING_VISUAL_OPERATION } from '../generation/teaching-visual-scene';
 
 const teachingPlan = {
   purpose: '理解证据与结论的关系', priorKnowledge: '学生知道资料可被引用',
@@ -218,7 +220,7 @@ function sourceCheckpointStore() {
   } };
 }
 
-function visualProjectionFixture() {
+function teachingVisualFixture() {
   const fixture = sourceFixture();
   const page = { ...fixture.page, id: 'visual-source-page', lectureSectionId: 'visual-source-section',
     teachingBrief: { ...fixture.page.teachingBrief!, teachingPlan: {
@@ -231,14 +233,18 @@ function visualProjectionFixture() {
     { id: 'ethics', sourceContentIds: ['adopted-content-3'], sourceEvidenceIds: ['original-evidence'], label: '融入伦理', text: '在实践中引入道德伦理思考' },
   ];
   const spoken = `我们先从具体应用入手。${sourceLabels.join('；')}。任务复杂度的选择依据是学生的认知能力。`;
+  const scene: TeachingVisualScene = { schemaVersion: 1, designVersion: 'teaching-visual-v2', pages: [{
+    id: page.id, title: '生成式AI的教学安排', focus: '认识应用、匹配任务并融入伦理',
+    components: [{ id: 'teaching-decisions', kind: 'text', nodes: items }],
+  }] };
   const modelResponse = (system: string) => {
-    if (system.includes('PPT_VISUAL_PROJECTION_V1')) return JSON.stringify({ items, links: [] });
-    if (system.includes('PPT_VISUAL_REVIEW_V1') || system.includes('# Slide Content Generator')) {
+    if (system.includes(TEACHING_VISUAL_OPERATION)) return JSON.stringify(scene);
+    if (system.includes('PPT_VISUAL_PROJECTION_V1') || system.includes('PPT_VISUAL_REVIEW_V1') || system.includes('# Slide Content Generator')) {
       throw new Error('Visual pages must use one content request without review or reauthoring');
     }
     return JSON.stringify([{ type: 'text', content: spoken }]);
   };
-  return { page, items, spoken, modelResponse, sourceOptions: fixture.sourceOptions };
+  return { page, items, scene, spoken, modelResponse, sourceOptions: fixture.sourceOptions };
 }
 
 /** Real fingerprint guards allow several independent raw drafts in one stage. */
@@ -330,7 +336,7 @@ describe('classroom first-pass orchestration and checkpoint integration', () => 
   });
 
   it('generates visual content once beside unchanged narration and replays the saved raw response', async () => {
-    const { page, modelResponse, items, sourceOptions } = visualProjectionFixture();
+    const { page, modelResponse, items, scene, sourceOptions } = teachingVisualFixture();
     const stages = capacityStageStore();
     const raw = visualRawCheckpointStore();
     mocks.ai.mockImplementation(async (system: string) => modelResponse(system));
@@ -341,9 +347,16 @@ describe('classroom first-pass orchestration and checkpoint integration', () => 
     expect(first.scenes[0]?.content.type).toBe('slide');
     if (first.scenes[0]!.content.type !== 'slide') throw new Error('Expected slide');
     expect(first.scenes[0]!.content.canvas.presentationProjection).toMatchObject({ verified: true, items });
+    expect(first.scenes[0]!.content.canvas.teachingVisual).toMatchObject({ scene, pageId: page.id,
+      components: [{ id: 'teaching-decisions', kind: 'text', sourceContentIds: items.flatMap((item) => item.sourceContentIds) }] });
+    const nativeIds = new Set(first.scenes[0]!.content.canvas.elements.map((element) => element.id));
+    for (const ids of Object.values(first.scenes[0]!.content.canvas.presentationProjection!.elementIdsBySource)) {
+      expect(ids.length).toBeGreaterThan(0);
+      expect(ids.every((id) => nativeIds.has(id))).toBe(true);
+    }
     const drafts = raw.writes.filter((record) => record.stage === 'content');
-    expect(drafts.map((record) => record.source)).toEqual(['slide-visual-projection']);
-    expect(JSON.parse(drafts[0]!.text).items).toEqual(items);
+    expect(drafts.map((record) => record.source)).toEqual(['slide-visual-scene']);
+    expect(JSON.parse(drafts[0]!.text)).toEqual(scene);
     expect(drafts[0]!.inputFingerprint).not.toBe(raw.writes.find((record) => record.stage === 'narration')!.inputFingerprint);
     for (const draft of drafts) {
       expect(draft.prompt).toContain('采用的原始教材');
@@ -364,6 +377,7 @@ describe('classroom first-pass orchestration and checkpoint integration', () => 
     if (resumed.scenes[0]!.content.type !== 'slide') throw new Error('Expected slide');
     expect(resumed.scenes[0]!.content.canvas.elements).toEqual(first.scenes[0]!.content.canvas.elements);
     expect(resumed.scenes[0]!.content.canvas.presentationProjection).toEqual(first.scenes[0]!.content.canvas.presentationProjection);
+    expect(resumed.scenes[0]!.content.canvas.teachingVisual).toEqual(first.scenes[0]!.content.canvas.teachingVisual);
     expect(resumed.scenes[0]?.actions).toEqual(first.scenes[0]?.actions);
     expect(stages.stages.get(`${page.id}:narration`)).toEqual(narrationStage);
     for (const draft of drafts) expect(raw.validated).toHaveBeenCalledWith(expect.objectContaining({
@@ -372,7 +386,7 @@ describe('classroom first-pass orchestration and checkpoint integration', () => 
   });
 
   it.each(['missing-source', 'omitted-quantity'])('keeps full adopted content and diagnostics for %s without a second content request', async (failure) => {
-    const { page, items, spoken: fixtureSpeech, sourceOptions } = visualProjectionFixture();
+    const { page, items, scene, spoken: fixtureSpeech, sourceOptions } = teachingVisualFixture();
     const displayed = page.teachingBrief.teachingPlan.presentationContent;
     let spoken = fixtureSpeech;
     if (failure === 'missing-source') items.splice(1, 1);
@@ -386,7 +400,7 @@ describe('classroom first-pass orchestration and checkpoint integration', () => 
     const original = structuredClone({ page, sourceOptions });
     const raw = visualRawCheckpointStore();
     mocks.ai.mockImplementation(async (system: string) => {
-      if (system.includes('PPT_VISUAL_PROJECTION_V1')) return JSON.stringify({ items, links: [] });
+      if (system.includes(TEACHING_VISUAL_OPERATION)) return JSON.stringify(scene);
       if (system.includes('PPT_VISUAL_REVIEW_V1') || system.includes('# Slide Content Generator')) {
         throw new Error('Deterministic contract findings must not queue another content request');
       }
@@ -406,12 +420,12 @@ describe('classroom first-pass orchestration and checkpoint integration', () => 
     expect(result.qualityReport.warnings).toContainEqual(expect.stringContaining(failure === 'missing-source'
       ? 'Missing adopted point adopted-content-2' : 'Changed or omitted quantity in adopted-content-2'));
     const drafts = raw.writes.filter((record) => record.stage === 'content');
-    expect(drafts.map((record) => record.source)).toEqual(['slide-visual-projection']);
+    expect(drafts.map((record) => record.source)).toEqual(['slide-visual-scene']);
     expect({ page, sourceOptions }).toEqual(original);
   });
 
   it('restores accepted visual stages and completed audio without any model call', async () => {
-    const { page, modelResponse, sourceOptions } = visualProjectionFixture();
+    const { page, modelResponse, sourceOptions } = teachingVisualFixture();
     const stages = capacityStageStore();
     const complete = completedPageStore();
     mocks.ai.mockImplementation(async (system: string) => modelResponse(system));
@@ -433,6 +447,267 @@ describe('classroom first-pass orchestration and checkpoint integration', () => 
     expect(resumed.scenes[0]?.actions).toEqual(savedActions);
     expect([...stages.stages]).toEqual(acceptedStages);
     expect(resumed.assetContext.outlines[0]?.targetDurationSec).toBe(page.targetDurationSec);
+  });
+
+  it.each([false, true])('compiles a real two-page visual response with local source duties and a conserved 97-second budget before narration, then replays stages (legacy spatial context=%s)', async (legacySpatialContext) => {
+    const { page, items, scene, sourceOptions } = teachingVisualFixture();
+    page.targetDurationSec = 97;
+    page.estimatedDuration = 97;
+    page.plannedTiming = { role: 'teaching', narrationSec: 93, learnerActivitySec: 0, transitionSec: 4 };
+    if (legacySpatialContext) page.spatialSourceContext = { description: page.description, coreMessage: '完整原页观察目标' };
+    Object.assign(page.teachingBrief.teachingPlan, { presentationItems: sourceLabels.map((text, index) => ({
+      text, role: 'key-point' as const, nodeIds: [`teaching-node-${index + 1}`],
+    })) });
+    scene.pages[0]!.components[0]!.nodes = items.slice(0, 2);
+    scene.pages.push({ id: 'model-continuation', title: '实践中的伦理', focus: '将伦理思考纳入实践',
+      components: [{ id: 'ethics-in-practice', kind: 'text', nodes: items.slice(2) }] });
+    const stages = capacityStageStore(), raw = visualRawCheckpointStore();
+    const narrationStarted = vi.fn();
+    mocks.ai.mockImplementation(async (system: string) => {
+      if (system.includes(TEACHING_VISUAL_OPERATION)) return JSON.stringify(scene);
+      if (system === 'Section teaching narration') {
+        expect(stages.stages.has(`${page.id}:content`)).toBe(true);
+        expect(stages.stages.has(`${page.id}--continuation-2:content`)).toBe(true);
+        narrationStarted();
+        return JSON.stringify([
+          { type: 'text', pageId: page.id, content: `${sourceLabels.slice(0, 2).join('；')}。` },
+          { type: 'text', pageId: `${page.id}--continuation-2`, content: `${sourceLabels[2]}。` },
+        ]);
+      }
+      throw new Error(`Unexpected authoring request: ${system.slice(0, 80)}`);
+    });
+    const first = await generateClassroomProduction(input, { preparedOutlines: [page], ...sourceOptions,
+      ...stages.callbacks, ...raw.callbacks });
+    expect(first.scenes).toHaveLength(2);
+    expect(mocks.ai).toHaveBeenCalledTimes(2);
+    expect(mocks.compiledContinuation.mock.results.every((result) => result.value === undefined)).toBe(true);
+    expect(narrationStarted).toHaveBeenCalledOnce();
+    expect(first.assetContext.outlines.reduce((sum, current) => sum + current.targetDurationSec!, 0)).toBe(97);
+    expect(first.assetContext.outlines.reduce((sum, current) => sum + current.plannedTiming!.narrationSec, 0)).toBe(93);
+    expect(first.assetContext.outlines.reduce((sum, current) => sum + current.plannedTiming!.transitionSec, 0)).toBe(4);
+    const localDuties = [sourceLabels.slice(0, 2), sourceLabels.slice(2)];
+    const localSourceIds = [['adopted-content-1', 'adopted-content-2'], ['adopted-content-3']];
+    const localDisplay = [items.slice(0, 2), items.slice(2)].map((localItems) => localItems.map((item) => `${item.label}：${item.text}`));
+    const localNodeIds = [['teaching-node-1', 'teaching-node-2'], ['teaching-node-3']];
+    for (const [index, current] of first.assetContext.outlines.entries()) {
+      expect(current.visualSourceCatalog?.map((item) => item.text)).toEqual(localDuties[index]);
+      expect(current.visualSourceCatalog?.map((item) => item.id)).toEqual(localSourceIds[index]);
+      expect(current.teachingBrief?.teachingPlan?.presentationContent).toEqual(localDisplay[index]);
+      expect(current.teachingBrief?.teachingPlan?.presentationItems?.map((item) => item.text)).toEqual(localDisplay[index]);
+      expect([...new Set(current.teachingBrief?.teachingPlan?.presentationItems?.flatMap((item) => item.nodeIds))]).toEqual(localNodeIds[index]);
+      const slide = first.scenes[index]!.content;
+      if (slide.type !== 'slide') throw new Error('Expected visual slide');
+      expect(Object.keys(slide.canvas.presentationProjection!.elementIdsBySource).sort()).toEqual(localSourceIds[index]!.slice().sort());
+      expect(slide.canvas.teachingVisual?.scene.pages).toHaveLength(2);
+      const speech = first.scenes[index]!.actions?.filter((action) => action.type === 'speech').map((action) => action.text).join('');
+      for (const responsibility of localDuties[index]!) expect(speech).toContain(responsibility);
+      for (const other of localDuties[1 - index]!) expect(speech).not.toContain(other);
+    }
+    expect(mocks.narrationInput.mock.calls[0]![0].pages.map((item: { outline: SceneOutline }) => item.outline.visualSourceCatalog?.map((source) => source.text))).toEqual(localDuties);
+    expect(raw.writes.filter((record) => record.stage === 'content').map((record) => record.source)).toEqual(['slide-visual-scene']);
+    const acceptedStages = structuredClone([...stages.stages]);
+    mocks.ai.mockClear(); mocks.narrationInput.mockClear();
+    const resumed = await generateClassroomProduction(input, { preparedOutlines: first.assetContext.outlines,
+      ...sourceOptions, ...stages.callbacks, ...raw.callbacks });
+    expect(mocks.ai).not.toHaveBeenCalled();
+    expect(mocks.narrationInput).not.toHaveBeenCalled();
+    for (const [index, current] of resumed.scenes.entries()) {
+      const previous = first.scenes[index]!.content;
+      if (current.content.type !== 'slide' || previous.type !== 'slide') throw new Error('Expected visual slide');
+      const { id: _restoredCanvasId, ...restoredCanvas } = current.content.canvas;
+      const { id: _firstCanvasId, ...firstCanvas } = previous.canvas;
+      expect(restoredCanvas).toEqual(firstCanvas);
+    }
+    const stableActions = (current: Scene) => current.actions?.map((action) => {
+      if (!('timelinePausePurpose' in action) || action.timelinePausePurpose !== 'page-transition') return action;
+      const { id: _pauseId, ...pause } = action;
+      return pause;
+    });
+    expect(resumed.scenes.map(stableActions)).toEqual(first.scenes.map(stableActions));
+    expect([...stages.stages]).toEqual(acceptedStages);
+  }, 20_000);
+
+  it('expands required-whiteboard visual pages before tool actions and reuses both stage and completed checkpoints', async () => {
+    const { page, items, scene, sourceOptions } = teachingVisualFixture();
+    page.targetDurationSec = 97;
+    page.estimatedDuration = 97;
+    page.plannedTiming = { role: 'teaching', narrationSec: 93, learnerActivitySec: 0, transitionSec: 4 };
+    Object.assign(page, { teachingToolPlan: [{ tool: 'whiteboard', trigger: '讲解时',
+      purpose: '写出本页解释依据', content: ['依据本页事实解释教学安排'], required: true }] });
+    scene.pages[0]!.components[0]!.nodes = items.slice(0, 2);
+    scene.pages.push({ id: 'second', title: '实践中的伦理', focus: '伦理贯穿实践',
+      components: [{ id: 'ethics', kind: 'text', nodes: items.slice(2) }] });
+    const stages = capacityStageStore(), raw = visualRawCheckpointStore();
+    const completed = new Map<string, PageCheckpointSnapshot>();
+    const localDuties = [sourceLabels.slice(0, 2), sourceLabels.slice(2)];
+    let actionPage = 0;
+    mocks.ai.mockImplementation(async (system: string) => {
+      if (system.includes(TEACHING_VISUAL_OPERATION)) return JSON.stringify(scene);
+      expect(system).not.toMatch(/(?:Independent|Section) teaching narration/);
+      expect(stages.stages.has(`${page.id}:content`)).toBe(true);
+      expect(stages.stages.has(`${page.id}--continuation-2:content`)).toBe(true);
+      const text = localDuties[actionPage++]!.join('；');
+      return JSON.stringify([{ type: 'text', content: `${text}。` },
+        { type: 'action', name: 'wb_draw_text', params: { elementId: `reasoning-${actionPage}`, content: text, x: 70, y: 90 } }]);
+    });
+    const first = await generateClassroomProduction(input, { preparedOutlines: [page], ...sourceOptions,
+      ...stages.callbacks, ...raw.callbacks,
+      onSceneCompleted: (current, saved, _index, modelFingerprint, inputFingerprint) => {
+        completed.set(current.id, { pageKey: current.id, scene: structuredClone(saved),
+          outlineFingerprint: fingerprintSceneOutline(current), modelFingerprint, inputFingerprint });
+      } });
+    expect(first.scenes).toHaveLength(2);
+    expect(mocks.ai).toHaveBeenCalledTimes(3);
+    expect(mocks.narrationInput).not.toHaveBeenCalled();
+    expect(actionPage).toBe(2);
+    expect(first.assetContext.outlines.reduce((sum, current) => sum + current.targetDurationSec!, 0)).toBe(97);
+    expect(first.assetContext.outlines.reduce((sum, current) => sum + current.plannedTiming!.narrationSec, 0)).toBe(93);
+    expect(first.assetContext.outlines.reduce((sum, current) => sum + current.plannedTiming!.transitionSec, 0)).toBe(4);
+    for (const [index, current] of first.assetContext.outlines.entries()) {
+      expect(current.teachingToolPlan).toEqual(page.teachingToolPlan);
+      expect(current.visualSourceCatalog?.map((source) => source.text)).toEqual(localDuties[index]);
+      const saved = first.scenes[index]!;
+      if (saved.content.type !== 'slide') throw new Error('Expected visual slide');
+      expect(saved.content.canvas.teachingVisual?.scene.pages).toHaveLength(2);
+      const displayed = JSON.stringify(saved.content.canvas.elements);
+      for (const item of index === 0 ? items.slice(0, 2) : items.slice(2)) expect(displayed).toContain(item.text);
+      expect(saved.actions?.some((action) => action.type === 'wb_draw_text')).toBe(true);
+      const speech = saved.actions?.filter((action) => action.type === 'speech').map((action) => action.text).join('');
+      for (const text of localDuties[index]!) expect(speech).toContain(text);
+    }
+    expect(raw.writes.filter((record) => record.stage === 'content').map((record) => record.source)).toEqual(['slide-visual-scene']);
+    expect(stages.writes.filter((record) => record.stage === 'narration')).toEqual([]);
+    const acceptedStages = structuredClone([...stages.stages]);
+    mocks.ai.mockClear();
+    const resumed = await generateClassroomProduction(input, { preparedOutlines: first.assetContext.outlines,
+      ...sourceOptions, ...stages.callbacks, ...raw.callbacks });
+    expect(resumed.scenes).toHaveLength(2);
+    expect(mocks.ai).not.toHaveBeenCalled();
+    expect([...stages.stages]).toEqual(acceptedStages);
+    expect(resumed.scenes.map((saved) => saved.actions?.filter((action) => action.type === 'wb_draw_text')))
+      .toEqual(first.scenes.map((saved) => saved.actions?.filter((action) => action.type === 'wb_draw_text')));
+    const reused = await generateClassroomProduction(input, { preparedOutlines: first.assetContext.outlines,
+      ...sourceOptions, loadSceneCheckpoint: (current, _index, stageId, modelFingerprint, inputFingerprint) =>
+        restoreSceneCheckpoint(current, completed.get(current.id), stageId, modelFingerprint, inputFingerprint) });
+    expect(mocks.ai).not.toHaveBeenCalled();
+    expect(reused.scenes.map((saved) => saved.id)).toEqual(first.scenes.map((saved) => saved.id));
+    expect(reused.scenes.map((saved) => saved.content)).toEqual(first.scenes.map((saved) => saved.content));
+  }, 20_000);
+
+  it('moves an accepted tool page after new continuations without reauthoring its content or actions', async () => {
+    const { page, items, scene, sourceOptions, spoken } = teachingVisualFixture();
+    Object.assign(page, { teachingToolPlan: [{ tool: 'whiteboard', trigger: '讲解时',
+      purpose: '解释依据', content: ['本页事实'], required: true }] });
+    const accepted: SceneOutline = { ...page, id: 'accepted-tool-page', order: 1 };
+    const saved: Scene = { id: 'accepted-scene', stageId: 'prior-stage', type: 'slide', title: accepted.title, order: 1,
+      content: { type: 'slide', canvas: { id: 'accepted-canvas', viewportSize: 1000, viewportRatio: 0.5625,
+        theme: { backgroundColor: '#ffffff', themeColors: ['#365B9D'], fontColor: '#253448', fontName: 'Noto Sans SC' },
+        elements: [{ id: 'saved-evidence', type: 'text',
+        left: 60, top: 160, width: 500, height: 80, rotate: 0, defaultFontName: 'Noto Sans SC',
+        defaultColor: '#334155', content: '<p style="font-size:24px">已保存的解释</p>' }] } },
+      actions: [{ id: 'accepted-speech', type: 'speech', text: '已保存的解释' }], narrationRevision: COURSE_GENERATION_POLICY_VERSION };
+    scene.pages[0]!.components[0]!.nodes = items.slice(0, 2);
+    scene.pages.push({ id: 'second', title: '实践中的伦理', focus: '伦理贯穿实践',
+      components: [{ id: 'ethics', kind: 'text', nodes: items.slice(2) }] });
+    mocks.ai.mockImplementation(async (system: string) => system.includes(TEACHING_VISUAL_OPERATION)
+      ? JSON.stringify(scene) : JSON.stringify([{ type: 'text', content: spoken }]));
+    const result = await generateClassroomProduction(input, { preparedOutlines: [page, accepted], ...sourceOptions,
+      loadSceneCheckpoint: (current, _index, stageId) => current.id === accepted.id ? { ...saved, stageId } : null });
+    expect(result.scenes.map((current) => current.order)).toEqual([0, 1, 2]);
+    expect(result.scenes[2]).toMatchObject({ id: saved.id, content: saved.content, actions: saved.actions });
+    expect(mocks.contentInput.mock.calls.map(([current]) => current.id)).toEqual([page.id]);
+    expect(mocks.ai).toHaveBeenCalledTimes(3);
+  }, 15_000);
+
+  it('persists the original five-step graph only on its split host and replays that source contract', async () => {
+    const page = structuredClone(capacityPage('adopted-graph-page'));
+    const points = ['学习者能独立解决问题时撤除支持', '根据最近发展区设计层次支架'];
+    page.keyPoints = points;
+    page.targetDurationSec = 97; page.estimatedDuration = 97;
+    page.plannedTiming = { role: 'teaching', narrationSec: 93, learnerActivitySec: 0, transitionSec: 4 };
+    page.teachingBrief!.explanation = points.join('。');
+    Object.assign(page.teachingBrief!.teachingPlan!, { newContent: points.join('。'), visibleContent: points, presentationContent: points });
+    const graph = { topology: 'sequence' as const,
+      nodes: ['搭脚手架', '进入情境', '独立探索', '协作学习', '效果评价'].map((label, i) => ({ id: `c${i + 1}`, label })),
+      annotation: '顺序表示完整教学环节' };
+    page.visualIntent = { representation: 'native-diagram', observationGoal: '完整五环节', diagram: graph };
+    const visual: TeachingVisualScene = { schemaVersion: 1, designVersion: 'teaching-visual-v2', pages: [
+      { id: 'withdrawal', title: '撤除支持的依据', focus: points[0]!, components: [{ id: 'condition', kind: 'text',
+        nodes: [{ id: 'independence', text: points[0]!, sourceContentIds: ['adopted-content-1'] }] }] },
+      { id: 'process', title: '支架式教学的五个环节', focus: '完整教学过程', components: [{ id: 'original-process', kind: 'process', useAdoptedDiagram: true, nodes: [
+        { id: 'design', text: points[1]!, sourceContentIds: ['adopted-content-2'], anchorId: 'c1' },
+        { id: 'annotation', text: graph.annotation, sourceContentIds: ['diagram-annotation'], anchorId: 'c1' },
+      ] }] },
+    ] };
+    const stages = capacityStageStore();
+    mocks.ai.mockImplementation(async (system: string) => system.includes(TEACHING_VISUAL_OPERATION)
+      ? JSON.stringify(visual) : JSON.stringify(points.map((text, index) => ({ type: 'text', content: `${text}。`,
+        pageId: index === 0 ? page.id : `${page.id}--continuation-2` }))));
+    const first = await generateClassroomProduction(input, { preparedOutlines: [page], ...stages.callbacks });
+    expect(first.scenes).toHaveLength(2);
+    expect(first.assetContext.outlines[0]!.visualIntent?.diagram).toBeUndefined();
+    expect(first.assetContext.outlines[1]!.visualIntent?.diagram).toEqual(graph);
+    expect(first.assetContext.outlines.reduce((sum, current) => sum + current.targetDurationSec!, 0)).toBe(97);
+    const host = first.scenes[1]!.content;
+    if (host.type !== 'slide') throw new Error('Expected graph host');
+    for (const node of graph.nodes) expect(host.canvas.presentationProjection?.elementIdsBySource[`diagram-node:${node.id}`])
+      .toEqual([`original-process-node-${node.id}`]);
+    expect(host.canvas.elements.filter((element) => element.type === 'line' && element.id.startsWith('original-process-edge-'))).toHaveLength(4);
+    const acceptedStages = structuredClone([...stages.stages]);
+    mocks.ai.mockClear();
+    const replay = await generateClassroomProduction(input, { preparedOutlines: first.assetContext.outlines, ...stages.callbacks });
+    expect(mocks.ai).not.toHaveBeenCalled();
+    expect(replay.assetContext.outlines[0]!.visualIntent?.diagram).toBeUndefined();
+    expect(replay.assetContext.outlines[1]!.visualIntent?.diagram).toEqual(graph);
+    expect([...stages.stages]).toEqual(acceptedStages);
+  }, 15_000);
+
+  it('reuses a saved two-page parent content stage after interruption before expanded outlines are saved', async () => {
+    const { page, items, scene, sourceOptions, spoken } = teachingVisualFixture();
+    scene.pages[0]!.components[0]!.nodes = items.slice(0, 2);
+    scene.pages.push({ id: 'second', title: '伦理思考', focus: '在实践中观察伦理',
+      components: [{ id: 'ethics', kind: 'text', nodes: items.slice(2) }] });
+    const stages = capacityStageStore();
+    mocks.ai.mockImplementation(async (system: string) => system.includes(TEACHING_VISUAL_OPERATION)
+      ? JSON.stringify(scene) : JSON.stringify([{ type: 'text', content: spoken }]));
+    const onOutlinesPrepared = vi.fn((pages: SceneOutline[]) => {
+      if (pages.length > 1) throw new Error('interrupted before expanded outline checkpoint');
+    });
+    await expect(generateClassroomProduction(input, { preparedOutlines: [page], ...sourceOptions,
+      ...stages.callbacks, onOutlinesPrepared })).rejects.toThrow('interrupted before expanded outline checkpoint');
+    const saved = stages.stages.get(`${page.id}:content`)!.payload as { content: GeneratedSlideContent };
+    expect(saved.content.continuationPages).toHaveLength(1);
+    expect([saved.content, ...saved.content.continuationPages!].every((part) => part.paginationVersion === 'balanced-v1')).toBe(true);
+    expect(mocks.ai).toHaveBeenCalledOnce();
+    mocks.ai.mockClear();
+    const resumed = await generateClassroomProduction(input, { preparedOutlines: [page], ...sourceOptions, ...stages.callbacks });
+    expect(resumed.scenes).toHaveLength(2);
+    expect(mocks.ai.mock.calls.map(([system]) => system)).toEqual(['Section teaching narration']);
+    if (resumed.scenes[0]!.content.type !== 'slide') throw new Error('Expected slide');
+    expect(resumed.scenes[0]!.content.canvas.elements).toEqual(saved.content.elements);
+  }, 20_000);
+
+  it('keeps a previously accepted legacy content stage when the new visual policy is enabled', async () => {
+    const { page, sourceOptions, spoken } = teachingVisualFixture();
+    const stages = capacityStageStore();
+    mocks.ai.mockImplementation(async (system: string) => {
+      if (system.includes('# Slide Content Generator')) return JSON.stringify(authoredContent);
+      throw new Error('stop before legacy narration');
+    });
+    await expect(generateClassroom(input, { preparedOutlines: [page], ...sourceOptions, ...stages.callbacks }))
+      .rejects.toThrow('stop before legacy narration');
+    const accepted = structuredClone(stages.stages.get(`${page.id}:content`));
+    expect(accepted).toBeDefined();
+    mocks.ai.mockClear().mockImplementation(async (system: string) => {
+      if (system !== 'Section teaching narration') throw new Error('accepted legacy content must not regenerate');
+      return JSON.stringify([{ type: 'text', content: spoken }]);
+    });
+    const result = await generateClassroomProduction(input, { preparedOutlines: [page], ...sourceOptions, ...stages.callbacks });
+    expect(mocks.ai).toHaveBeenCalledOnce();
+    expect(stages.stages.get(`${page.id}:content`)).toEqual(accepted);
+    if (result.scenes[0]!.content.type !== 'slide') throw new Error('Expected slide');
+    expect(result.scenes[0]!.content.canvas.elements).toEqual((accepted!.payload as { content: GeneratedSlideContent }).content.elements);
+    expect(result.scenes[0]!.content.canvas.teachingVisual).toBeUndefined();
   });
 
   it('sends original adopted sources to both first calls while accepting concise slides and complete natural narration', async () => {

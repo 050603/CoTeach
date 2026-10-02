@@ -45,6 +45,7 @@ vi.mock('@openmaic/lib/server/classroom-storage', async (importOriginal) => {
 });
 
 import { GET, PATCH } from './route';
+import { classroomEditOutlinesFixture } from '@openmaic/lib/server/classroom-edit-outlines-fixture';
 
 const context = { params: Promise.resolve({ courseId: 'course-1' }) };
 const stage = { id: 'classroom-1', name: 'AI 课堂', createdAt: 1, updatedAt: 1 };
@@ -119,7 +120,60 @@ describe('teacher classroom resource route', () => {
     await expect(response.json()).resolves.toMatchObject({
       success: true,
       classroom: { id: 'classroom-1', revision: 4 },
+      outlines: course.content._openmaicSceneOutlines,
     });
+    expect(mocks.updateCourse).not.toHaveBeenCalled();
+  });
+
+  it('loads full canonical teaching prose by stable page identity and retains legacy courses without outlines', async () => {
+    const input = classroomEditOutlinesFixture();
+    input.existing.scenes[0].title = '教师最新标题';
+    input.existing.scenes.reverse();
+    mocks.getCourse.mockResolvedValue(input.course);
+    mocks.readClassroom.mockResolvedValue(input.existing);
+    const response = await GET(new Request('https://app.test/api/courses/course-1/classroom-resource'), context);
+    const result = await response.json();
+    expect(result.outlines[1]).toMatchObject({ id: 'outline-1', title: input.outline.title,
+      teachingBrief: { explanation: input.outline.teachingBrief!.explanation, evidence: input.outline.teachingBrief!.evidence } });
+    expect(result.classroom.scenes[1].title).toBe('教师最新标题');
+    mocks.getCourse.mockResolvedValue({ ...input.course, content: { ...input.course.content, _openmaicSceneOutlines: undefined } });
+    const legacy = await GET(new Request('https://app.test/api/courses/course-1/classroom-resource'), context);
+    expect((await legacy.json()).outlines).toEqual([]);
+  });
+
+  it('saves and reloads split canonical responsibilities while keeping unrelated narration and original evidence', async () => {
+    const input = classroomEditOutlinesFixture();
+    let savedCourse = input.course;
+    let savedClassroom = input.existing;
+    mocks.getCourse.mockImplementation(async () => savedCourse);
+    mocks.readClassroom.mockImplementation(async () => savedClassroom);
+    mocks.updateClassroom.mockImplementation(async (_id, data) => {
+      savedClassroom = { ...savedClassroom, ...data, revision: 5 };
+      return savedClassroom;
+    });
+    mocks.updateCourse.mockImplementation(async (_id, updater) => { savedCourse = updater(savedCourse); return savedCourse; });
+    const response = await PATCH(editRequest(4, { stage: input.stage, scenes: input.scenes, outlines: input.outlines }), context);
+    expect(response.status).toBe(200);
+    const result = await response.json();
+    expect(result.outlines[1]).toMatchObject({ id: 'outline-1--continuation-2', segmentIndex: 2,
+      sourcePageIds: ['outline-1'], visualSourceCatalog: [input.sources[1]],
+      teachingBrief: { explanation: input.outline.teachingBrief!.explanation, teachingPlan: { newContent: input.outline.teachingBrief!.teachingPlan!.newContent } } });
+    expect(result.classroom.scenes[2].actions).toEqual(input.existing.scenes[1].actions);
+    const reloaded = await GET(new Request('https://app.test/api/courses/course-1/classroom-resource'), context);
+    expect((await reloaded.json()).outlines).toEqual(result.outlines);
+  });
+
+  it('rejects foreign split source identities before writing media, classroom or course data', async () => {
+    const input = classroomEditOutlinesFixture();
+    mocks.getCourse.mockResolvedValue(input.course);
+    mocks.readClassroom.mockResolvedValue(input.existing);
+    input.outlines[1].sourcePageIds = ['foreign-textbook'];
+    const response = await PATCH(editRequest(4, { stage: input.stage, scenes: input.scenes, outlines: input.outlines }), context);
+    expect(response.status).toBe(400);
+    expect(mocks.persistAudio).not.toHaveBeenCalled();
+    expect(mocks.copyMedia).not.toHaveBeenCalled();
+    expect(mocks.updateClassroom).not.toHaveBeenCalled();
+    expect(mocks.updateCourse).not.toHaveBeenCalled();
   });
 
   it('rejects a stale edit without changing storage', async () => {
@@ -252,6 +306,7 @@ describe('teacher classroom resource route', () => {
       id: 'classroom-1-edit-draft123',
       stage: expect.objectContaining({ id: 'classroom-1-edit-draft123' }),
       scenes: [expect.objectContaining({ stageId: 'classroom-1-edit-draft123' })],
+      teachingSource: { courseId: 'course-1', classroomId: 'classroom-1' },
     }));
     const updater = mocks.updateCourse.mock.calls[0][1];
     expect(updater(course)).toMatchObject({
@@ -266,6 +321,31 @@ describe('teacher classroom resource route', () => {
       forkedDraft: true,
       dependencyInvalidation: { baseClassroomRevision: 4, classroomRevision: 1 },
     });
+  });
+
+  it('carries a same-course server provenance anchor across repeated forks and ignores client replacements', async () => {
+    mocks.findPublished.mockResolvedValue({ id: 'published-version' });
+    mocks.readClassroom.mockResolvedValue({ ...classroom,
+      teachingSource: { courseId: 'course-1', classroomId: 'original-source-classroom' } });
+    const response = await PATCH(editRequest(4, { teachingSource: { courseId: 'foreign-course', classroomId: 'forged-source' } }), context);
+    expect(response.status).toBe(200);
+    expect(mocks.persistClassroom).toHaveBeenCalledWith(expect.objectContaining({
+      teachingSource: { courseId: 'course-1', classroomId: 'original-source-classroom' },
+    }));
+    mocks.readClassroom.mockResolvedValue({ ...classroom,
+      teachingSource: { courseId: 'foreign-course', classroomId: 'other-source' } });
+    await PATCH(editRequest(), context);
+    expect(mocks.persistClassroom).toHaveBeenLastCalledWith(expect.objectContaining({
+      teachingSource: { courseId: 'course-1', classroomId: 'classroom-1' },
+    }));
+  });
+
+  it('denies an unauthorized canonical outline read before loading the course or classroom', async () => {
+    mocks.authorize.mockResolvedValue(new Response(null, { status: 403 }));
+    const response = await GET(new Request('https://app.test/api/courses/course-1/classroom-resource'), context);
+    expect(response.status).toBe(403);
+    expect(mocks.getCourse).not.toHaveBeenCalled();
+    expect(mocks.readClassroom).not.toHaveBeenCalled();
   });
 
   it('preserves authorization failures before reading classroom data', async () => {

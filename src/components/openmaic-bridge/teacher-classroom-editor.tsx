@@ -13,6 +13,7 @@ import { useCanvasStore, useStageStore } from '@openmaic/lib/store';
 import { useSlideEditSession } from '@openmaic/components/edit/surfaces/slide/slide-edit-session';
 import { useQuizEditSession } from '@openmaic/components/edit/surfaces/quiz/quiz-edit-session';
 import type { Scene, Stage as StageType } from '@openmaic/lib/types/stage';
+import type { SceneOutline } from '@openmaic/lib/types/generation';
 import { collectClassroomAudioUploads } from '@openmaic/lib/audio/classroom-edit-audio';
 import { classroomFingerprint, reconcileClassroomSave } from '@/lib/openmaic-bridge/classroom-editor-save';
 import { toast } from '@/components/ui';
@@ -54,7 +55,7 @@ export function TeacherClassroomEditor({
   const hydrate = useCallback(async () => {
     const current = useStageStore.getState();
     if (hydratedRef.current
-      && classroomFingerprint(current.stage, current.scenes) !== savedFingerprintRef.current
+      && classroomFingerprint(current.stage, current.scenes, current.outlines) !== savedFingerprintRef.current
       && !window.confirm('重新加载会丢弃当前未保存的修改，确定继续吗？')) return;
     const lifecycle = ++lifecycleRef.current;
     loadRequestRef.current?.abort();
@@ -76,6 +77,7 @@ export function TeacherClassroomEditor({
       const payload = await response.json() as {
         success?: boolean;
         classroom?: PersistedClassroom;
+        outlines?: SceneOutline[];
         error?: string;
       };
       if (abort.signal.aborted || lifecycleRef.current !== lifecycle) return;
@@ -84,6 +86,7 @@ export function TeacherClassroomEditor({
       }
       const classroom = payload.classroom;
       const scenes = classroom.scenes.map(migrateScene);
+      const outlines = payload.outlines ?? [];
       if (!scenes.length) throw new Error('课堂中没有可编辑页面');
       const requestedScene = initialSceneId
         ? scenes.find((scene) => scene.id === initialSceneId)
@@ -97,7 +100,7 @@ export function TeacherClassroomEditor({
         scenes,
         currentSceneId: nextSceneId,
         mode: 'edit',
-        outlines: [],
+        outlines,
         generatingOutlines: [],
         generationComplete: true,
         generationStatus: 'completed',
@@ -111,7 +114,7 @@ export function TeacherClassroomEditor({
       }
       setClassroomId(classroom.id);
       setRevision(classroom.revision ?? 0);
-      savedFingerprintRef.current = classroomFingerprint(classroom.stage, scenes);
+      savedFingerprintRef.current = classroomFingerprint(classroom.stage, scenes, outlines);
       setDirty(false);
       hydratedRef.current = true;
       setState('ready');
@@ -143,7 +146,7 @@ export function TeacherClassroomEditor({
 
   useEffect(() => useStageStore.subscribe((current) => {
     if (!hydratedRef.current) return;
-    const nextDirty = classroomFingerprint(current.stage, current.scenes)
+    const nextDirty = classroomFingerprint(current.stage, current.scenes, current.outlines)
       !== savedFingerprintRef.current;
     setDirty((previous) => previous === nextDirty ? previous : nextDirty);
   }), []);
@@ -183,6 +186,7 @@ export function TeacherClassroomEditor({
             revision,
             stage: snapshot.stage,
             scenes: snapshot.scenes,
+            outlines: snapshot.outlines,
             audioUploads,
           }),
         },
@@ -190,6 +194,7 @@ export function TeacherClassroomEditor({
       const payload = await response.json() as {
         success?: boolean;
         classroom?: PersistedClassroom;
+        outlines?: SceneOutline[];
         forkedDraft?: boolean;
         narrationChanged?: boolean;
         code?: string;
@@ -206,15 +211,16 @@ export function TeacherClassroomEditor({
       }
       const classroom = payload.classroom;
       const scenes = classroom.scenes.map(migrateScene);
+      const outlines = payload.outlines ?? snapshot.outlines;
       const live = useStageStore.getState();
       if (!live.stage) return;
       const merged = reconcileClassroomSave(
-        { stage: snapshot.stage, scenes: snapshot.scenes },
-        { stage: live.stage, scenes: live.scenes },
-        { stage: classroom.stage, scenes },
+        { stage: snapshot.stage, scenes: snapshot.scenes, outlines: snapshot.outlines },
+        { stage: live.stage, scenes: live.scenes, outlines: live.outlines },
+        { stage: classroom.stage, scenes, outlines },
       );
       const currentSceneId = live.currentSceneId;
-      savedFingerprintRef.current = classroomFingerprint(classroom.stage, scenes);
+      savedFingerprintRef.current = classroomFingerprint(classroom.stage, scenes, outlines);
       useStageStore.setState({
         ...merged,
         currentSceneId: merged.scenes.some((scene) => scene.id === currentSceneId)
@@ -238,7 +244,7 @@ export function TeacherClassroomEditor({
       }
       setClassroomId(classroom.id);
       setRevision(classroom.revision ?? 0);
-      setDirty(classroomFingerprint(merged.stage, merged.scenes) !== savedFingerprintRef.current);
+      setDirty(classroomFingerprint(merged.stage, merged.scenes, merged.outlines) !== savedFingerprintRef.current);
       setState('ready');
       if (payload.narrationChanged) {
         toast.warning('课堂修改已保存', {

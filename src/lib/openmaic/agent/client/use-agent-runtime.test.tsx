@@ -2,6 +2,10 @@ import { act, renderHook, waitFor } from '@testing-library/react';
 import type { AppendMessage, ThreadMessageLike } from '@assistant-ui/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Scene, Stage } from '@openmaic/lib/types/stage';
+import type { SceneOutline } from '@openmaic/lib/types/generation';
+import type { RegenerateApplyContext, RegenerateDetails } from './apply-regenerate';
+import { regenerateSplitFixture } from './regenerate-split-fixture';
+import { useRegenSnapshots } from './regen-snapshots';
 
 interface RuntimeOptions {
   messages: ThreadMessageLike[];
@@ -10,7 +14,7 @@ interface RuntimeOptions {
 interface RuntimeStore {
   stage: Stage;
   scenes: Scene[];
-  outlines: [];
+  outlines: SceneOutline[];
   getSceneById: (id: string) => Scene | null;
 }
 
@@ -19,6 +23,7 @@ const mocks = vi.hoisted(() => ({
   state: null as RuntimeStore | null,
   fetch: vi.fn(),
   apply: vi.fn(),
+  applyRange: vi.fn(),
   plan: vi.fn(),
   toastError: vi.fn(),
 }));
@@ -31,7 +36,7 @@ vi.mock('@openmaic/lib/store/stage', () => ({
   ),
 }));
 vi.mock('@openmaic/lib/utils/model-config', () => ({ getCurrentModelConfig: () => ({}) }));
-vi.mock('./apply-slide-content', () => ({ applyScenePatchInSync: mocks.apply }));
+vi.mock('./apply-slide-content', () => ({ applyScenePatchInSync: mocks.apply, applySceneRangeInSync: mocks.applyRange }));
 vi.mock('./apply-regenerate', () => ({ planRegenerateApply: mocks.plan }));
 vi.mock('sonner', () => ({ toast: { error: mocks.toastError } }));
 vi.mock('./agent-thread-store', () => ({
@@ -60,6 +65,7 @@ const encode = (event: unknown) => new TextEncoder().encode(`data: ${JSON.string
 
 beforeEach(() => {
   vi.clearAllMocks();
+  useRegenSnapshots.getState().clearAll();
   const scene: Scene = {
     id: 's1', stageId: 'c1', order: 0, title: '页面', type: 'slide',
     content: { type: 'slide', canvas: {
@@ -110,5 +116,49 @@ describe('AI editor runtime lifecycle', () => {
       expect.objectContaining({ type: 'tool-call', isError: true }),
       { type: 'text', text: error },
     ]));
+  });
+
+  it('applies an explicit visual split atomically and captures the full recovery range', async () => {
+    const { context, details } = regenerateSplitFixture();
+    mocks.state = { stage: { id: 'stage', name: '课堂', createdAt: 1, updatedAt: 1 },
+      scenes: context.scenes, outlines: context.outlines,
+      getSceneById: (id) => mocks.state!.scenes.find((scene) => scene.id === id) ?? null };
+    const actual = await vi.importActual<typeof import('./apply-regenerate')>('./apply-regenerate');
+    mocks.plan.mockImplementation((result: RegenerateDetails, scene: Scene, toolName: string, applyContext: RegenerateApplyContext) =>
+      actual.planRegenerateApply(result, scene, toolName, applyContext));
+    mocks.fetch.mockResolvedValue(new Response(new ReadableStream<Uint8Array>({ start(controller) {
+      controller.enqueue(encode({ type: 'tool_execution_end', toolCallId: 'split-tool', toolName: 'regenerate_scene', result: { details } }));
+      controller.close();
+    } })));
+    renderHook(() => useAgentRuntime({ scene: { id: 'original', title: '支架撤除与五环节' } }));
+    await act(async () => { await mocks.options!.onNew(prompt); });
+    expect(mocks.apply).not.toHaveBeenCalled();
+    expect(mocks.applyRange).toHaveBeenCalledOnce();
+    expect(mocks.applyRange.mock.calls[0][0].after.scenes).toHaveLength(2);
+    expect(useRegenSnapshots.getState().snapshots['split-tool'].sceneRange?.after.scenes).toHaveLength(2);
+    expect(mocks.plan.mock.calls[0][3].requestScene).toEqual(context.requestScene);
+  });
+
+  it('keeps a teacher edit made while visual redesign is streaming and creates no restore card', async () => {
+    const { context, details } = regenerateSplitFixture();
+    mocks.state = { stage: { id: 'stage', name: '课堂', createdAt: 1, updatedAt: 1 },
+      scenes: context.scenes, outlines: context.outlines,
+      getSceneById: (id) => mocks.state!.scenes.find((scene) => scene.id === id) ?? null };
+    const actual = await vi.importActual<typeof import('./apply-regenerate')>('./apply-regenerate');
+    mocks.plan.mockImplementation((result: RegenerateDetails, scene: Scene, toolName: string, applyContext: RegenerateApplyContext) =>
+      actual.planRegenerateApply(result, scene, toolName, applyContext));
+    let stream!: ReadableStreamDefaultController<Uint8Array>;
+    mocks.fetch.mockResolvedValue(new Response(new ReadableStream<Uint8Array>({ start: (controller) => { stream = controller; } })));
+    renderHook(() => useAgentRuntime({ scene: { id: 'original', title: '支架撤除与五环节' } }));
+    let task!: Promise<void>;
+    await act(async () => { task = mocks.options!.onNew(prompt); });
+    mocks.state.scenes = mocks.state.scenes.map((scene) => scene.id === 'original' ? { ...scene, title: '教师最新修改' } : scene);
+    stream.enqueue(encode({ type: 'tool_execution_end', toolCallId: 'split-tool', toolName: 'regenerate_scene', result: { details } }));
+    stream.close();
+    await act(async () => { await task; });
+    expect(mocks.apply).not.toHaveBeenCalled();
+    expect(mocks.applyRange).not.toHaveBeenCalled();
+    expect(mocks.toastError).toHaveBeenCalledWith(expect.stringContaining('已保留你的最新页面和讲稿'));
+    expect(useRegenSnapshots.getState().snapshots['split-tool']).toBeUndefined();
   });
 });

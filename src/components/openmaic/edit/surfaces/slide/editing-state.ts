@@ -1,21 +1,28 @@
 import type { PPTElement } from '@openmaic/dsl';
 
 /**
- * The single selected slide element — `undefined` unless exactly one element is
- * selected and it resolves in the content. The basis for the surface's
- * selection-anchored chrome (the text format bar, the image action bar).
+ * Resolve one selected element or an explicitly handled member of one group.
+ * A group member keeps the renderer's group selection for geometry gestures
+ * while its text and image controls apply only to that member.
  */
 export function resolveSelectedElement(
   activeElementIdList: readonly string[],
   elements: readonly PPTElement[],
+  activeGroupElementId?: string,
 ): PPTElement | undefined {
+  if (activeGroupElementId && activeElementIdList.includes(activeGroupElementId)) {
+    const member = elements.find((element) => element.id === activeGroupElementId);
+    if (member?.groupId && activeElementIdList.every((id) =>
+      elements.find((element) => element.id === id)?.groupId === member.groupId,
+    )) return member;
+  }
   if (activeElementIdList.length !== 1) return undefined;
   return elements.find((el) => el.id === activeElementIdList[0]);
 }
 
 /**
  * The slide surface's text-editing policy: a single selected text element is,
- * by definition, the element being edited (there is no separate
+ * by definition, the element being edited, including a handled group member (there is no separate
  * "selected-not-editing" state for text). Anything else resolves to "".
  *
  * This is the value the surface writes into the canvas store's
@@ -25,7 +32,8 @@ export function resolveSelectedElement(
 export function resolveEditingElementId(
   activeElementIdList: readonly string[],
   elements: readonly PPTElement[],
+  activeGroupElementId?: string,
 ): string {
-  const el = resolveSelectedElement(activeElementIdList, elements);
+  const el = resolveSelectedElement(activeElementIdList, elements, activeGroupElementId);
   return el?.type === 'text' ? el.id : '';
 }

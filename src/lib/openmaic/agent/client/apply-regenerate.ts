@@ -9,14 +9,16 @@
  */
 import { nanoid } from 'nanoid';
 import type { Action } from '@openmaic/lib/types/action';
-import type { Scene, ScenePatch, SceneContent, InteractiveContent } from '@openmaic/lib/types/stage';
-import type { GeneratedSlideContent } from '@openmaic/lib/types/generation';
+import { makeScene, type Scene, type ScenePatch, type SceneContent, type InteractiveContent, type SlideContent } from '@openmaic/lib/types/stage';
+import type { GeneratedSlideContent, SceneOutline } from '@openmaic/lib/types/generation';
 import { CURRENT_SLIDE_CONTENT_SCHEMA_VERSION } from '@openmaic/lib/edit/slide-schema';
 import { isEqual } from 'lodash';
 import { validateAction } from '@openmaic/dsl';
 import { whiteboardBlocks, replaceWhiteboardSteps } from '@openmaic/lib/edit/whiteboard-blocks';
 import type { WhiteboardPatch } from '@openmaic/lib/edit/whiteboard-patch';
 import type { NarrationPatch } from '@openmaic/lib/agent/tools/regenerate-scene-actions';
+import { hasProtectedTeachingVisualEdits } from '@openmaic/lib/edit/teaching-visual-edits';
+import { sameSceneExceptOrder, type SceneRangeTransaction } from './scene-range-transaction';
 
 // Mirrors the default theme minted by createSceneWithActions for fresh slides.
 const DEFAULT_THEME = {
@@ -52,6 +54,11 @@ export function toRuntimeSlideContent(
     canvas: {
       ...base,
       elements: gen.elements,
+      ...(gen.theme ? { theme: gen.theme } : {}),
+      // Visual ownership belongs to the newly compiled elements. Keeping the
+      // previous mappings would bind editing controls to an unrelated scene.
+      teachingVisual: gen.teachingVisual,
+      presentationProjection: gen.presentationProjection,
       // Replacing ALL elements with freshly-minted ids strands any persisted
       // animations on `base` — they reference element ids that no longer exist
       // (mirrors how slide edit ops drop animations whose elId is deleted).
@@ -75,7 +82,21 @@ export interface RegenerateDetails {
   /** Present only for a scoped `edit_whiteboard` tool result. */
   whiteboardPatch?: WhiteboardPatch | null;
   narrationPatch?: NarrationPatch;
+  /** Explicit historical-page redesign, including independent page narration. */
+  visualRedesign?: {
+    before: { content: SceneContent; actions: Action[] };
+    pages: Array<{ outline: SceneOutline; content: GeneratedSlideContent; actions: Action[] }>;
+  };
   error?: string;
+}
+
+export interface RegenerateApplyContext {
+  scenes: Scene[];
+  outlines: SceneOutline[];
+  /** Client-owned send-time state, independent of the returned tool payload. */
+  requestScene?: Scene;
+  requestOutline?: SceneOutline;
+  requestStoredOutline?: SceneOutline;
 }
 
 export interface RegenerateApplyPlan {
@@ -88,9 +109,12 @@ export interface RegenerateApplyPlan {
     actionsOnly?: boolean;
     /** Scoped before/after board steps for undo that preserves later outside edits. */
     whiteboardPatch?: WhiteboardPatch;
+    sceneRange?: SceneRangeTransaction;
   } | null;
   /** Partial scene update to apply, or null if nothing should change. */
   patch: ScenePatch | null;
+  /** Replaces the original page and inserts its siblings in one store update. */
+  sceneRange?: SceneRangeTransaction;
   /** Human-readable refusal, including a concurrently edited target board. */
   error?: string;
 }
@@ -107,6 +131,7 @@ export function planRegenerateApply(
   details: RegenerateDetails,
   scene: Pick<Scene, 'content' | 'actions'> | null,
   toolName?: string,
+  context?: RegenerateApplyContext,
 ): RegenerateApplyPlan {
   const { sceneId } = details;
   if (!sceneId) return { snapshot: null, patch: null };
@@ -134,6 +159,13 @@ export function planRegenerateApply(
   // Read tools and unknown tools must never be able to smuggle in scene edits.
   if (toolName !== undefined && !['regenerate_scene', 'regenerate_scene_actions', 'edit_interactive_html'].includes(toolName)) {
     return { snapshot: null, patch: null };
+  }
+
+  if (details.visualRedesign) {
+    if (toolName !== 'regenerate_scene') {
+      return { snapshot: null, patch: null, error: '只有指定页面重设计可以应用拆分页。' };
+    }
+    return planVisualRedesign(details, context);
   }
 
   if (toolName === 'regenerate_scene_actions' && details.narrationPatch) {
@@ -188,6 +220,19 @@ export function planRegenerateApply(
   const contentAllowed = toolName === undefined || toolName === 'regenerate_scene';
 
   if (contentAllowed && details.content && Array.isArray(details.content.elements)) {
+    if (details.content.continuationPages?.length) {
+      return {
+        snapshot: null, patch: null,
+        error: '拆页结果缺少独立讲稿和可恢复的教学计划，已保留当前页面。请重新进行图解重设计。',
+      };
+    }
+    if (scene?.content.type === 'slide' && hasProtectedTeachingVisualEdits(scene.content as SlideContent)) {
+      return {
+        snapshot: null,
+        patch: null,
+        error: '这页包含已锁定或手动修改的图解，已保留当前页面和讲稿。可直接编辑，或为其余构件换构图。',
+      };
+    }
     const sceneContent = scene?.content as
       | { type?: string; canvas?: Record<string, unknown> }
       | undefined;
@@ -214,4 +259,135 @@ export function planRegenerateApply(
     return { snapshot, patch: { actions } };
   }
   return { snapshot: null, patch: null };
+}
+
+function planVisualRedesign(
+  details: RegenerateDetails,
+  context?: RegenerateApplyContext,
+): RegenerateApplyPlan {
+  const fail = (error: string): RegenerateApplyPlan => ({ snapshot: null, patch: null, error });
+  const scene = context?.scenes.find((item) => item.id === details.sceneId);
+  const redesign = details.visualRedesign;
+  if (!scene || scene.content.type !== 'slide' || !redesign ||
+      !Array.isArray(redesign.pages) || !redesign.pages.length || redesign.pages.length > 3 ||
+      !redesign.before || !Array.isArray(redesign.before.actions)) {
+    return fail('图解重设计结果不完整，已保留当前页面。');
+  }
+  if (!context?.requestScene || scene.order !== context.requestScene.order || !sameSceneExceptOrder(scene, context.requestScene) ||
+      !isEqual(scene.content, redesign.before.content) ||
+      !isEqual(scene.actions ?? [], redesign.before.actions)) {
+    return fail('这页在 AI 重设计期间已被修改，已保留你的最新页面和讲稿。请重新提出编辑要求。');
+  }
+  if (hasProtectedTeachingVisualEdits(scene.content)) {
+    return fail('这页包含已锁定或手动修改的图解，已保留当前页面和讲稿。可直接编辑，或为其余构件换构图。');
+  }
+  const oldOutline = scene.outlineId
+    ? context.outlines.find((outline) => outline.id === scene.outlineId)
+    : undefined;
+  if ((oldOutline || context.requestStoredOutline) && (!oldOutline || !context.requestStoredOutline ||
+      !isEqual(oldOutline, { ...context.requestStoredOutline, order: oldOutline.order }))) {
+    return fail('这页的教学计划在 AI 重设计期间已被修改，已保留当前课程。');
+  }
+  const oldDuration = scene.targetDurationSec ?? context.requestOutline?.targetDurationSec ??
+    context.requestOutline?.estimatedDuration;
+  const pages = redesign.pages;
+  if (pages.some((page) => !page || typeof page !== 'object' || !page.outline || !page.content)) {
+    return fail('拆页结果不完整，已保留当前页面。');
+  }
+  if (pages.length > 1 && !(typeof oldDuration === 'number' && Number.isFinite(oldDuration) && oldDuration > 0)) {
+    return fail('原页缺少可核对的教学时长，无法安全拆页，已保留当前页面。');
+  }
+  const durationTotal = pages.reduce((sum, page) => sum + (page.outline?.targetDurationSec ?? page.outline?.estimatedDuration ?? 0), 0);
+  if (oldDuration !== undefined && (!Number.isFinite(durationTotal) || Math.abs(durationTotal - oldDuration) > 0.01)) {
+    return fail('拆页总时长与原页不一致，已保留当前页面和讲稿。');
+  }
+  const sourceOutlineId = scene.outlineId ?? context.requestOutline?.id ?? scene.id;
+  if (pages[0]?.outline?.id !== sourceOutlineId) {
+    return fail('重设计没有保留原页的教学计划身份，已保留当前页面。');
+  }
+  const pageIds = new Set<string>();
+  for (let index = 0; index < pages.length; index++) {
+    const page = pages[index];
+    const outline = page.outline;
+    const visual = page.content?.teachingVisual;
+    const duration = outline?.targetDurationSec ?? outline?.estimatedDuration;
+    if (!outline || !outline.id || outline.type !== 'slide' || !outline.title?.trim() ||
+        pageIds.has(outline.id) || !Array.isArray(page.content?.elements) || !page.content.elements.length ||
+        page.content.continuationPages?.length || visual?.scene?.designVersion !== 'teaching-visual-v2' ||
+        !Array.isArray(visual.scene.pages) || !visual.scene.pages.some((item) => item?.id === visual.pageId) ||
+        (pages.length > 1 && (outline.segmentIndex !== index + 1 || outline.segmentCount !== pages.length ||
+          !outline.segmentGroupId || outline.segmentGroupId !== pages[0].outline.segmentGroupId)) ||
+        (duration !== undefined && (!Number.isFinite(duration) || duration <= 0))) {
+      return fail('拆分页缺少完整图解、顺序或教学计划，已保留当前页面。');
+    }
+    pageIds.add(outline.id);
+    if (page.content.elements.some((element) => !element || typeof element.id !== 'string' || !element.id)) {
+      return fail('拆分页包含缺少身份的对象，已保留当前页面。');
+    }
+    const elementIds = new Set(page.content.elements.map((element) => element.id));
+    const actionIds = new Set<string>();
+    if (elementIds.size !== page.content.elements.length || !Array.isArray(page.actions) ||
+        !page.actions.some((action) => action?.type === 'speech' && typeof action.text === 'string' && action.text.trim()) ||
+        page.actions.some((action) => {
+          if (!validateAction(action).valid || !action.id || actionIds.has(action.id)) return true;
+          actionIds.add(action.id);
+          if (action.type === 'laser' || action.type === 'spotlight' || action.type === 'play_video') {
+            if (!elementIds.has(action.elementId)) return true;
+            if (action.type === 'laser' && action.waypoints?.some((waypoint) => !elementIds.has(waypoint.elementId))) return true;
+          }
+          return false;
+        })) {
+      return fail('拆分页缺少独立有效讲稿或播放目标，已保留当前页面和音频。');
+    }
+    if (page.actions.some((action) => (action.type === 'laser' || action.type === 'spotlight') &&
+      action.speechId && !page.actions.some((speech) => speech.type === 'speech' && speech.id === action.speechId))) {
+      return fail('拆分页的讲稿指向失效，已保留当前页面。');
+    }
+  }
+  const now = Date.now();
+  const sourceCanvas = scene.content.canvas;
+  const afterScenes = pages.map((page, index) => {
+    const outline = page.outline;
+    const id = index === 0 ? scene.id : nanoid();
+    const metadata: Record<string, unknown> = {
+      timingPlan: outline.timingPlan,
+      teachingToolPlan: outline.teachingToolPlan,
+      segmentIndex: outline.segmentIndex,
+      segmentCount: outline.segmentCount,
+      segmentRole: outline.segmentRole,
+      segmentGroupId: outline.segmentGroupId,
+    };
+    for (const key of ['stageKey', 'stageLabel', 'audience', 'generationPurpose', 'companionIds',
+      'companionPrompt', 'activityId', 'parentActivityId', 'lectureSectionId', 'lectureSectionTitle',
+      'detailKind', 'knowledgePointIds', 'teachingUnitIds', 'assessmentUnitIds', 'ttsPolicy',
+      'resourceTypes', 'narrationMode'] as const) {
+      if (outline[key] !== undefined) metadata[key] = outline[key];
+    }
+    const actions = page.actions.map((action): Action => {
+      if (action.type !== 'speech') return { ...action };
+      const next = { ...action, audioInvalidated: true };
+      delete next.audioId;
+      delete next.audioUrl;
+      delete next.audioDurationSec;
+      delete next.speechAlignment;
+      return next;
+    });
+    const existingCanvas = { ...sourceCanvas, ...(index > 0 ? { id: nanoid() } : {}) };
+    return makeScene({
+      ...scene, ...metadata, id, outlineId: outline.id, title: outline.title,
+      order: scene.order + index,
+      targetDurationSec: outline.targetDurationSec ?? outline.estimatedDuration,
+      actions, whiteboards: undefined, narrationRevision: undefined,
+      createdAt: index === 0 ? scene.createdAt : now, updatedAt: now,
+    }, toRuntimeSlideContent(page.content, existingCanvas));
+  });
+  const sceneRange: SceneRangeTransaction = {
+    sceneId: scene.id, stageId: scene.stageId,
+    before: { scenes: [scene], outlines: oldOutline ? [oldOutline] : [] },
+    after: { scenes: afterScenes, outlines: pages.map((page, index) => ({ ...page.outline, order: scene.order + index })) },
+  };
+  return {
+    snapshot: { sceneId: scene.id, content: scene.content, actions: scene.actions ?? [], sceneRange },
+    patch: null, sceneRange,
+  };
 }
