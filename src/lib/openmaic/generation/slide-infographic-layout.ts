@@ -3,6 +3,11 @@ import { compileMeasuredDiagramComponent, DiagramAllocationError, measureDiagram
 import type { GeneratedSlideContent, SceneOutline } from '../types/generation';
 import { slideTypography } from './slide-presentation-typography';
 import { adoptedPageAuthoringContent, pagePresentationContent } from './adopted-page-content';
+import { SLIDE_VISUAL_LAYOUT_VERSION, slidePresentationLabel, unchangedSlideProjection } from './slide-visual-projection';
+import { layoutTeachingSequence } from './slide-process-layout';
+import { layoutAuthoredGroups, minimumReadableProseWidth } from './slide-authored-layout';
+import { layoutAuthoredRelations } from './slide-authored-relations';
+import { presentationRichText } from './slide-presentation-text';
 
 type Rect = { left: number; top: number; width: number; height: number };
 type ImageInput = { id: string; src: string; width: number; height: number; caption?: string };
@@ -13,20 +18,9 @@ const LEFT = 50, WIDTH = 900, BOTTOM = 512.5, GAP = 22;
 const FONT = 'Noto Sans SC';
 const escape = (text: string) => text.replace(/&/gu, '&amp;').replace(/</gu, '&lt;').replace(/>/gu, '&gt;').replace(/"/gu, '&quot;').replace(/\n/gu, '<br>');
 
-function marked(text: string, emphasis: readonly string[] = []): string {
-  const terms = [...new Set(emphasis.filter((term) => term && text.includes(term)))].sort((a, b) => b.length - a.length);
-  let result = '', cursor = 0;
-  while (cursor < text.length) {
-    const term = terms.find((term) => text.startsWith(term, cursor));
-    if (term) { result += `<strong style="color:${PALETTE.title}">${escape(term)}</strong>`; cursor += term.length; }
-    else { result += escape(text[cursor]!); cursor += 1; }
-  }
-  return result;
-}
-
 async function textElement(id: string, text: string, rect: Pick<Rect, 'left' | 'top' | 'width'>, fontSize: number,
-  measure: TextMeasure, options: { bold?: boolean; color?: string; emphasis?: string[]; table?: boolean; label?: string } = {}): Promise<PPTTextElement> {
-  const content = `<p style="font-size:${fontSize}px;font-weight:${options.bold ? 700 : 400};color:${options.color ?? PALETTE.text}">${options.label ? `<strong style="font-size:${Math.max(20, fontSize)}px;color:${PALETTE.title}">${escape(options.label)}：</strong>` : ''}${marked(text, options.emphasis)}</p>`;
+  measure: TextMeasure, options: { bold?: boolean; color?: string; emphasis?: string[]; emphasisStyle?: SlidePresentationItem['emphasisStyle']; table?: boolean; label?: string } = {}): Promise<PPTTextElement> {
+  const content = `<p style="font-size:${fontSize}px;font-weight:${options.bold ? 700 : 400};color:${options.color ?? PALETTE.text};text-wrap:pretty">${options.label ? `<strong style="font-size:${fontSize}px;color:${options.color ?? PALETTE.text}">${escape(options.label)}：</strong>` : ''}${presentationRichText(text, options.emphasis, options.emphasisStyle, options.color ?? PALETTE.text, Math.min(12, Math.floor((rect.width - (options.table ? 24 : 20)) / fontSize)))}</p>`;
   const measured = await measure({ html: content, text: options.label ? `${options.label}：${text}` : text, width: rect.width, fontSize, fontWeight: options.bold ? 700 : 400,
     fontFamily: FONT, padding: options.table ? 0 : 10, lineHeight: options.table ? 1 : 1.5, paragraphSpace: options.table ? 0 : 5,
     align: 'left', preserveRichText: true, ...(options.table ? { tableCell: true, paddingCss: '10px 12px' } : {}) });
@@ -92,15 +86,16 @@ async function comparison(items: SlidePresentationItem[], top: number, font: num
     const cells: TableCell[] = [], heights: number[] = [];
     for (let columnIndex = 0; columnIndex <= columns.length; columnIndex += 1) {
       const item = rowIndex && columnIndex ? items.find((candidate) => candidate.row === rows[rowIndex - 1] && candidate.column === columns[columnIndex - 1])! : undefined;
-      const value = item ? `${item.label ? `${item.label}：` : ''}${item.text}` : rowIndex ? rows[rowIndex - 1]! : columnIndex ? columns[columnIndex - 1]! : '比较维度';
+      const value = item ? `${item.label ? `${item.label}\n` : ''}${item.text}` : rowIndex ? rows[rowIndex - 1]! : columnIndex ? columns[columnIndex - 1]! : '比较维度';
       const id = item?.id ?? `infographic-table-heading-${rowIndex}-${columnIndex}`;
       const header = rowIndex === 0 || columnIndex === 0;
+      const color = rowIndex === 0 ? PALETTE.title : PALETTE.text;
       const element = await textElement(id, value, { left: 0, top: 0, width: widths[columnIndex]! - 2 }, font, measure,
-        { table: true, bold: header, color: PALETTE.text, emphasis: item?.emphasis });
+        { table: true, bold: header, color, emphasis: item?.emphasis, emphasisStyle: item?.emphasisStyle });
       heights.push(element.height + 4);
       cells.push({ id, text: element.content, rowspan: 1, colspan: 1, padding: '10px 12px', vAlign: 'middle',
-        style: { fontname: FONT, fontsize: `${font}px`, color: PALETTE.text, bold: header,
-          backcolor: rowIndex === 0 ? PALETTE.pale : columnIndex === 0 ? '#F1F5F9' : '#FFFFFF' } });
+        style: { fontname: FONT, fontsize: `${font}px`, color, bold: header,
+          backcolor: rowIndex === 0 ? PALETTE.pale : '#FFFFFF' } });
       if (item) addMapping(mapping, item.sourceContentIds, ['infographic-comparison']);
     }
     data.push(cells); rowHeights.push(Math.max(44, ...heights));
@@ -113,28 +108,40 @@ async function comparison(items: SlidePresentationItem[], top: number, font: num
 }
 
 async function contentBlocks(items: SlidePresentationItem[], columns: number, top: number, font: number, measure: TextMeasure,
-  links: SlidePresentationProjection['links'], region = { left: LEFT, width: WIDTH }, compact = false): Promise<Block | null> {
-  const gap = links?.length ? 72 : GAP;
+  links: SlidePresentationProjection['links'], region = { left: LEFT, width: WIDTH }, compact = false, editorial = false): Promise<Block | null> {
+  let gap = links?.length ? 72 : GAP;
+  if (columns > 1) for (const link of links ?? []) if (link.label) {
+    const geometry = await measure({ html: `<p style="font-size:${Math.max(20, font)}px">${escape(link.label)}</p>`,
+      text: link.label, width: 260, fontSize: Math.max(20, font), fontWeight: 400, fontFamily: FONT,
+      padding: 10, lineHeight: 1.5, paragraphSpace: 5, align: 'left', preserveRichText: true });
+    if (!Number.isFinite(geometry.naturalWidth) || !Number.isFinite(geometry.height) || geometry.height <= 0) throw new Error('Relation label measurement returned invalid geometry');
+    gap = Math.max(gap, Math.min(260, Math.max(180, geometry.naturalWidth + 20)) + 16);
+  }
   const width = (region.width - (columns - 1) * gap) / columns;
-  if (width < 140) return null;
+  if (width < 140 || items.some((item) => width - 8 < minimumReadableProseWidth(item.text, font))) return null;
   const elements: PPTElement[] = [], boxes = new Map<string, Rect>(), mapping: Record<string, string[]> = {};
   let rowTop = top;
   for (let start = 0; start < items.length; start += columns) {
     const heights: number[] = [];
     for (const [column, item] of items.slice(start, start + columns).entries()) {
       const left = region.left + column * (width + gap), children: PPTElement[] = [];
+      const relationSink = editorial && Boolean(links?.length) && !links!.some((link) => link.from === item.id);
       let textTop = rowTop;
       if (item.label && !compact) {
-        const label = await textElement(`${item.id}-heading`, item.label, { left: left + 8, top: textTop, width: width - 8 }, Math.max(20, font), measure, { bold: true, color: PALETTE.title });
+        const label = await textElement(`${item.id}-heading`, item.label, { left: left + 8, top: textTop, width: width - 8 }, Math.max(20, font), measure, { bold: true });
         children.push(label); textTop += label.height + 2;
       }
-      const body = await textElement(item.id, item.text, { left: left + 8, top: textTop, width: width - 8 }, font, measure, { emphasis: item.emphasis, ...(compact ? { label: item.label } : {}) });
+      const body = await textElement(item.id, item.text, { left: left + 8, top: textTop, width: width - 8 }, font, measure, { emphasis: item.emphasis, emphasisStyle: item.emphasisStyle, ...(compact ? { label: item.label } : {}) });
       children.push(body);
       const height = body.top + body.height - rowTop;
-      const rule = surface(`${item.id}-rule`, { left, top: rowTop + 11, width: 3, height: Math.min(28, height - 11) }, PALETTE.title);
-      elements.push(rule, ...children);
+      // Open editorial groups use their real labels and whitespace. Only a
+      // relation node gets a surface; a repeated decorative rule adds no meaning.
+      const decoration = editorial ? links?.length
+        ? [surface(`${item.id}-surface`, { left, top: rowTop, width, height }, relationSink ? '#EDF8F5' : '#EFF6FF')] : []
+        : [surface(`${item.id}-rule`, { left, top: rowTop + 11, width: 3, height: Math.min(28, height - 11) }, PALETTE.title)];
+      elements.push(...decoration, ...children);
       boxes.set(item.id, { left, top: rowTop, width, height });
-      addMapping(mapping, item.sourceContentIds, [rule.id, ...children.map((child) => child.id)]);
+      addMapping(mapping, item.sourceContentIds, [...decoration.map((element) => element.id), ...children.map((child) => child.id)]);
       heights.push(height);
     }
     rowTop += Math.max(...heights) + gap;
@@ -165,21 +172,35 @@ async function contentBlocks(items: SlidePresentationItem[], columns: number, to
     if (link.label) {
       const horizontal = start[1] === end[1];
       const labelWidth = horizontal ? corridor.width : Math.min(width / 2 - 15, 180);
-      if (labelWidth < 40) return null;
+      if (labelWidth < (link.label.length > 4 ? 140 : 60)) return null;
       const label = await textElement(`${line.id}-label`, link.label, { left: horizontal ? corridor.left : start[0] + 8,
-        top: horizontal ? start[1] - 42 : corridor.top, width: labelWidth }, font, measure, { color: PALETTE.muted });
-      if ((horizontal && label.height > 40) || (!horizontal && label.height > corridor.height)
+        top: horizontal ? start[1] : corridor.top, width: labelWidth }, Math.max(20, font), measure, { color: PALETTE.muted });
+      if (horizontal) label.top = start[1] - label.height - 6;
+      if ((!horizontal && label.height > corridor.height)
         || [...boxes.values()].some((box) => intersect(label, box))) return null;
       elements.push(label);
       addMapping(mapping, linkedSources, [label.id]);
     }
   }
-  return { elements, height: items.length ? rowTop - gap - top : 0, boxes, mapping };
+  let height = items.length ? rowTop - gap - top : 0;
+  const rectangles = elements.filter((element) => element.type !== 'line');
+  if (rectangles.length) {
+    const first = Math.min(top, ...rectangles.map((element) => element.top));
+    const last = Math.max(top + height, ...rectangles.map((element) => element.top + element.height));
+    if (first < top) {
+      for (const element of elements) element.top += top - first;
+      for (const box of boxes.values()) box.top += top - first;
+    }
+    height = last - first;
+  }
+  return { elements, height, boxes, mapping };
 }
 
 function matchingNodeLabel(item: SlidePresentationItem, labels: readonly string[]): string | undefined {
   if (!item.label) return undefined;
-  const matches = labels.filter((label) => item.label === label || item.label!.startsWith(`${label}·`) || item.label!.startsWith(`${label}：`));
+  const normalize = (value: string) => value.replace(/^\s*\d+[.、．\s]*/u, '').trim();
+  const matches = labels.filter((label) => normalize(item.label!) === normalize(label)
+    || item.label!.startsWith(`${label}·`) || item.label!.startsWith(`${label}：`));
   return matches.length === 1 ? matches[0] : undefined;
 }
 
@@ -207,7 +228,7 @@ async function nodeExplanations(items: SlidePresentationItem[], nodes: PPTShapeE
     for (const item of group.members) {
       const detail = item.label === group.label ? undefined : item.label!.slice(group.label.length + 1);
       const text = await textElement(item.id, item.text, { left, top: cursor, width: right - left }, font, measure,
-        { emphasis: item.emphasis, label: detail });
+        { emphasis: item.emphasis, emphasisStyle: item.emphasisStyle, label: detail });
       if ([...boxes.values()].some((box) => intersect(text, box))) return null;
       elements.push(text); boxes.set(item.id, text); cursor += text.height + 2;
       addMapping(mapping, item.sourceContentIds, [group.node.id, text.id]);
@@ -260,13 +281,25 @@ async function imageBand(images: ImageInput[], top: number, available: number, f
 }
 
 async function composedContent(items: SlidePresentationItem[], columns: number, top: number, font: number, measure: TextMeasure,
-  links: SlidePresentationProjection['links'], region: { left: number; width: number }, compact: boolean): Promise<Block | null> {
+  links: SlidePresentationProjection['links'], region: { left: number; width: number }, compact: boolean, editorial = false): Promise<Block | null> {
   if (items.some((item) => Boolean(item.row) !== Boolean(item.column))) return null;
   const cells = items.filter((item) => item.row && item.column), ordinary = items.filter((item) => !item.row && !item.column);
   // A table describes comparisons, not the directed links between narrative
   // statements. Keep every declared link in a region that can actually draw it.
   if (links?.some((link) => !ordinary.some((item) => item.id === link.from) || !ordinary.some((item) => item.id === link.to))) return null;
-  const prose = await contentBlocks(ordinary, columns, top, font, measure, links, region, compact || cells.length > 0);
+  if (editorial && cells.length) {
+    const table = await comparison(cells, top, font, measure, region);
+    if (!table) return null;
+    const notes = await contentBlocks(ordinary, columns, top + table.height + GAP, font, measure, links, region, true, true);
+    if (!notes) return null;
+    const mapping = { ...table.mapping };
+    for (const [source, ids] of Object.entries(notes.mapping)) addMapping(mapping, [source], ids);
+    const band = notes.height ? [surface('infographic-comparison-conclusion',
+      { left: region.left, top: top + table.height + GAP, width: region.width, height: notes.height }, '#FFF7ED')] : [];
+    return { elements: [...table.elements, ...band, ...notes.elements], mapping, boxes: notes.boxes,
+      height: table.height + (notes.height ? GAP + notes.height : 0) };
+  }
+  const prose = await contentBlocks(ordinary, columns, top, font, measure, links, region, compact || cells.length > 0, editorial);
   if (!prose) return null;
   if (!cells.length) return prose;
   const table = await comparison(cells, top + prose.height + (prose.height ? GAP : 0), font, measure, region);
@@ -277,17 +310,114 @@ async function composedContent(items: SlidePresentationItem[], columns: number, 
     height: prose.height + (prose.height ? GAP : 0) + table.height };
 }
 
+/** One authored focal idea with subordinate evidence, not an arbitrary first bullet. */
+async function focusContent(items: SlidePresentationItem[], focusId: string, top: number, font: number, measure: TextMeasure): Promise<Block | null> {
+  const focus = items.find((item) => item.id === focusId);
+  if (!focus || items.some((item) => item.row || item.column)) return null;
+  const body = await textElement(focus.id, focus.text, { left: LEFT + 14, top: top + 6, width: WIDTH - 28 }, font,
+    measure, { label: focus.label, emphasis: focus.emphasis, emphasisStyle: focus.emphasisStyle });
+  const height = body.height + 12;
+  const support = await contentBlocks(items.filter((item) => item !== focus), 2, top + height + GAP, font, measure,
+    [], { left: LEFT, width: WIDTH }, true, true);
+  if (!support) return null;
+  const mapping = { ...support.mapping };
+  addMapping(mapping, focus.sourceContentIds, [body.id]);
+  return { elements: [surface(`${focus.id}-surface`, { left: LEFT, top, width: WIDTH, height }, PALETTE.pale),
+    surface(`${focus.id}-rule`, { left: LEFT, top, width: 4, height }, PALETTE.title), body, ...support.elements],
+    mapping, boxes: support.boxes, height: height + (support.height ? GAP + support.height : 0) };
+}
+
+/** Keep an observed case and its explanation together, as in the adopted
+ * lecture references. The matrix uses the page's planned compact table font;
+ * every item and image is measured before deciding whether this page fits. */
+async function observationComparison(items: SlidePresentationItem[], takeawayId: string | undefined, top: number,
+  font: number, tableFont: number, images: ImageInput[], measure: TextMeasure): Promise<{ content: Block; images: Block } | null> {
+  const cells = items.filter((item) => item.row && item.column);
+  const observations = items.filter((item) => !item.row && !item.column && item.id !== takeawayId);
+  const conclusion = items.filter((item) => item.id === takeawayId && !cells.includes(item));
+  if (!cells.length || !observations.length || images.length !== 1
+    || cells.length + observations.length + conclusion.length !== items.length) return null;
+  const gap = 12, imageWidth = 320, textRegion = { left: LEFT + imageWidth + gap, width: WIDTH - imageWidth - gap };
+  const notes = await contentBlocks(observations, Math.min(2, observations.length), top, font, measure, [],
+    { left: LEFT, width: WIDTH }, true, true);
+  if (!notes) return null;
+  const middleTop = top + notes.height + gap;
+  const table = await comparison(cells, middleTop, tableFont, measure, textRegion);
+  const footer = await contentBlocks(conclusion, 1, middleTop, font, measure, [], { left: LEFT, width: WIDTH }, true, true);
+  if (!table || !footer) return null;
+  const available = BOTTOM - middleTop - (footer.height ? gap + footer.height : 0);
+  if (table.height > available) return null;
+  const pictures = await imageBand(images, middleTop, available, font, measure, { left: LEFT, width: imageWidth });
+  const picture = pictures?.elements.find((element) => element.type === 'image');
+  if (!pictures || !picture || picture.width < 280 || picture.height < 180) return null;
+  const footerTop = middleTop + available + gap;
+  const mapping = { ...notes.mapping };
+  for (const block of [table, footer]) for (const [source, ids] of Object.entries(block.mapping)) addMapping(mapping, [source], ids);
+  return { content: { elements: [...notes.elements, ...table.elements,
+    ...(footer.height ? [surface('infographic-comparison-conclusion', { left: LEFT, top: footerTop, width: WIDTH, height: footer.height }, '#FFF7ED'),
+      ...moveBlock(footer, footerTop - middleTop).elements] : [])], mapping, boxes: new Map(), height: BOTTOM - top }, images: pictures };
+}
+
 /** Compiles wording accepted by the host source contract. A capacity miss returns null; real measurement failures propagate. */
 export async function compileSlideInfographic(outline: SceneOutline, projection: SlidePresentationProjection, options: Options): Promise<GeneratedSlideContent | null> {
-  if (!projection.verified || projection.schemaVersion !== 1 || projection.layoutVersion !== 'teaching-infographic-v1' || !projection.items.length
+  if (!projection.verified || projection.schemaVersion !== 1 || !['teaching-infographic-v1', SLIDE_VISUAL_LAYOUT_VERSION].includes(projection.layoutVersion) || !projection.items.length
     || projection.items.some((item) => !item.id || !item.text.trim() || !item.sourceContentIds.length)
     || new Set(projection.items.map((item) => item.id)).size !== projection.items.length) return null;
+  projection = { ...projection, items: projection.items.map((item) => ({ ...item, label: slidePresentationLabel(item.label) })) };
   const font = slideTypography(outline).bodyFontSize;
   const title = await textElement('infographic-title', outline.title, { left: LEFT, top: 50, width: WIDTH }, 32, options.measure, { bold: true, color: PALETTE.title });
   const top = Math.max(126, title.top + title.height + 18);
   if (top >= BOTTOM) return null;
   const originalDiagram = outline.visualIntent?.diagram;
   const linkedIds = new Set(projection.links?.flatMap((link) => [link.from, link.to]) ?? []);
+  const designed = projection.layoutVersion === SLIDE_VISUAL_LAYOUT_VERSION;
+  // Bind labels and explanations before allocating the graph. Allocating a
+  // separate naked graph first is what forced readable six-step pages into the
+  // old duplicated text/grid fallback.
+  if (designed && originalDiagram && !options.images?.length) {
+    const labels = originalDiagram.nodes.map((node) => node.label);
+    const steps = projection.items.filter((item) => !linkedIds.has(item.id) && !item.row && !item.column
+      && (item.diagramNodeId || matchingNodeLabel(item, labels)));
+    const notes = projection.items.filter((item) => !steps.includes(item));
+    const annotationCovered = !originalDiagram.annotation || notes.some((item) => item.sourceContentIds.includes('diagram-annotation'))
+      || steps.some((item) => item.sourceContentIds.includes('diagram-annotation'));
+    if (annotationCovered) {
+      // A long sequence with only a few observations is a reading spine with
+      // a wide explanation area. It does not need a folded, zigzag grid.
+      if (originalDiagram.nodes.length >= 5 && steps.length <= 2 && !projection.links?.length) {
+        const processWidth = 420, noteLeft = LEFT + processWidth + GAP;
+        const process = await layoutTeachingSequence({ diagram: originalDiagram, items: [], font, measure: options.measure,
+          rect: { left: LEFT, top, width: processWidth, height: BOTTOM - top } });
+        const note = await composedContent(projection.items, 1, top, font, options.measure, [],
+          { left: noteLeft, width: WIDTH - processWidth - GAP }, true, true);
+        if (process && note && note.height <= BOTTOM - top) {
+          const mapping = { ...note.mapping, ...process.mapping };
+          for (const item of steps) addMapping(mapping, item.sourceContentIds, [`infographic-diagram-node-${item.diagramNodeId
+            ?? originalDiagram.nodes.find((node) => matchingNodeLabel(item, [node.label]))?.id}`]);
+          const noteOffset = (BOTTOM - top - note.height) / 2;
+          const processOffset = (BOTTOM - top - process.height) / 2;
+          return withSemanticTargetAliases(outline, { elements: [title,
+            ...process.elements.map((element) => ({ ...element, top: element.top + processOffset })),
+            ...note.elements.map((element) => ({ ...element, top: element.top + noteOffset }))],
+            background: { type: 'solid', color: '#FFFFFF' }, presentationProjection: { ...projection, elementIdsBySource: mapping } });
+        }
+      }
+      const note = await composedContent(notes, Math.min(2, Math.max(1, notes.length)), top, font, options.measure,
+        projection.links, { left: LEFT, width: WIDTH }, true, true);
+      if (note) {
+        const processTop = top + note.height + (note.height ? GAP : 0);
+        const process = await layoutTeachingSequence({ diagram: originalDiagram, items: steps, font, measure: options.measure,
+          rect: { left: LEFT, top: processTop, width: WIDTH, height: BOTTOM - processTop } });
+        if (process && new Set([title, ...note.elements, ...process.elements].map((element) => element.id)).size
+          === 1 + note.elements.length + process.elements.length) {
+          const mapping = { ...note.mapping };
+          for (const [source, ids] of Object.entries(process.mapping)) addMapping(mapping, [source], ids);
+          return withSemanticTargetAliases(outline, { elements: [title, ...note.elements, ...process.elements],
+            background: { type: 'solid', color: '#FFFFFF' }, presentationProjection: { ...projection, elementIdsBySource: mapping } });
+        }
+      }
+    }
+  }
   const annotationItems = originalDiagram ? projection.items.filter((item) => !linkedIds.has(item.id) && item.sourceContentIds.every((source) => source === 'diagram-annotation')) : [];
   const items = projection.items.filter((item) => !annotationItems.includes(item));
   const sharedAnnotation = items.some((item) => item.sourceContentIds.includes('diagram-annotation'));
@@ -311,20 +441,53 @@ export async function compileSlideInfographic(outline: SceneOutline, projection:
   const diagramLabels = diagram?.nodes.map((node) => node.label) ?? [];
   const matching = diagram ? items.filter((item) => !linkedIds.has(item.id) && !item.row && !item.column
     && matchingNodeLabel(item, diagramLabels)) : [];
-  const remainingItems = items.filter((item) => !matching.includes(item));
+  const remainingItems = items.filter((item) => !matching.includes(item))
+    .sort((a, b) => Number(a.id === projection.takeawayItemId) - Number(b.id === projection.takeawayItemId));
+  let spatialFallback = false;
   const finish = (content: Block, graph: PPTElement[], explanations: Block | null, images?: Block | null): GeneratedSlideContent | null => {
     const mapping = { ...content.mapping };
     for (const [source, ids] of Object.entries(explanations?.mapping ?? {})) addMapping(mapping, [source], ids);
     if (diagram) {
       for (const node of diagram.nodes) addMapping(mapping, [`diagram-node:${node.id}`], [`infographic-diagram-node-${node.id}`]);
+      for (const item of projection.items) if (item.diagramNodeId && diagram.nodes.some((node) => node.id === item.diagramNodeId)) {
+        addMapping(mapping, item.sourceContentIds, [`infographic-diagram-node-${item.diagramNodeId}`]);
+      }
       const annotationId = annotationItems.length === 1 ? annotationItems[0]!.id : 'infographic-diagram-annotation';
       if (diagram.annotation) addMapping(mapping, ['diagram-annotation'], [annotationId]);
       for (const item of annotationItems) addMapping(mapping, item.sourceContentIds, [annotationId]);
     }
     for (const [source, ids] of Object.entries(images?.mapping ?? {})) addMapping(mapping, [source], ids);
-    const elements = [title, ...content.elements, ...graph, ...(explanations?.elements ?? []), ...(images?.elements ?? [])];
+    if (designed && images && !graph.length && !explanations && content.elements.length) {
+      const text = content.elements.filter((element) => element.type !== 'line');
+      const pictures = images.elements.filter((element) => element.type !== 'line');
+      const left = Math.min(...text.map((element) => element.left)), right = Math.max(...text.map((element) => element.left + element.width));
+      const imageLeft = Math.min(...pictures.map((element) => element.left)), imageRight = Math.max(...pictures.map((element) => element.left + element.width));
+      if (right <= imageLeft || left >= imageRight) {
+        const first = Math.min(...text.map((element) => element.top)), last = Math.max(...text.map((element) => element.top + element.height));
+        const imageTop = Math.min(...pictures.map((element) => element.top)), imageBottom = Math.max(...pictures.map((element) => element.top + element.height));
+        const offset = (imageTop + imageBottom - first - last) / 2;
+        if (first + offset >= top && last + offset <= BOTTOM) content = { ...content,
+          elements: content.elements.map((element) => ({ ...element, top: element.top + offset })) };
+      }
+    }
+    let body = [...content.elements, ...graph, ...(explanations?.elements ?? []), ...(images?.elements ?? [])];
+    if (designed && !images && body.length) {
+      const rectangles = body.filter((element) => element.type !== 'line');
+      if (rectangles.length) {
+        const first = Math.min(...rectangles.map((element) => element.top));
+        const last = Math.max(...rectangles.map((element) => element.top + element.height));
+        const spare = BOTTOM - top - (last - first);
+        if (spare >= 0) {
+          const offset = top + spare / 2 - first;
+          body = body.map((element) => ({ ...element, top: element.top + offset }));
+        }
+      }
+    }
+    const elements = [title, ...body];
     if (new Set(elements.map((element) => element.id)).size !== elements.length) return null;
-    return withSemanticTargetAliases(outline, { elements, background: { type: 'solid', color: '#FFFFFF' }, presentationProjection: { ...projection, elementIdsBySource: mapping } });
+    return withSemanticTargetAliases(outline, { elements, background: { type: 'solid', color: '#FFFFFF' },
+      ...(spatialFallback ? { qualityDiagnostics: ['Authored spatial arrangement did not fit; retained all display content in a measured alternative layout.'] } : {}),
+      presentationProjection: { ...projection, elementIdsBySource: mapping } });
   };
   if (diagram) {
     const graph = diagramRegion(diagramElements, top, diagramHeight);
@@ -361,6 +524,143 @@ export async function compileSlideInfographic(outline: SceneOutline, projection:
     return null;
   }
   const contentTop = top;
+  if (designed) {
+    if (projection.links?.length && !options.images?.length && !remainingItems.some((item) => item.row || item.column)) {
+      const linked = remainingItems.filter((item) => linkedIds.has(item.id));
+      const notes = remainingItems.filter((item) => !linkedIds.has(item.id));
+      // Let the relationship be the main visual. Unconnected observations are
+      // nearby supporting text, never extra nodes on an invented causal chain.
+      for (const columns of [...new Set([Math.min(3, Math.max(1, notes.length)), 1])]) {
+        const support = await contentBlocks(notes, columns, top, font, options.measure, [], { left: LEFT, width: WIDTH }, true, true);
+        if (!support) continue;
+        const available = BOTTOM - top - support.height - (notes.length ? GAP : 0);
+        let relation = await layoutAuthoredRelations({ items: linked, links: projection.links,
+          rect: { left: LEFT, top, width: WIDTH, height: available }, font, measure: options.measure });
+        if (!relation) {
+          for (const count of [...new Set([Math.min(3, linked.length), 1])]) {
+            const cards = await contentBlocks(linked, count, top, font, options.measure, projection.links, { left: LEFT, width: WIDTH }, false, true);
+            if (cards && cards.height <= available) { relation = cards; break; }
+          }
+        }
+        if (!relation) continue;
+        const moved = moveBlock(support, relation.height + (notes.length ? GAP : 0));
+        const mapping = { ...relation.mapping };
+        for (const [source, ids] of Object.entries(support.mapping)) addMapping(mapping, [source], ids);
+        const result = finish({ elements: [...relation.elements, ...moved.elements], height: relation.height + (notes.length ? GAP : 0) + support.height,
+          boxes: relation.boxes, mapping }, [], null);
+        if (result) return result;
+      }
+    }
+    if (options.images?.length && !projection.links?.length) {
+      const mixed = await observationComparison(remainingItems, projection.takeawayItemId, top, font,
+        slideTypography(outline).minimumBodyFontSize, options.images, options.measure);
+      if (mixed) {
+        const result = finish(mixed.content, [], null, mixed.images);
+        if (result) return result;
+      }
+    }
+    // Authored spatial groups are independent primitives, not named templates.
+    // Semantic graphs and comparison matrices keep their own complete structure.
+    if (projection.design && !projection.links?.length && !remainingItems.some((item) => item.row || item.column)) {
+      const design = projection.design, full = { left: LEFT, top, width: WIDTH, height: BOTTOM - top };
+      let textRect = full, mediaRect: Rect | undefined;
+      if (options.images?.length) {
+        const media = design.media ?? { placement: 'left', fraction: 0.55 };
+        const horizontal = media.placement === 'left' || media.placement === 'right';
+        if (horizontal) {
+          const width = (WIDTH - design.gap) * media.fraction;
+          mediaRect = { ...full, left: media.placement === 'left' ? LEFT : LEFT + WIDTH - width, width };
+          textRect = { ...full, left: media.placement === 'left' ? LEFT + width + design.gap : LEFT, width: WIDTH - width - design.gap };
+        } else {
+          const height = (full.height - design.gap) * media.fraction;
+          mediaRect = { ...full, top: media.placement === 'top' ? top : BOTTOM - height, height };
+          textRect = { ...full, top: media.placement === 'top' ? top + height + design.gap : top, height: full.height - height - design.gap };
+        }
+      }
+      let content = await layoutAuthoredGroups({ items: remainingItems, design, rect: textRect, font, measure: options.measure });
+      // A narrow media-side column can require vertical group flow. Preserve
+      // membership, treatments, words and the requested image placement.
+      if (!content && mediaRect && design.flow === 'rows') content = await layoutAuthoredGroups({ items: remainingItems,
+        design: { ...design, flow: 'columns' }, rect: textRect, font, measure: options.measure });
+      const images = options.images?.length && mediaRect ? await imageBand(options.images, mediaRect.top, mediaRect.height,
+        font, options.measure, mediaRect) : undefined;
+      if (content && (!options.images?.length || images)) {
+        const result = finish(content, [], null, images);
+        if (result) return result;
+      }
+      spatialFallback = true;
+    }
+    const candidates: Array<{ content: Block; images?: Block; score: number }> = [];
+    const focalId = projection.focusItemId ?? (remainingItems.length === 1 ? remainingItems[0]!.id : undefined);
+    if (!options.images?.length && !projection.links?.length && focalId) {
+      const content = await focusContent(remainingItems, focalId, top, font, options.measure);
+      if (content && top + content.height <= BOTTOM) candidates.push({ content, score: -100 });
+    }
+    // Every candidate uses the same text, fonts and actual media. The choice
+    // changes geometry only; it cannot discard a source to improve its score.
+    for (const columns of [1, 2, 3]) {
+      const content = await composedContent(remainingItems, columns, top, font, options.measure,
+        projection.links, { left: LEFT, width: WIDTH }, false, true);
+      if (!content || top + content.height > BOTTOM) continue;
+      const images = options.images?.length ? await imageBand(options.images, top + content.height + GAP,
+        BOTTOM - top - content.height - GAP, font, options.measure) : undefined;
+      if (options.images?.length && !images) continue;
+      const idealColumns = remainingItems.some((item) => item.row) ? 1 : remainingItems.length === 3 ? 3 : 2;
+      const occupied = content.height + (images ? images.height + GAP : 0);
+      candidates.push({ content, images: images ?? undefined, score: Math.abs(columns - idealColumns) * 20
+        + Math.abs(occupied / (BOTTOM - top) - 0.8) * 12 });
+    }
+    if (options.images?.length) {
+      // The planned visual is an observation surface, not a small afterthought.
+      // Try two actual allocations rather than privileging a fixed text column.
+      for (const imageWidth of [540, 460]) {
+        const content = await composedContent(remainingItems, 1, top, font, options.measure, projection.links,
+          { left: LEFT + imageWidth + GAP, width: WIDTH - imageWidth - GAP }, true, true);
+        if (!content || top + content.height > BOTTOM) continue;
+        const images = await imageBand(options.images, top, BOTTOM - top, font, options.measure,
+          { left: LEFT, width: imageWidth });
+        if (!images) continue;
+        const imageArea = images.elements.reduce((sum, element) => sum + (element.type === 'image' ? element.width * element.height : 0), 0);
+        candidates.push({ content, images, score: -20 - imageArea / (WIDTH * (BOTTOM - top)) * 20 });
+      }
+    }
+    candidates.sort((a, b) => a.score - b.score);
+    for (const candidate of candidates) {
+      const content = candidate.content;
+      const focusBox = candidate.images && projection.focusItemId ? content.boxes.get(projection.focusItemId) : undefined;
+      if (focusBox) content.elements = [surface('infographic-image-focus', focusBox, '#EFF6FF'), ...content.elements];
+      const result = finish(content, [], null, candidate.images);
+      if (result) return result;
+    }
+    // Observation images and a full comparison matrix are two visual subjects.
+    // Compile them as consecutive native pages when they cannot share readable
+    // space. The existing continuation contract owns their speech and timing.
+    const cells = remainingItems.filter((item) => item.row && item.column);
+    const observations = remainingItems.filter((item) => !item.row && !item.column && item.id !== projection.takeawayItemId);
+    const conclusion = remainingItems.filter((item) => item.id === projection.takeawayItemId && !cells.includes(item));
+    const imageSources = new Set(observations.flatMap((item) => item.sourceContentIds));
+    if (options.images?.length && cells.length && observations.length && !projection.links?.length
+      && [...cells, ...conclusion].every((item) => item.sourceContentIds.every((source) => !imageSources.has(source)))) {
+      const subset = (items: SlidePresentationItem[], composition: SlidePresentationProjection['composition']): SlidePresentationProjection => ({
+        ...projection, composition, design: undefined, items,
+        focusItemId: items.some((item) => item.id === projection.focusItemId) ? projection.focusItemId : undefined,
+        takeawayItemId: items.some((item) => item.id === projection.takeawayItemId) ? projection.takeawayItemId : undefined,
+      });
+      const observation = await compileSlideInfographic(outline, subset(observations, 'image-focus'), options);
+      const contrast = await compileSlideInfographic(outline, subset([...cells, ...conclusion], 'comparison'), { measure: options.measure });
+      if (observation && contrast && !observation.continuationPages?.length && !contrast.continuationPages?.length) {
+        const page = (content: GeneratedSlideContent): GeneratedSlideContent => ({ ...content,
+          sourceGroupIds: Object.keys(content.presentationProjection!.elementIdsBySource),
+          teachingText: content.presentationProjection!.items.map((item) => [item.row, item.column, item.label, item.text].filter(Boolean).join('　')),
+          occupiedHeight: Math.max(...content.elements.filter((element) => element.type !== 'line').map((element) => element.top + element.height)) - top,
+          layoutDecision: 'paginated',
+          paginationVersion: 'balanced-v1',
+        });
+        return { ...page(observation), continuationPages: [page(contrast)], paginationVersion: 'balanced-v1' };
+      }
+    }
+    return null;
+  }
   const ordinaryCount = remainingItems.filter((item) => !item.row && !item.column).length;
   const initialColumns = ordinaryCount === 3 ? 3 : ordinaryCount <= 1 ? 1 : 2;
   const columnCandidates = [...new Set([initialColumns, 1, 3])].slice(0, 3);
@@ -383,23 +683,36 @@ export async function compileSlideInfographic(outline: SceneOutline, projection:
 }
 
 
-/** Last resort for a new page with no saved draft. This keeps the complete
- * original source in editable elements; diagnostics never certify an overflow
- * as visible or feasible. No model call, summarization, resizing or pagination. */
-export async function compileOriginalSlideDraft(outline: SceneOutline, sourceContent: readonly { id: string; text: string }[], options: Options): Promise<GeneratedSlideContent> {
+/** Deterministic original-content layout. Pagination moves original text and
+ * whole diagrams; it never rewrites facts, drops topology or reduces fonts. */
+export async function compileOriginalSlideDraft(outline: SceneOutline, sourceContent: readonly { id: string; text: string }[], options: Options,
+  acceptedProjection?: SlidePresentationProjection): Promise<GeneratedSlideContent> {
   if (sourceContent.some((item) => !item.id || !item.text.trim()) || new Set(sourceContent.map((item) => item.id)).size !== sourceContent.length) {
     throw new Error('Original slide source needs unique IDs and nonempty text');
   }
+  // Structural fallback may improve grouping, but never summarizes or deletes
+  // source words. Reuse the same measured compositions before paginating prose.
+  const originalProjection = acceptedProjection ?? { ...unchangedSlideProjection(sourceContent), verified: true };
+  const composed = await compileSlideInfographic(outline, originalProjection, options);
+  if (composed) return { ...composed, qualityDiagnostics: [] };
   const font = slideTypography(outline).bodyFontSize;
   const title = await textElement('original-title', outline.title, { left: LEFT, top: 50, width: WIDTH }, 32, options.measure, { bold: true, color: PALETTE.title });
   const top = title.top + title.height + 18;
   const original = outline.visualIntent?.diagram;
-  const annotation = original ? sourceContent.find((item) => item.id === 'diagram-annotation')?.text ?? original.annotation : undefined;
-  const points = sourceContent.filter((item) => !original || item.id !== 'diagram-annotation');
-  const items: SlidePresentationItem[] = points.map((item) => ({ ...item, sourceContentIds: [item.id] }));
-  const diagnostics: string[] = [];
-  let graph: { elements: PPTElement[]; height: number } = { elements: [], height: 0 };
-  if (original) {
+  // Prose can paginate under its verified source mapping. Tables and directed
+  // relations need their structured renderer, so never flatten them here.
+  const retainedProjection = acceptedProjection?.verified && !acceptedProjection.links?.length
+    && !acceptedProjection.items.some((item) => item.row || item.column) ? acceptedProjection : undefined;
+  const annotation = original && !retainedProjection ? sourceContent.find((item) => item.id === 'diagram-annotation')?.text ?? original.annotation : undefined;
+  const points: SlidePresentationItem[] = retainedProjection ? retainedProjection.items.map((item) => ({ ...item }))
+    : sourceContent.filter((item) => !original || item.id !== 'diagram-annotation')
+      .map((item) => ({ ...item, sourceContentIds: [item.id] }));
+  const displayed = (item: SlidePresentationItem) => [item.label, item.text].filter(Boolean).join('：');
+  const graphAt = async (graphTop: number, preserveOverflow = false): Promise<{ block: Block; diagnostics: string[] } | null> => {
+    if (!original || graphTop >= BOTTOM && !preserveOverflow) return null;
+    const note = annotation ? await textElement('original-diagram-annotation', annotation, { left: LEFT, top: graphTop, width: WIDTH }, font, options.measure) : undefined;
+    const nodeTop = graphTop + (note ? note.height + GAP : 0), available = BOTTOM - nodeTop;
+    if (available <= 0 && !preserveOverflow) return null;
     const groups = resolveDiagramSequenceGroups(original);
     const implicit = original.topology === 'branch' ? [] : groups
       ? groups.flatMap((group) => group.nodeIds.slice(0, -1).map((from, index) => ({ from, to: group.nodeIds[index + 1]! })))
@@ -407,86 +720,126 @@ export async function compileOriginalSlideDraft(outline: SceneOutline, sourceCon
     const edges = [...(original.edges ?? [])];
     for (const edge of implicit) if (!edges.some((existing) => existing.from === edge.from && existing.to === edge.to)) edges.push(edge);
     const plan = { ...original, edges, annotation: undefined, accentColor: PALETTE.title, nodeFill: PALETTE.pale, textColor: PALETTE.text };
-    let allocation = { width: WIDTH, height: 260 }, elements: PPTElement[];
+    let elements: PPTElement[], height = preserveOverflow ? Math.max(260, available) : available;
+    const diagnostics: string[] = [];
     try {
-      const allocations = await measureDiagramAllocations(plan, options.measure, { left: LEFT, top: 50, maxWidth: WIDTH, maxHeight: 462.5 });
-      allocation = allocations.find((item) => item.width === WIDTH) ?? allocations[0]!;
-      elements = await compileMeasuredDiagramComponent({ ...plan, type: 'diagram', id: 'original-diagram', left: LEFT, top: 50, ...allocation }, options.measure);
+      if (preserveOverflow) throw new DiagramAllocationError('Original diagram has no measured readable allocation; complete editable source retained');
+      const allocations = await measureDiagramAllocations(plan, options.measure, { left: LEFT, top: nodeTop, maxWidth: WIDTH, maxHeight: available });
+      const allocation = allocations.find((item) => item.width === WIDTH) ?? allocations[0]!;
+      height = allocation.height;
+      elements = await compileMeasuredDiagramComponent({ ...plan, type: 'diagram', id: 'original-diagram', left: LEFT, top: nodeTop, ...allocation }, options.measure);
     } catch (error) {
       if (!(error instanceof DiagramAllocationError)) throw error;
-      diagnostics.push(error.message);
-      // The existing review fallback retains the full topology. Track measure
-      // errors separately because the package's diagnostic mode also catches
-      // arbitrary errors; infrastructure failure must still escape this host.
+      // The basic native grid is another deterministic layout, constrained to
+      // the same remaining rectangle and measured before it can be retained.
       let measurementError: unknown, measurementFailed = false;
       const measured: TextMeasure = async (input) => {
         try { return await options.measure(input); }
         catch (cause) { measurementFailed = true; measurementError = cause; throw cause; }
       };
-      elements = await compileMeasuredDiagramComponent({ ...plan, type: 'diagram', id: 'original-diagram', left: LEFT, top: 50, ...allocation }, measured,
+      elements = await compileMeasuredDiagramComponent({ ...plan, type: 'diagram', id: 'original-diagram', left: LEFT, top: nodeTop, width: WIDTH, height }, measured,
         { onDiagnostic: (detail) => diagnostics.push(detail) });
       if (measurementFailed) throw measurementError;
-      for (const element of elements) if (element.type === 'shape' && element.text) {
-        const node = original.nodes.find((node) => element.id === `original-diagram-node-${node.id}`)!;
-        const actual = await options.measure({ html: element.text.content, text: node.label, width: element.width, fontSize: 20, fontWeight: 700,
-          fontFamily: FONT, padding: 10, lineHeight: 1.25, paragraphSpace: 0, align: 'center', preserveRichText: true });
-        if (!Number.isFinite(actual.height) || actual.height <= 0) throw new Error('Original diagram text measurement returned invalid geometry');
-        if (actual.height > element.height + 0.5) diagnostics.push(`Original diagram node ${node.id}: text needs ${actual.height}px; node provides ${element.height}px`);
-      }
-      for (const element of elements) if (element.type === 'text') {
-        const actual = await options.measure({ html: element.content, text: element.content.replace(/<[^>]+>/gu, ''), width: element.width,
-          fontSize: Number(element.content.match(/font-size:(\d+)px/u)?.[1] ?? 16), fontWeight: 400,
-          fontFamily: FONT, padding: 10, lineHeight: element.lineHeight ?? 1.2, paragraphSpace: element.paragraphSpace ?? 0, align: 'center', preserveRichText: true });
-        if (!Number.isFinite(actual.height) || actual.height <= 0) throw new Error('Original diagram label measurement returned invalid geometry');
-        if (actual.height > element.height + 0.5) diagnostics.push(`Original diagram label ${element.id}: text needs ${actual.height}px; allocation provides ${element.height}px`);
-      }
-    }
-    graph = { elements, height: allocation.height };
-    if (annotation) {
-      const note = await textElement('original-diagram-annotation', annotation, { left: LEFT, top: 50, width: WIDTH }, font, options.measure);
-      graph = { elements: [note, ...moveBlock(graph, note.height + GAP).elements], height: note.height + GAP + graph.height };
-    }
-  }
-  if (!items.length && !graph.elements.length && !options.images?.length) throw new Error('Original slide has no renderable source content');
-  let best: { elements: PPTElement[]; mapping: Record<string, string[]>; bottom: number; diagnostics: string[] } | undefined;
-  for (const columns of [1, 2, 3]) {
-    const content = await contentBlocks(items, columns, top, font, options.measure, []);
-    if (!content) continue;
-    const graphTop = top + content.height + (content.height && graph.height ? GAP : 0);
-    const placed = moveBlock(graph, graphTop - 50);
-    const elements = [title, ...content.elements, ...placed.elements], mapping = { ...content.mapping }, localDiagnostics = [...diagnostics];
-    let bottom = graphTop + graph.height;
-    if (original) {
-      for (const node of original.nodes) addMapping(mapping, [`diagram-node:${node.id}`], [`original-diagram-node-${node.id}`]);
-      if (annotation) addMapping(mapping, ['diagram-annotation'], ['original-diagram-annotation']);
-    }
-    const images = options.images ?? [], imageColumns = Math.min(columns, images.length);
-    const width = imageColumns ? (WIDTH - GAP * (imageColumns - 1)) / imageColumns : 0;
-    for (let start = 0; start < images.length; start += imageColumns) {
-      const imageTop = bottom + GAP, heights: number[] = [];
-      for (const [column, input] of images.slice(start, start + imageColumns).entries()) {
-        if (!input.src || !Number.isFinite(input.width) || !Number.isFinite(input.height) || input.width <= 0 || input.height <= 0) throw new Error(`Original image ${input.id} has invalid dimensions or source`);
-        const left = LEFT + column * (width + GAP), scale = Math.min(width / input.width, 220 / input.height);
-        const image: PPTImageElement = { type: 'image', id: input.id, src: input.src, left: left + (width - input.width * scale) / 2,
-          top: imageTop, width: input.width * scale, height: input.height * scale, rotate: 0, fixedRatio: true };
-        elements.push(image);
-        let height = image.height;
-        const ids = [image.id];
-        if (input.caption) {
-          const caption = await textElement(`${input.id}-caption`, input.caption, { left, top: imageTop + height + 6, width }, font, options.measure);
-          elements.push(caption); ids.push(caption.id); height += caption.height + 6;
+      for (const element of elements) {
+        if (element.type === 'shape' && element.text || element.type === 'text') {
+          const html = element.type === 'shape' ? element.text!.content : element.content;
+          const label = original.nodes.find((node) => element.id === `original-diagram-node-${node.id}`)?.label ?? html.replace(/<[^>]+>/gu, '');
+          const actual = await options.measure({ html, text: label, width: element.width,
+            fontSize: element.type === 'shape' ? 20 : Number(html.match(/font-size:(\d+)px/u)?.[1] ?? 16),
+            fontWeight: element.type === 'shape' ? 700 : 400, fontFamily: FONT, padding: 10,
+            lineHeight: element.type === 'shape' ? 1.25 : element.lineHeight ?? 1.2, paragraphSpace: 0, align: 'center', preserveRichText: true });
+          if (!Number.isFinite(actual.height) || actual.height <= 0) throw new Error('Original diagram text measurement returned invalid geometry');
+          if (actual.height > element.height + 0.5) {
+            if (!preserveOverflow) return null;
+            diagnostics.push(`Original diagram ${element.id}: text needs ${actual.height}px; available height ${element.height}px; complete source retained`);
+          }
         }
-        if (image.width < 120 || image.height < 100) localDiagnostics.push(`Original image ${input.id}: contained size ${image.width}×${image.height}px is below the 120×100px reading allocation`);
-        addMapping(mapping, [input.id, `image:${input.id}`], ids); heights.push(height);
+        if (!preserveOverflow && element.type !== 'line' && (element.top < nodeTop - 0.5 || element.top + element.height > BOTTOM + 0.5)) return null;
       }
-      bottom = imageTop + Math.max(...heights);
     }
-    if (!best || bottom < best.bottom) best = { elements, mapping, bottom, diagnostics: localDiagnostics };
+    const mapping: Record<string, string[]> = {};
+    for (const node of original.nodes) addMapping(mapping, [`diagram-node:${node.id}`], [`original-diagram-node-${node.id}`]);
+    if (note) addMapping(mapping, ['diagram-annotation'], [note.id]);
+    return { block: { elements: [...(note ? [note] : []), ...elements], height: nodeTop - graphTop + height, boxes: new Map(), mapping }, diagnostics };
+  };
+  type Page = { elements: PPTElement[]; mapping: Record<string, string[]>; items: SlidePresentationItem[]; text: string[]; bottom: number; diagnostics: string[] };
+  const emptyPage = (): Page => ({ elements: [title], mapping: {}, items: [], text: [], bottom: top, diagnostics: top >= BOTTOM ? ['Original slide heading leaves no measured body space; complete editable source retained'] : [] });
+  const append = (page: Page, block: Block) => {
+    page.elements.push(...block.elements);
+    for (const [id, targets] of Object.entries(block.mapping)) addMapping(page.mapping, [id], targets);
+  };
+  const bestContent = async (items: SlidePresentationItem[], at: number): Promise<Block | undefined> => {
+    let best: Block | undefined;
+    for (const columns of [1, 2, 3]) {
+      const candidate = await contentBlocks(items, columns, at, font, options.measure, []);
+      if (candidate && at + candidate.height <= BOTTOM && (!best || candidate.height < best.height)) best = candidate;
+    }
+    return best;
+  };
+  const pages: Page[] = [], pending = [...points];
+  // Pack whole display items first. Only an item larger than an entire page is
+  // split, by measured character spans, retaining every original character.
+  while (pending.length) {
+    let count = pending.length, content: Block | undefined;
+    while (count > 0 && !(content = await bestContent(pending.slice(0, count), top))) count -= 1;
+    if (!content) {
+      const item = pending.shift()!, chars = [...item.text];
+      let lo = 0, hi = chars.length;
+      while (lo < hi) {
+        const mid = Math.ceil((lo + hi) / 2);
+        const candidate = await contentBlocks([{ ...item, text: chars.slice(0, mid).join('') }], 1, top, font, options.measure, []);
+        if (candidate && top + candidate.height <= BOTTOM) lo = mid; else hi = mid - 1;
+      }
+      if (!lo) {
+        const page = emptyPage(), full = (await contentBlocks([item], 1, top, font, options.measure, []))!;
+        append(page, full); page.items = [item]; page.text = [displayed(item)]; page.bottom = top + full.height;
+        page.diagnostics.push('Original text has no measured readable allocation; complete editable source retained'); pages.push(page); continue;
+      }
+      const first = { ...item, text: chars.slice(0, lo).join('') };
+      pending.unshift({ ...item, text: chars.slice(lo).join(''), id: `${item.id}-continued` });
+      const page = emptyPage();
+      content = (await contentBlocks([first], 1, top, font, options.measure, []))!;
+      append(page, content); page.items = [first]; page.text = [displayed(first)]; page.bottom = top + content.height; pages.push(page);
+      continue;
+    }
+    const page = emptyPage(), adopted = pending.splice(0, count);
+    append(page, content); page.items = adopted; page.text = adopted.map(displayed); page.bottom = top + content.height; pages.push(page);
   }
-  if (!best) throw new Error('Original source could not be compiled into editable elements');
-  if (new Set(best.elements.map((element) => element.id)).size !== best.elements.length) throw new Error('Original source produces conflicting element IDs');
-  if (best.bottom > BOTTOM) best.diagnostics.push(`Original slide capacity: measured content reaches y=${best.bottom}px beyond the safe bottom ${BOTTOM}px; complete source retained without reducing fonts or changing page count`);
-  return withSemanticTargetAliases(outline, { elements: best.elements, background: { type: 'solid', color: '#FFFFFF' }, qualityDiagnostics: [...new Set(best.diagnostics)],
-    presentationProjection: { schemaVersion: 1, layoutVersion: 'teaching-infographic-v1', verified: true,
-      items: sourceContent.map((item) => ({ ...item, sourceContentIds: [item.id] })), elementIdsBySource: best.mapping } });
+  if (!pages.length) pages.push(emptyPage());
+  if (original) {
+    let page = pages[0]!, graphTop = page.bottom + (page.items.length ? GAP : 0);
+    let graph = pages.length === 1 ? await graphAt(graphTop) : null;
+    if (!graph && page.items.length) { page = emptyPage(); pages.unshift(page); graphTop = top; graph = await graphAt(graphTop); }
+    graph ??= await graphAt(graphTop, true);
+    if (!graph) throw new Error('Original diagram has no renderable nodes');
+    append(page, graph.block); page.bottom = graphTop + graph.block.height; page.diagnostics.push(...graph.diagnostics);
+    page.text.push(...original.nodes.map((node) => node.label), ...(annotation ? [annotation] : []));
+    if (annotation) page.items.push({ id: 'diagram-annotation', text: annotation, sourceContentIds: ['diagram-annotation'] });
+  }
+  for (const image of options.images ?? []) {
+    if (!image.src || !Number.isFinite(image.width) || !Number.isFinite(image.height) || image.width <= 0 || image.height <= 0) throw new Error(`Original image ${image.id} has invalid dimensions or source`);
+    let page = pages[pages.length - 1]!, at = page.bottom + (page.elements.length > 1 ? GAP : 0);
+    let block = await imageBand([image], at, BOTTOM - at, font, options.measure);
+    if (!block && page.elements.length > 1) { page = emptyPage(); pages.push(page); at = top; block = await imageBand([image], at, BOTTOM - at, font, options.measure); }
+    if (!block) {
+      const scale = Math.min(WIDTH / image.width, 260 / image.height);
+      const rendered: PPTImageElement = { type: 'image', id: image.id, src: image.src, fixedRatio: true, rotate: 0,
+        left: LEFT, top: at, width: image.width * scale, height: image.height * scale };
+      const caption = image.caption ? await textElement(`${image.id}-caption`, image.caption, { left: LEFT, top: at + rendered.height + 6, width: WIDTH }, font, options.measure) : undefined;
+      block = { elements: [rendered, ...(caption ? [caption] : [])], height: rendered.height + (caption ? caption.height + 6 : 0), boxes: new Map(),
+        mapping: { [image.id]: [image.id, ...(caption ? [caption.id] : [])] } };
+      page.diagnostics.push(`Original image ${image.id} has no measured readable allocation; complete image and caption retained`);
+    }
+    append(page, block); page.bottom = at + block.height; page.text.push(image.caption ?? outline.visualIntent?.observationGoal ?? outline.title);
+  }
+  if (pages.some((page) => page.elements.length === 1)) throw new Error('Original slide has no renderable source content');
+  const results = pages.map((page): GeneratedSlideContent => {
+    if (new Set(page.elements.map((element) => element.id)).size !== page.elements.length) throw new Error('Original source produces conflicting element IDs');
+    if (page.bottom > BOTTOM) page.diagnostics.push(`Original slide capacity: measured content reaches y=${page.bottom}px beyond the safe bottom ${BOTTOM}px; complete source retained`);
+    return withSemanticTargetAliases(outline, { elements: page.elements, background: { type: 'solid', color: '#FFFFFF' }, qualityDiagnostics: [...new Set(page.diagnostics)],
+      sourceGroupIds: Object.keys(page.mapping), teachingText: page.text, occupiedHeight: page.bottom - top, layoutDecision: pages.length > 1 ? 'paginated' : 'original',
+      ...(pages.length > 1 ? { paginationVersion: 'balanced-v1' as const } : {}),
+      presentationProjection: { schemaVersion: 1, layoutVersion: SLIDE_VISUAL_LAYOUT_VERSION, verified: true, items: page.items, elementIdsBySource: page.mapping } });
+  });
+  return { ...results[0]!, ...(results.length > 1 ? { continuationPages: results.slice(1), paginationVersion: 'balanced-v1' as const } : {}) };
 }

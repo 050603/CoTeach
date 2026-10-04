@@ -105,6 +105,114 @@ describe('single-slide PPT redraw safety and visual target recovery', () => {
     expect(nonVisualActions(result.actions)).toEqual(nonVisualActions(original.actions));
   });
 
+  it('remaps native body references to exact table cells and graph nodes while preserving every oral field', () => {
+    const { original, outline } = fixture();
+    const content: GeneratedSlideContent = { elements: [{ type: 'table', id: 'native-comparison',
+      left: 50, top: 140, width: 880, height: 160, rotate: 0, colWidths: [0.5, 0.5], cellMinHeight: 50,
+      outline: { width: 1, style: 'solid', color: '#ddd' }, data: [[
+        { id: 'condition-cell', text: '教学支架具有暂时性和渐消性，能独立解决问题时撤离。', rowspan: 1, colspan: 1 },
+        { id: 'gradual-cell', text: '支架随学生发展逐个撤除，不能最后一次性撤销。', rowspan: 1, colspan: 1 },
+      ]] }, ...labels.map((label, index) => text(`native-process-${index + 1}`, label))],
+      displayItems: [
+        { id: 'condition', text: '教学支架具有暂时性和渐消性，能独立解决问题时撤离。', sourceContentIds: ['adopted-content-2'] },
+        { id: 'gradual', text: '支架随学生发展逐个撤除，不能最后一次性撤销。', sourceContentIds: ['adopted-content-3'] },
+      ], contentBindings: [
+        { sourceContentId: 'condition', elementId: 'native-comparison', selector: { cellId: 'condition-cell' } },
+        { sourceContentId: 'gradual', elementId: 'native-comparison', selector: { cellId: 'gradual-cell' } },
+        ...labels.map((_, index) => ({ sourceContentId: `diagram-node:c${index + 1}`, elementId: `native-process-${index + 1}` })),
+      ] };
+    const result = remapActions(original, outline, content, sourcePoints);
+    expect(result.actions[0]).toMatchObject({ elementId: 'native-comparison', selector: { cellId: 'condition-cell' } });
+    expect(result.actions[1]).toMatchObject({ elementId: 'native-comparison', selector: { cellId: 'gradual-cell' } });
+    const laser = result.actions.find((action) => action.type === 'laser');
+    expect(laser?.elementId).toBe('native-process-1');
+    expect(laser?.waypoints?.map((point) => point.elementId)).toEqual(labels.slice(1).map((_, index) => `native-process-${index + 2}`));
+    expect(nonVisualActions(result.actions)).toEqual(nonVisualActions(original.actions));
+    expect(result.mappings.every((mapping) => !mapping.diagnostic)).toBe(true);
+    expect(result.content.elements).toEqual(content.elements);
+  });
+
+  it('uses saved native source identity when an old concise body no longer contains the full adopted wording', () => {
+    const { original, outline } = fixture();
+    if (original.content.type !== 'slide') throw new Error('Expected native slide');
+    original.content.canvas.elements[0] = text('adopted-removal-mechanism', '具备独立能力后不再依靠支架');
+    original.content.canvas.contentBindings = [{ sourceContentId: 'adopted-content-2', elementId: 'adopted-removal-mechanism' }];
+    const content: GeneratedSlideContent = { elements: [text('native-condition', '能独立解决问题时撤离支架。')],
+      displayItems: [{ id: 'condition', text: '能独立解决问题时撤离支架。', sourceContentIds: ['adopted-content-2'] }],
+      contentBindings: [{ sourceContentId: 'condition', elementId: 'native-condition' }] };
+    const result = remapActions(original, outline, content, sourcePoints);
+    expect(result.actions[0]).toMatchObject({ elementId: 'native-condition' });
+    expect(nonVisualActions(result.actions)).toEqual(nonVisualActions(original.actions));
+  });
+
+  it('rebinds the source when reordered native components reuse another point’s old id', () => {
+    const { original, outline } = fixture();
+    if (original.content.type !== 'slide') throw new Error('Expected native slide');
+    original.content.canvas.elements = [text('page-component-0', sourcePoints[1]!.text),
+      text('page-component-1', sourcePoints[2]!.text)];
+    original.content.canvas.contentBindings = [
+      { sourceContentId: 'adopted-content-2', elementId: 'page-component-0' },
+      { sourceContentId: 'adopted-content-3', elementId: 'page-component-1' },
+    ];
+    original.actions = original.actions!.slice(0, 3);
+    if (original.actions[0]!.type !== 'spotlight' || original.actions[1]!.type !== 'spotlight') throw new Error('Expected focus cues');
+    original.actions[0]!.elementId = 'page-component-0';
+    original.actions[1]!.elementId = 'page-component-1';
+    const content: GeneratedSlideContent = { elements: [text('page-component-0', '支架随学生发展逐个撤除。'),
+      text('page-component-1', '教学支架具有暂时性和渐消性，能独立解决问题时撤离。'), text('condition-label', '撤除条件')],
+      displayItems: [
+        { id: 'gradual', sourceContentIds: ['adopted-content-3'], text: '支架随学生发展逐个撤除。' },
+        { id: 'condition', sourceContentIds: ['adopted-content-2'], text: '教学支架具有暂时性和渐消性，能独立解决问题时撤离。' },
+      ], contentBindings: [
+        { sourceContentId: 'condition:label', elementId: 'condition-label' },
+        { sourceContentId: 'gradual', elementId: 'page-component-0' },
+        { sourceContentId: 'condition', elementId: 'page-component-1' },
+      ] };
+    const result = remapActions(original, outline, content, sourcePoints);
+    expect(result.actions[0]).toMatchObject({ elementId: 'page-component-1' });
+    expect(result.actions[1]).toMatchObject({ elementId: 'page-component-0' });
+    expect(result.mappings.every((mapping) => !mapping.diagnostic)).toBe(true);
+    expect(nonVisualActions(result.actions)).toEqual(nonVisualActions(original.actions));
+  });
+
+  it('rebinds a table cell when the same table and cell ids now contain different sources', () => {
+    const { original, outline } = fixture();
+    if (original.content.type !== 'slide') throw new Error('Expected native slide');
+    const table = (first: string, second: string): GeneratedSlideContent['elements'][number] => ({ type: 'table', id: 'comparison',
+      left: 50, top: 140, width: 880, height: 150, rotate: 0, colWidths: [0.5, 0.5], cellMinHeight: 50,
+      outline: { width: 1, style: 'solid', color: '#ddd' }, data: [[
+        { id: 'cell-0', text: first, rowspan: 1, colspan: 1 }, { id: 'cell-1', text: second, rowspan: 1, colspan: 1 },
+      ]] });
+    original.content.canvas.elements = [table('独立完成后撤离支架。', '随学生发展逐步撤除支架。')];
+    original.content.canvas.contentBindings = [{ sourceContentId: 'adopted-content-2', elementId: 'comparison', selector: { cellId: 'cell-0' } }];
+    original.actions = original.actions!.filter((action, index) => index === 0 || action.type === 'speech');
+    if (original.actions[0]!.type !== 'spotlight') throw new Error('Expected focus cue');
+    original.actions[0]!.elementId = 'comparison';
+    original.actions[0]!.selector = { cellId: 'cell-0', occurrence: 0 };
+    const content: GeneratedSlideContent = { elements: [table('随学生发展逐步撤除支架。', '独立完成后撤离支架。')],
+      displayItems: [{ id: 'condition', sourceContentIds: ['adopted-content-2'], text: '独立完成后撤离支架。' }],
+      contentBindings: [{ sourceContentId: 'condition', elementId: 'comparison', selector: { cellId: 'removed-cell' } },
+        { sourceContentId: 'condition', elementId: 'comparison', selector: { cellId: 'cell-1' } }] };
+    const result = remapActions(original, outline, content, sourcePoints);
+    expect(result.actions[0]).toMatchObject({ elementId: 'comparison', selector: { cellId: 'cell-1' } });
+    expect(result.mappings[0]).toMatchObject({ to: 'comparison', selector: { cellId: 'cell-1' }, sources: ['adopted-content-2'] });
+    expect(nonVisualActions(result.actions)).toEqual(nonVisualActions(original.actions));
+  });
+
+  it('keeps a genuinely stable unbound image target when only its geometry changes', () => {
+    const { original, outline } = fixture();
+    if (original.content.type !== 'slide') throw new Error('Expected native slide');
+    const image: GeneratedSlideContent['elements'][number] = { type: 'image', id: 'unchanged-resource', left: 50, top: 140,
+      width: 400, height: 300, rotate: 0, fixedRatio: true, src: '/existing-image.png' };
+    original.content.canvas.elements = [image];
+    original.actions = [{ id: 'image-focus', type: 'spotlight', elementId: image.id,
+      speechId: 'speech', speechAnchor: { quote: '教材图片' } }, { id: 'speech', type: 'speech', text: '请观察教材图片。' }];
+    const result = remapActions(original, outline, { elements: [{ ...image, left: 500 }], contentBindings: [] }, sourcePoints);
+    expect(result.actions[0]).toMatchObject({ elementId: image.id });
+    expect(result.mappings).toEqual([]);
+    expect(nonVisualActions(result.actions)).toEqual(nonVisualActions(original.actions));
+  });
+
   it('reports ambiguous source matches and keeps the original cue instead of guessing', () => {
     const { original, outline, content } = fixture();
     const duplicate = [...sourcePoints, { ...sourcePoints[1], id: 'ambiguous-other-source' }];
@@ -128,7 +236,7 @@ describe('single-slide PPT redraw safety and visual target recovery', () => {
     expect(() => assertOriginalSlideSnapshot(original, { ...outline, keyPoints: [] }, snapshot)).toThrow('快照在调用前发生变化');
   });
 
-  it('uses exactly one projection request and retains the existing canvas when the infographic cannot fit', async () => {
+  it('uses exactly one native request and retains the existing canvas when the authored geometry cannot fit', async () => {
     const { original, outline } = fixture();
     if (original.content.type !== 'slide') throw new Error('invalid fixture');
     const adopted = sourcePoints.map((point) => point.text);
@@ -138,20 +246,48 @@ describe('single-slide PPT redraw safety and visual target recovery', () => {
         takeaway: adopted.join('；'), visibleContent: adopted, presentationContent: adopted, narrationFocus: [] },
     } };
     const originalHash = hash(original);
-    const ai = vi.fn().mockResolvedValueOnce(JSON.stringify({ items: [
-      { id: 'withdrawal-condition', sourceContentIds: ['adopted-content-1', 'adopted-content-2'], label: '教学支架的撤除',
-        text: '具有暂时性和渐消性：能独立解决问题时撤离' },
-      { id: 'withdrawal-boundary', sourceContentIds: ['adopted-content-3'], text: '随学生发展逐个撤除，非最后一次性撤销' },
-    ], links: [] }));
+    const failure = vi.fn();
+    const ai = vi.fn().mockResolvedValueOnce(JSON.stringify({ elements: [], components: [
+      { kind: 'textBox', id: 'withdrawal', left: 50, top: 140, width: 880, fontSize: 18, role: 'body',
+        paragraphs: ['教学支架的撤除', '具有暂时性和渐消性：能独立解决问题时撤离', '随学生发展逐个撤除，非最后一次性撤销'] },
+      { kind: 'diagram', id: 'process', left: 50, top: 420, width: 880, height: 100,
+        topology: 'sequence', nodes: outline.visualIntent!.diagram!.nodes, edges: outline.visualIntent!.diagram!.edges },
+    ] }));
     const generated = await generateOpenMaicBaselineContent(page, withTeachingSlideGuidance(ai, page), {
-      componentAuthoring: true, slideAuthoring: 'native', visualProjection: true, visualBaseline: original.content.canvas,
+      componentAuthoring: true, slideAuthoring: 'native', visualBaseline: original.content.canvas,
       textMeasure: () => ({ naturalWidth: 1000, height: 10000, lines: ['actual measurement reports overflow'] }),
+      onFailure: failure,
       websiteReferenceContext: { courseTitle: '中小学人工智能教育的教学理论与方法', slideTitles: [original.title] },
     });
     expect(ai).toHaveBeenCalledTimes(1);
+    expect(ai.mock.calls[0]![0]).toContain('PPT_RESTORED_NATIVE_4615');
     expect(generated && 'elements' in generated ? generated.elements : null).toEqual(original.content.canvas.elements);
-    expect(generated && 'qualityDiagnostics' in generated ? generated.qualityDiagnostics?.join(' ') : '').toContain('retained the existing usable draft');
+    expect(generated && 'qualityDiagnostics' in generated ? generated.qualityDiagnostics?.join(' ') : '').toContain('retained the saved usable draft');
     expect(hash(original)).toBe(originalHash);
+    expect(failure).not.toHaveBeenCalled();
+  });
+
+  it.each(['unknown-component', 'empty-native-page', 'unparseable-response'])('keeps %s technical even when a baseline is available', async (kind) => {
+    const { original, outline } = fixture();
+    if (original.content.type !== 'slide') throw new Error('invalid fixture');
+    const adopted = sourcePoints.map((point) => point.text);
+    const page: SceneOutline = { ...outline, audience: 'student', generationPurpose: 'knowledge-teaching', teachingBrief: {
+      schemaVersion: 1, explanation: adopted.join('。'), examples: [], conditions: [], evidence: [], assessmentFocus: '',
+      teachingPlan: { purpose: '理解逐步撤除', priorKnowledge: '', newContent: adopted.join('。'), learnerQuestion: '', reasoningSteps: [],
+        takeaway: adopted.join('；'), visibleContent: adopted, presentationContent: adopted, narrationFocus: [] },
+    } };
+    const response = kind === 'unparseable-response' ? 'This is not a native JSON response' : JSON.stringify({
+      elements: [], components: kind === 'unknown-component' ? [{ kind: 'unsupported-component', left: 60, top: 180, width: 880, height: 100 }] : [],
+    });
+    const ai = vi.fn().mockResolvedValueOnce(response), failure = vi.fn();
+    const generated = await generateOpenMaicBaselineContent(page, withTeachingSlideGuidance(ai, page), {
+      componentAuthoring: true, slideAuthoring: 'native', visualBaseline: original.content.canvas,
+      textMeasure: ({ text }) => ({ naturalWidth: 100, height: 40, lines: [text] }), onFailure: failure,
+    });
+    expect(generated).toBeNull();
+    expect(failure).toHaveBeenCalledWith(expect.objectContaining({ code: 'invalid-model-output' }));
+    expect(failure.mock.calls[0]![0]).not.toHaveProperty('category');
+    expect(ai).toHaveBeenCalledOnce();
   });
 
   it.each(['create', 'createMany', 'update', 'updateMany', 'upsert', 'delete', 'deleteMany', '$executeRaw', '$queryRaw'])('blocks database %s before a query runs', (operation) => {

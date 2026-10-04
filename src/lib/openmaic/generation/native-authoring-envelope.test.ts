@@ -34,13 +34,13 @@ describe('native authoring envelope normalization', () => {
   });
 });
 
-// Exercise the production compiler, including its playback-font safe boundary.
+// Explicit historical replay keeps envelope parsing while current quality policy retains complete drafts.
 import { afterAll, vi } from 'vitest';
 import { generateOpenMaicBaselineContent } from './openmaic-baseline';
 import { closeSpatialMeasurementBrowser, measureAuthoredSlideText } from './slide-spatial-measurement';
 import type { SceneOutline } from '../types/generation';
 afterAll(() => closeSpatialMeasurementBrowser());
-it('keeps an overflowing original draft failed after lossless container expansion', async () => {
+it('legacy envelope replay preserves overflowing text and records its actual measured capacity without a rewrite', async () => {
   const text = '教学方法：灵活的具体技巧，如任务驱动、支架式、抛锚式。';
   const outline = { id: 'original-overflow', type: 'slide', order: 0, title: '教学方法', description: text, keyPoints: [text],
     generationPurpose: 'knowledge-teaching', teachingBrief: { teachingPlan: { presentationContent: [text] } } } as SceneOutline;
@@ -48,12 +48,18 @@ it('keeps an overflowing original draft failed after lossless container expansio
   const ai = vi.fn().mockResolvedValue(raw);
   const onFailure = vi.fn();
   const result = await generateOpenMaicBaselineContent(outline, ai, {
-    componentAuthoring: true, slideAuthoring: 'native', textMeasure: measureAuthoredSlideText, onFailure,
+    visualProjection: false, componentAuthoring: true, slideAuthoring: 'native', textMeasure: measureAuthoredSlideText, onFailure,
   });
   expect(ai).toHaveBeenCalledOnce();
-  expect(result).toBeNull();
-  expect(onFailure).toHaveBeenCalledWith(expect.objectContaining({ category: 'layout-conflict',
-    detail: expect.stringContaining('needs 86px but its maximum allocation is 70.5px') }));
+  expect(result).not.toBeNull();
+  if (!result || !('elements' in result)) throw new Error('Expected complete saved native text');
+  expect(onFailure).not.toHaveBeenCalled();
+  const compiledBody = result.elements.find((element) => element.type === 'text' && element.id === 'original-overflow-component-0');
+  expect(compiledBody).toMatchObject({ top: 442, width: 440, height: 86 });
+  if (!compiledBody || compiledBody.type !== 'text') throw new Error('Expected measured editable body');
+  expect(compiledBody.content.replace(/<[^>]*>/gu, '')).toBe(text);
+  expect(compiledBody.content).toContain('font-size:22px');
+  expect(result.qualityDiagnostics).toContainEqual(expect.stringContaining('needs 86px but its maximum allocation is 70.5px'));
   expect(raw).toContain('"fontSize":22');
   expect(raw).toContain('"top":442');
 });

@@ -7,6 +7,7 @@
  */
 import type { NextRequest } from 'next/server';
 import type { AgentEvent, AgentMessage } from '@earendil-works/pi-agent-core';
+import type { UserModelMessage } from 'ai';
 import { isMaicEditorEnabled } from '@openmaic/lib/config/feature-flags';
 import { resolveModelFromRequest } from '@openmaic/lib/server/resolve-model';
 import type { LlmStage } from '@openmaic/lib/server/model-routes';
@@ -17,6 +18,8 @@ import { callLLM } from '@openmaic/lib/ai/llm';
 import { createLogger } from '@openmaic/lib/logger';
 import type { SceneContext } from '@openmaic/lib/agent/tools/regenerate-scene-actions';
 import { authorizeTemplateRequest } from '@/lib/platform/template-access';
+import { loadPblTemplateCourse } from '@/lib/platform/pbl-template-repository';
+import { courseRedrawSourceFingerprint, withCourseRedrawContext } from '@openmaic/lib/agent/server/course-redraw-context';
 
 const log = createLogger('MAIC Agent');
 
@@ -117,17 +120,27 @@ export async function POST(req: NextRequest) {
     system: string,
     prompt: string,
     signal?: AbortSignal,
+    images?: Array<{ id: string; src: string }>,
   ): Promise<string> => {
     let resolved = stageCache.get(stage);
     if (!resolved) {
       resolved = await resolveModelFromRequest(req, body, stage);
       stageCache.set(stage, resolved);
     }
+    const concreteImages = resolved.modelInfo?.capabilities?.vision
+      ? images?.filter(({ src }) => /^(?:data:image\/|https?:\/\/)/iu.test(src)) ?? [] : [];
+    const content: UserModelMessage['content'] = concreteImages.length ? [
+      { type: 'text', text: prompt },
+      ...concreteImages.flatMap(({ id, src }) => [
+        { type: 'text' as const, text: `Image reference: ${id}` },
+        { type: 'file' as const, data: src, mediaType: /^data:(image\/[^;,]+)/iu.exec(src)?.[1] ?? 'image/*' },
+      ]),
+    ] : prompt;
     const r = await callLLM(
       {
         model: resolved.model,
         system,
-        prompt,
+        messages: [{ role: 'user', content }],
         maxOutputTokens: resolved.modelInfo?.outputWindow,
         // Abort the in-flight generation when the user cancels the turn — pi
         // passes each tool an AbortSignal, which the tools thread through here.
@@ -140,11 +153,19 @@ export async function POST(req: NextRequest) {
     return r.text;
   };
 
-  const sceneContextMap: SceneContextMap = body.sceneContextMap ?? {};
+  const course = courseId ? await loadPblTemplateCourse(courseId) : null;
+  if (courseId && !course) return new Response('Course design not found', { status: 404 });
+  const sceneContextMap: SceneContextMap = course
+    ? withCourseRedrawContext(body.sceneContextMap ?? {}, course) : body.sceneContextMap ?? {};
+  const sourceFingerprint = course ? courseRedrawSourceFingerprint(course) : undefined;
   const tools = buildToolset({
     aiCall,
     getSceneContext: (sceneId) => sceneContextMap[sceneId],
     activeSceneId: body.scene?.id,
+    ...(sourceFingerprint ? { assertCurrentSources: async () => {
+      const current = await loadPblTemplateCourse(courseId);
+      return Boolean(current && courseRedrawSourceFingerprint(current) === sourceFingerprint);
+    } } : {}),
   });
 
   const abortController = new AbortController();

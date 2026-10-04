@@ -48,6 +48,7 @@ export function buildCompleteScene(
       viewportRatio: 0.5625,
       theme: defaultTheme,
       elements: content.elements,
+      ...(content.contentBindings?.length ? { contentBindings: content.contentBindings } : {}),
       background: content.background,
     };
     return {

@@ -22,6 +22,7 @@ import { generateSceneContent, generateSceneActions } from './scene-generator';
 import type { AgentInfo, SceneGenerationContext, AICallFn } from './pipeline-types';
 import { buildLanguageText } from './prompt-formatters';
 import { createLogger } from '@openmaic/lib/logger';
+import { REFERENCE_LECTURE_STYLE } from './slide-presentation-typography';
 const log = createLogger('Generation');
 
 /**
@@ -188,8 +189,13 @@ function buildCompleteSceneInner(
       id: nanoid(),
       viewportSize: 1000,
       viewportRatio: 0.5625,
-      theme: content.theme ?? defaultTheme,
+      theme: content.theme ?? (content.displayItems?.length ? { ...defaultTheme,
+        fontName: REFERENCE_LECTURE_STYLE.fontFamily, fontColor: REFERENCE_LECTURE_STYLE.text,
+        themeColors: [REFERENCE_LECTURE_STYLE.title, REFERENCE_LECTURE_STYLE.muted, REFERENCE_LECTURE_STYLE.accent],
+      } : defaultTheme),
       elements: content.elements,
+      ...(content.contentBindings ? { contentBindings: content.contentBindings } : {}),
+      ...(content.displayItems ? { displayItems: content.displayItems } : {}),
       ...(content.presentationProjection ? { presentationProjection: content.presentationProjection } : {}),
       background: content.background,
     };

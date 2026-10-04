@@ -276,6 +276,9 @@ describe('TTS timing model', () => {
     expect(plan.paragraphBudgets!.find((part) => part.role === 'feedback')!.targetDurationSec).toBe(13);
     expect(formatTtsParagraphBudgets(plan)).toContain('反馈：13 秒');
     expect(formatTtsParagraphBudgets(plan)).toContain('不要求各段分别落在±10%内');
+    expect(formatTtsParagraphBudgets(plan)).toContain('页面、小节及阶段总时长也仅供参考');
+    expect(formatTtsParagraphBudgets(plan)).toContain('必要超时允许');
+    expect(formatTtsParagraphBudgets(plan)).not.toContain('最终时长约束');
   });
 
   it('uses articulation length for technical words and never counts CJK twice', () => {

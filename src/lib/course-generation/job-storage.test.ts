@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { GenerationJob } from "@prisma/client";
+import { Prisma, type GenerationJob } from "@prisma/client";
 const mocks = vi.hoisted(() => ({ find: vi.fn(), create: vi.fn(), update: vi.fn(), template: vi.fn(), transaction: vi.fn(), lock: vi.fn(), deleteCheckpoints: vi.fn(), checkpoint: vi.fn(), saveCheckpoint: vi.fn(), drafts: vi.fn() }));
 vi.mock("@/lib/db/client", () => ({ prisma: { generationJob: { findMany: mocks.find }, $transaction: mocks.transaction } }));
 import { contentGenerationJobs, designGenerationJobs, resourcePackageJobs, projectGenerationJob } from "./job-storage";
@@ -13,6 +13,19 @@ beforeEach(() => {
   mocks.transaction.mockImplementation((fn) => fn({ $executeRaw: mocks.lock, generationJob: { findMany: mocks.find, create: mocks.create, update: mocks.update }, generationCheckpoint: { findMany: mocks.drafts, deleteMany: mocks.deleteCheckpoints, findUnique: mocks.checkpoint, upsert: mocks.saveCheckpoint }, classroomTemplate: { findUnique: mocks.template } }));
 });
 describe("V2 generation job persistence", () => {
+  it('archives the spent native render reservation before an explicit full replacement', async () => {
+    const state = { status: 'claimed', sectionId: 'section', requestFingerprint: 'previous-request',
+      canvasFingerprint: 'original-canvas', modelFingerprint: 'teacher-model' };
+    mocks.drafts.mockResolvedValue([{ step: 'native-render-repair:section', state }]);
+    await contentGenerationJobs.replace({ where: { id: 'job' }, checkpointPolicy: 'all', data: { status: 'queued' } });
+    expect(mocks.drafts).toHaveBeenCalledWith({ where: { jobId: 'job', OR: expect.arrayContaining([
+      { step: { startsWith: 'native-render-repair:' } },
+    ]) } });
+    expect(mocks.saveCheckpoint).toHaveBeenCalledWith(expect.objectContaining({
+      create: { jobId: 'job', step: 'authoring-history:v1:native-render-repair:section', state }, update: {},
+    }));
+    expect(mocks.saveCheckpoint.mock.invocationCallOrder.at(-1)).toBeLessThan(mocks.deleteCheckpoints.mock.invocationCallOrder[0]);
+  });
   it('archives raw drafts and spent requests before an explicit regeneration reset', async () => {
     mocks.drafts.mockResolvedValue([{ step: 'authoring-response:page:content', state: { text: '{invalid' } },
       { step: 'stage-attempt:page:content', state: { attemptsStarted: 1, status: 'response' } }]);
@@ -81,9 +94,85 @@ describe("V2 generation job persistence", () => {
     expect(decoded.tokenUsage).toBe(1_240);
     expect(decoded.tokenUsageCalls).toBe(1);
   });
+  it.each(['lease', 'token', 'progress'] as const)("preserves large adopted input and saved output during a %s update", async (kind) => {
+    const existing = {
+      ...row(), status: 'RUNNING',
+      request: { sourceText: '教材'.repeat(2_700_000) },
+      result: { id: 'saved-classroom', pages: ['saved-page'] },
+      qualityReport: { issues: ['saved-diagnostic'] },
+      trace: { schemaVersion: 1, entries: [{ stage: 'saved-stage' }], state: {
+        tokenUsage: 120, tokenUsageCalls: 3, executionId: 'execution-1', version: 4,
+        preparedOutlines: [{ id: 'saved-outline' }],
+      } },
+    };
+    mocks.find.mockResolvedValue([existing]);
+    mocks.update.mockImplementation(async ({ data }) => ({ ...existing, ...data }));
+    const data = kind === 'lease' ? { lastHeartbeatAt: now, leaseExpiresAt: new Date(now.getTime() + 30_000) }
+      : kind === 'token' ? { tokenUsage: { increment: 1_240 }, tokenUsageCalls: { increment: 1 } }
+        : { progress: 40, message: '正在生成页面', version: { increment: 1 } };
+    const updated = await contentGenerationJobs.update({
+      where: { id: 'job', status: 'running', executionId: 'execution-1', version: 4 }, data,
+    });
+    const sqlData = mocks.update.mock.calls[0][0].data;
+    for (const field of ['request', 'result', 'qualityReport']) expect(sqlData).not.toHaveProperty(field);
+    expect(updated.request).toBe(existing.request);
+    expect(updated.result).toBe(existing.result);
+    expect(updated.qualityReport).toBe(existing.qualityReport);
+    expect(updated.trace).toEqual(existing.trace.entries);
+    expect(updated.preparedOutlines).toEqual([{ id: 'saved-outline' }]);
+    expect(updated.executionId).toBe('execution-1');
+    expect(updated.tokenUsage).toBe(kind === 'token' ? 1_360 : 120);
+    expect(updated.tokenUsageCalls).toBe(kind === 'token' ? 4 : 3);
+    expect(updated.version).toBe(kind === 'progress' ? 5 : 4);
+    expect(mocks.lock).toHaveBeenCalledOnce();
+  });
+  it("updates native columns without rewriting durable projected state", async () => {
+    const existing = { ...row(), trace: { state: { version: 4, message: '已保存的状态' } } };
+    mocks.find.mockResolvedValue([existing]);
+    mocks.update.mockImplementation(async ({ data }) => ({ ...existing, ...data }));
+    const updated = await contentGenerationJobs.update({ where: { id: 'job', version: 4 }, data: {
+      status: 'running', step: 'generating_scenes', progress: 15, attempt: { increment: 1 },
+      error: null, startedAt: now, completedAt: null, lastHeartbeatAt: now, retryAt: null,
+      request: undefined, trace: undefined,
+    } });
+    expect(mocks.update.mock.calls[0][0].data).toEqual({
+      status: 'RUNNING', step: 'generating_scenes', progress: 15, attempt: 1,
+      error: null, startedAt: now, completedAt: null, heartbeatAt: now, retryAt: null,
+    });
+    expect(updated.version).toBe(4);
+    expect(updated.message).toBe('已保存的状态');
+  });
+  it("persists explicitly replaced JSON input, output and diagnostics", async () => {
+    const request = { sourceText: '新的教师要求' };
+    const result = { id: 'new-classroom' };
+    const qualityReport = { issues: [] };
+    const updated = await contentGenerationJobs.update({ where: { id: 'job' }, data: { request, result, qualityReport } });
+    expect(mocks.update.mock.calls[0][0].data).toEqual({ request, result, qualityReport });
+    expect(updated.request).toEqual(request);
+    expect(updated.result).toEqual(result);
+    expect(updated.qualityReport).toEqual(qualityReport);
+  });
+  it.each([null, Prisma.JsonNull])("clears explicitly supplied JSON fields with %s", async (value) => {
+    await contentGenerationJobs.update({ where: { id: 'job' }, data: {
+      request: value, result: value, qualityReport: value, currentCall: value,
+    } });
+    expect(mocks.update.mock.calls[0][0].data).toMatchObject({
+      request: Prisma.JsonNull, result: Prisma.JsonNull, qualityReport: Prisma.JsonNull,
+      trace: { state: { currentCall: null } },
+    });
+  });
   it("does not claim a job whose status changed before the lock was acquired", async () => {
     mocks.find.mockResolvedValue([{ ...row(), status: "RUNNING" }]);
     expect(await contentGenerationJobs.updateMany({ where: { id: "job", status: "queued" }, data: { status: "running" } })).toEqual({ count: 0 });
+    expect(mocks.update).not.toHaveBeenCalled();
+  });
+  it("rejects a stale execution's lease update after ownership changes", async () => {
+    mocks.find.mockResolvedValue([{ ...row(), status: 'RUNNING', trace: { state: { executionId: 'new-execution' } } }]);
+    expect(await contentGenerationJobs.updateMany({
+      where: { id: 'job', status: 'running', executionId: 'old-execution' },
+      data: { lastHeartbeatAt: now, leaseExpiresAt: new Date(now.getTime() + 30_000) },
+    })).toEqual({ count: 0 });
+    expect(mocks.lock).toHaveBeenCalledOnce();
     expect(mocks.update).not.toHaveBeenCalled();
   });
   it("creates work only for a persisted template and reuses its existing job", async () => {

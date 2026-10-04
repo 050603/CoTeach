@@ -8,7 +8,7 @@ import path from 'node:path';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const arg = (name) => process.argv.includes(name) ? process.argv[process.argv.indexOf(name) + 1] : undefined;
 if (process.argv.includes('--help')) {
-  console.log('单页真实渲染对比：--before <scene.json> [--after <scene.json>] --output <目录> [--snapshot-dir <目录>] [--storage-state <已授权.json>] [--base-url http://127.0.0.1:3000]');
+  console.log('单页真实渲染对比：--before <scene.json> [--after <scene.json>] [--after-label <候选页面标签>] --output <目录> [--snapshot-dir <目录>] [--storage-state <已授权.json>] [--base-url http://127.0.0.1:3000]');
   process.exit(0);
 }
 if (!arg('--before') || !arg('--output')) throw new Error('需要 --before 和 --output');
@@ -19,6 +19,7 @@ const baseUrl = arg('--base-url') ?? 'http://127.0.0.1:3000';
 if (!['localhost', '127.0.0.1', '[::1]'].includes(new URL(baseUrl).hostname)) throw new Error('仅允许读取明确的本机服务资源');
 const before = JSON.parse(await readFile(arg('--before'), 'utf8'));
 const after = arg('--after') ? JSON.parse(await readFile(arg('--after'), 'utf8')) : undefined;
+const afterLabel = arg('--after-label') ?? '候选页面';
 if (before.content?.type !== 'slide' || (after && after.content?.type !== 'slide')) throw new Error('仅支持原生幻灯片场景');
 const canvas = before.content.canvas;
 const width = canvas.viewportSize, height = width * canvas.viewportRatio;
@@ -38,10 +39,12 @@ await build({
     builder.onLoad({ filter: /.*/, namespace: 'audit-generation' }, () => ({ contents: 'export async function retryMediaTask(){throw new Error("Generation disabled in screenshot harness")} export async function generateMediaForOutlines(){throw new Error("Generation disabled in screenshot harness")}' }));
   } }],
 });
-const staticRoot = path.join(root, process.env.NEXT_DIST_DIR || '.next-build', 'static');
+const snapshotDirectory = arg('--snapshot-dir') ? path.resolve(arg('--snapshot-dir')) : undefined;
+const snapshotStaticRoot = snapshotDirectory ? path.join(snapshotDirectory, 'production-static') : undefined;
+const staticRoot = snapshotStaticRoot && await access(snapshotStaticRoot).then(() => true, () => false)
+  ? snapshotStaticRoot : path.join(root, process.env.NEXT_DIST_DIR || '.next-build', 'static');
 const cssFiles = (await readdir(path.join(staticRoot, 'css'), { recursive: true })).filter((item) => item.endsWith('.css'));
 if (!cssFiles.length) throw new Error('缺少生产页面 CSS，不能以替代样式声明真实渲染');
-const snapshotDirectory = arg('--snapshot-dir') ? path.resolve(arg('--snapshot-dir')) : undefined;
 const snapshot = snapshotDirectory ? JSON.parse(await readFile(path.join(snapshotDirectory, 'snapshot.json'), 'utf8')) : undefined;
 const savedMedia = new Map((snapshot?.media ?? []).filter((item) => item.file).map((item) => [new URL(item.url, baseUrl).pathname, path.join(snapshotDirectory, item.file)]));
 const mime = (file) => /\.css$/iu.test(file) ? 'text/css' : /\.woff2$/iu.test(file) ? 'font/woff2'
@@ -68,7 +71,7 @@ await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
 const localOrigin = 'http://127.0.0.1:' + server.address().port;
 let browser;
 let lastBrowserError;
-for (const executablePath of [...new Set([process.env.OPENPBL_CHROMIUM_EXECUTABLE_PATH, undefined, '/usr/bin/chromium', '/usr/bin/chromium-browser', '/usr/bin/google-chrome'])]) {
+for (const executablePath of [...new Set([process.env.OPENPBL_CHROMIUM_EXECUTABLE_PATH?.trim() || undefined, undefined, '/usr/bin/chromium', '/usr/bin/chromium-browser', '/snap/bin/chromium', '/usr/bin/google-chrome'])]) {
   if (executablePath && !await access(executablePath).then(() => true, () => false)) continue;
   try { browser = await chromium.launch({ headless: true, ...(executablePath ? { executablePath } : {}) }); break; }
   catch (error) { lastBrowserError = error; }
@@ -102,11 +105,11 @@ try {
     reports.push({ label, sceneId: scene.id, title: scene.title, ...report, errors: [...pageErrors] });
   }
   await writeFile(path.join(output, 'render-report.json'), JSON.stringify({ renderer: 'actual ReadonlySlideCanvas with production CSS/font assets',
-    width, height, deviceScaleFactor: 2, reports }, null, 2));
+    staticRoot, afterLabel, width, height, deviceScaleFactor: 2, reports }, null, 2));
   const escape = (value) => String(value).replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('"', '&quot;');
   const comparison = '<!doctype html><html><head><meta charset="utf-8"><style>'
     + `*{box-sizing:border-box}html,body{margin:0;background:#eef2f6;color:#23364d;font-family:"Noto Sans SC",sans-serif}main{display:flex;gap:24px;padding:24px}section{width:${width}px}h2{font-size:24px;line-height:36px;margin:0 0 12px;font-weight:700}img{display:block;width:${width}px;height:${Math.ceil(height)}px;background:white;box-shadow:0 2px 12px #23364d14}.subtitle{font-size:16px;margin:0 0 20px;color:#617086}</style></head><body><main>`
-    + reports.map((report) => `<section><h2>${report.label === 'before' ? '原页面' : '优化后'}</h2><div class="subtitle">第 ${snapshot?.slide ?? ''} 页 · ${escape(report.title)}</div><img src="${report.label}.png"></section>`).join('') + '</main></body></html>';
+    + reports.map((report) => `<section><h2>${report.label === 'before' ? '原页面' : escape(afterLabel)}</h2><div class="subtitle">第 ${snapshot?.slide ?? ''} 页 · ${escape(report.title)}</div><img src="${report.label}.png"></section>`).join('') + '</main></body></html>';
   await writeFile(path.join(output, 'comparison.html'), comparison);
   if (after) {
     await page.setViewportSize({ width: width * 2 + 72, height: Math.ceil(height) + 132 });

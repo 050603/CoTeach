@@ -9,6 +9,7 @@ vi.mock("@/components/teacher/resource-package-form", () => ({ ResourcePackageFo
 vi.mock("@/components/teacher/course-textbook-selector", () => ({ CourseTextbookSelector: () => null }));
 
 import { FastCourseGenerator } from "./fast-course-generator";
+import { TeachingBlueprintDetails } from "./teaching-blueprint-details";
 
 const outline: SceneOutline = {
   id: "page-1", title: "认识训练样本", description: "比较训练集与验证集的用途", keyPoints: ["数据划分"],
@@ -66,6 +67,20 @@ describe("saved course outline and blueprint details", () => {
     await act(async () => { fireEvent.click(screen.getByRole("button", { name: "查看大纲与蓝图" })); });
     expect(screen.getByRole("dialog", { name: "查看课程大纲与教学蓝图" })).toBeTruthy();
     expect(requests.every((method) => method === "GET")).toBe(true);
+  });
+
+  it("shows the canonical lecture and display text without the obsolete authored copies", () => {
+    const spoken = structuredClone(blueprint);
+    const section = spoken.sections[0]!;
+    section.contentMode = "spoken";
+    section.units[0]!.explanationNodes = [{ id: "node-1", kind: "concept", content: "先保留一组独立样本，训练完成后再检验模型。", prerequisiteNodeIds: [], provenance: "course-source" }];
+    section.pages[0]!.presentationItems = [{ text: "独立样本用于检验", nodeIds: ["node-1"], role: "key-point" }];
+    render(<TeachingBlueprintDetails blueprint={spoken} />);
+    expect(screen.getByText("先保留一组独立样本，训练完成后再检验模型。")).toBeTruthy();
+    expect(screen.getByText("独立样本用于检验")).toBeTruthy();
+    expect(screen.queryByText(section.units[0]!.explanation)).toBeNull();
+    expect(screen.queryByText(section.units[0]!.mechanism)).toBeNull();
+    expect(screen.queryByText(section.units[0]!.workedExample)).toBeNull();
   });
 
   it("keeps cached details readable when refreshing them fails", async () => {

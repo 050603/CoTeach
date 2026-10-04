@@ -1,7 +1,7 @@
 import type { GeneratedSlideContent, SceneOutline } from '@/lib/openmaic/types/generation';
 import type { Scene } from '@/lib/openmaic/types/stage';
 import type { FigureSequenceContract } from '@/lib/textbook/course-visual-binding';
-import { AUTHORING_RESPONSE_PREFIX } from './authoring-checkpoints';
+import { AUTHORING_RESPONSE_PREFIX, fingerprintStageAuthoringInput } from './authoring-checkpoints';
 import { randomUUID } from 'node:crypto';
 import { deserializeCourseGenerationFailure } from './failure-policy';
 import { fingerprintSceneOutline, type PageCheckpointSnapshot, type SceneGenerationCheckpointStage,
@@ -15,6 +15,7 @@ type SavedRegenerationCheckpoints = {
   stages: readonly unknown[];
   pages: readonly unknown[];
   sourceContents: readonly unknown[];
+  authoringAcceptances?: readonly unknown[];
   courseFinalization?: unknown;
   preparedOutlines?: unknown;
 };
@@ -61,6 +62,15 @@ export function planFailedStageRegeneration(input: {
   const reset = new Set<string>();
   const issues: string[] = [];
   const accepted = new Map(saved.stages.filter(isStage).map((item) => [`${item.pageKey}:${item.stage}`, item]));
+  const authoringAccepted = new Map((saved.authoringAcceptances ?? []).filter((value) => record(value)
+    && value.accepted === true && isStage(value)).map((value) => {
+    const receipt = value as SceneStageCheckpointSnapshot;
+    return [`${receipt.pageKey}:${receipt.stage}`, receipt];
+  }));
+  const authoringOutlines = new Map([
+    ...(input.request.sceneOutlines ?? []),
+    ...(Array.isArray(saved.preparedOutlines) ? saved.preparedOutlines as SceneOutline[] : []),
+  ].map((outline) => [outline.id, outline]));
   const resetAuthoring = (id: string, stage: SceneGenerationCheckpointStage) => {
     reset.add(`stage-attempt:${id}:${stage}`);
     reset.add(`${AUTHORING_RESPONSE_PREFIX}${id}:${stage}`);
@@ -77,6 +87,15 @@ export function planFailedStageRegeneration(input: {
     const stage = accepted.get(`${attempt.pageKey}:${attempt.stage}`);
     if (stage && stage.outlineFingerprint === attempt.outlineFingerprint
       && stage.modelFingerprint === attempt.modelFingerprint && stage.inputFingerprint === attempt.inputFingerprint) continue;
+    const receipt = authoringAccepted.get(`${attempt.pageKey}:${attempt.stage}`);
+    const outline = authoringOutlines.get(attempt.pageKey);
+    // Native compilation can change the stage input hash while retaining the
+    // same validated authoring response. Preserve that exact paid draft; a
+    // different source/model/request or unaccepted response still resets.
+    if (stage && receipt && outline && typeof attempt.inputFingerprint === 'string'
+      && stage.outlineFingerprint === attempt.outlineFingerprint && stage.modelFingerprint === attempt.modelFingerprint
+      && receipt.outlineFingerprint === attempt.outlineFingerprint && receipt.modelFingerprint === attempt.modelFingerprint
+      && receipt.inputFingerprint === fingerprintStageAuthoringInput(outline, attempt.stage, attempt.inputFingerprint)) continue;
     resetAuthoring(attempt.pageKey, attempt.stage);
   }
   const completed = new Map(saved.pages.filter((value): value is PageCheckpointSnapshot => record(value)

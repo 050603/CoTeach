@@ -90,7 +90,7 @@ export function allocateTeachingStageTiming(outlines: SceneOutline[]): SceneOutl
             explanation: plan.paragraphBudgets?.find((part) => part.role === 'explanation')?.targetDurationSec ?? 0,
             example: plan.paragraphBudgets?.find((part) => part.role === 'example')?.targetDurationSec ?? 0,
           },
-          timingRationale: [...(plan.timingRationale ?? []), '按教学内容量分配讲稿；仅知识讲授阶段总时长采用 ±10% 验收，页与段不单独判定。'],
+          timingRationale: [...(plan.timingRationale ?? []), '按教学内容量分配讲稿；时长仅供参考，优先讲清必要内容，必要超时允许，不作为质量通过或失败的条件。'],
         }),
       });
     });

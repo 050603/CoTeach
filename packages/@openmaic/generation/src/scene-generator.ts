@@ -57,11 +57,14 @@ import { noopGenerationLogger, type GenerationLogger } from './logger.js';
 import { isAbortError } from './generation-retry.js';
 import { generatePBLV2ProjectSingleCall } from './pbl/planner-single-call.js';
 import { PlannerV2Error } from './pbl/planner-core.js';
-import { componentAuthoringContract, flowAuthoringContract } from './component-authoring-contract.js';
+import { componentAuthoringContract, flowAuthoringContract, type NativeDiagramAllocationHint } from './component-authoring-contract.js';
 import { compileTextComponents, compileNativeTextLayout, measureNativeTextStack, isOrphanTextLine, TEXT_LAYOUT_FONT, TEXT_LAYOUT_PADDING,
   TEXT_LAYOUT_LINE_HEIGHT, TEXT_LAYOUT_PARAGRAPH_SPACE, type LabelGridComponent, type TextBoxComponent, type TextMeasure } from './text-layout-compiler.js';
 import { resolveAuthoringContent, validateAuthoringContent, type AuthoringContentItem, type AuthoringTextAllocation } from './authoring-content.js';
 import { nativeSlideCollisions } from './native-slide-collision.js';
+import { NativeContentBindings } from './native-content-bindings.js';
+import { nativeCompositionPrompt } from './native-composition-prompt.js';
+import { restoredComponentAuthoringContract } from './restored-component-authoring-contract.js';
 import { compileMeasuredDiagramComponent, measureDiagramAllocations, isDiagramComponent, normalizeDiagramComponent, type DiagramAllocation } from './diagram-compiler.js';
 import { compileFlowLayout, paginateMeasuredLayoutGroups, FlowLayoutFailure, type CompiledFlowPage } from './flow-layout-compiler.js';
 import { adoptChartPresentationTypography } from './chart-presentation-typography.js';
@@ -93,6 +96,7 @@ export interface SceneContentFailure {
 function layoutFailureCategory(error: unknown, detail: string): SceneContentFailureCategory | undefined {
   if (error instanceof FlowLayoutFailure) return error.category;
   if (/(?:textBox content needs .*maximum allocation|labelGrid needs .*container is .* high|native text .* (?:exceeds|needs|would overlap|cannot fit)|component allocations overlap|authored diagram allocation|native layout collision)/i.test(detail)) return 'layout-conflict';
+  if (/Invalid diagram component: (?:node label .* (?:cannot fit|exceeds its node)|readable diagram nodes do not fit|(?:sequence|branch|cycle|parallel sequence).*do not fit)/i.test(detail)) return 'layout-conflict';
   if (/(?:Semantic .* needs .*page provides|Semantic table row .*page provides|Balanced page .*exceeds|Measured teaching groups cannot fit)/i.test(detail)) return 'page-capacity';
   return undefined;
 }
@@ -137,8 +141,29 @@ export interface SceneContentOptions {
   textMeasure?: TextMeasure;
   /** Immutable adopted display points; full source evidence remains a separate narration input. */
   authoringContent?: readonly AuthoringContentItem[];
+  /** Adopt display wording and native slots from the same model response.
+   * The returned catalogue replaces authoringContent for compilation only. */
+  responseAuthoringContent?: (raw: string) => {
+    response: string;
+    content: readonly AuthoringContentItem[];
+    diagnostics?: string[];
+  };
+  /** Use the archived native design prompt while retaining current measurement and topology fixes. */
+  nativeDesignBaseline?: '4615a98d';
+  /** Keep the author's whole-page composition when local measured text collides.
+   * Report the conflict without replacing it with a vertical stack or pagination. */
+  preserveNativeComposition?: boolean;
+  /** Retain the complete graph and an honest allocation diagnosis when a
+   * first draft has no further automatic layout recovery. */
+  retainDiagramDraftOnAllocationFailure?: boolean;
+  /** Trust a host-verified external copy of a canonical diagram annotation.
+   * Hosts must strip model flags and verify its exact text and real outside slot. */
+  allowExternalDiagramAnnotations?: boolean;
   assignedImages?: PdfImage[];
   imageMapping?: ImageMapping;
+  /** Concrete model-readable image bytes/absolute URLs, independent of render
+   * resource identities. Omitted keeps the legacy imageMapping vision transport. */
+  visionImageMapping?: ImageMapping;
   visionEnabled?: boolean;
   generatedMediaMapping?: ImageMapping;
   /**
@@ -311,6 +336,7 @@ export async function generateSceneContent(
   const {
     assignedImages,
     imageMapping,
+    visionImageMapping,
     visionEnabled,
     generatedMediaMapping,
     resolvedVisionImages,
@@ -325,6 +351,11 @@ export async function generateSceneContent(
     slideAuthoring,
     textMeasure,
     authoringContent,
+    responseAuthoringContent,
+    preserveNativeComposition,
+    retainDiagramDraftOnAllocationFailure,
+    nativeDesignBaseline,
+    allowExternalDiagramAnnotations,
   } = options;
 
   // Unified path for interactive scenes (both normal and ultra mode)
@@ -375,6 +406,12 @@ export async function generateSceneContent(
         log,
         options.onFailure,
         authoringContent,
+        responseAuthoringContent,
+        preserveNativeComposition,
+        allowExternalDiagramAnnotations,
+        visionImageMapping,
+        nativeDesignBaseline,
+        retainDiagramDraftOnAllocationFailure,
       );
     case 'quiz':
       return generateQuizContent(outline, aiCall, languageDirective, log, options.onFailure);
@@ -708,7 +745,18 @@ async function generateSlideContent(
   log: GenerationLogger = noopGenerationLogger,
   onFailure?: (failure: SceneContentFailure) => void,
   authoringContent?: readonly AuthoringContentItem[],
+  responseAuthoringContent?: SceneContentOptions['responseAuthoringContent'],
+  preserveNativeComposition = false,
+  allowExternalDiagramAnnotations = false,
+  visionImageMapping?: ImageMapping,
+  nativeDesignBaseline?: SceneContentOptions['nativeDesignBaseline'],
+  retainDiagramDraftOnAllocationFailure = false,
 ): Promise<GeneratedSlideContent | null> {
+  if (preserveNativeComposition && !outline.presentationTypography) {
+    outline = { ...outline, presentationTypography: {
+      bodyFontSize: 18, minimumBodyFontSize: 16, titleFontSize: 32, minimumTitleFontSize: 28,
+    } };
+  }
   const qualityDiagnostics: string[] = [];
   const reportQuality = (detail: string) => {
     qualityDiagnostics.push(detail);
@@ -750,6 +798,13 @@ async function generateSlideContent(
   let visionImages: Array<{ id: string; src: string }> | undefined;
 
   if (assignedImages && assignedImages.length > 0) {
+    // Rendering may use protected relative URLs or unresolved generation IDs.
+    // An explicit vision map is a separate transport and must never promise
+    // attachment bytes for those values. Legacy asset-ID hydration remains
+    // available when the host omits this new map.
+    const concreteVisionSource = (src: string) => /^data:image\//i.test(src) || /^https?:\/\/[^\s]+$/i.test(src);
+    const attachmentMapping = visionImageMapping === undefined ? imageMapping
+      : Object.fromEntries(Object.entries(visionImageMapping).filter(([, src]) => concreteVisionSource(src)));
     // The partition is the shared ordering (RFC #1153 part 2, N3): the app's
     // scene-content route pre-resolves the SAME `withSrc` candidates in this
     // order, so the slice below can never admit an image the route has not
@@ -761,10 +816,10 @@ async function generateSlideContent(
     // exactly the text ordering it saw before the partition refactor.
     const { sorted, visionSlice, textOnlySlice, noSrcImages } = partitionImagesForVision(
       assignedImages,
-      imageMapping,
+      attachmentMapping,
       MAX_VISION_IMAGES,
     );
-    if (visionEnabled && imageMapping) {
+    if (visionEnabled && attachmentMapping) {
       // Vision mode: split into vision images and text-only
       const visionDescriptions = visionSlice.map((img) => formatImagePlaceholder(img));
       const textDescriptions = [...textOnlySlice, ...noSrcImages].map((img) =>
@@ -780,11 +835,12 @@ async function generateSlideContent(
         (resolvedVisionImages ?? []).map((img) => [img.id, img] as const),
       );
       visionImages = visionSlice.map((img) => {
-        const resolved = resolvedById.get(img.id);
+        const candidate = resolvedById.get(img.id);
+        const resolved = candidate && (visionImageMapping === undefined || concreteVisionSource(candidate.src)) ? candidate : undefined;
         return (
           resolved ?? {
             id: img.id,
-            src: imageMapping[img.id],
+            src: attachmentMapping[img.id],
             width: img.width,
             height: img.height,
           }
@@ -907,6 +963,9 @@ async function generateSlideContent(
     onFailure?.({ code: 'prompt-unavailable' });
     return null;
   }
+  if (preserveNativeComposition && !nativeDesignBaseline) {
+    Object.assign(prompts, nativeCompositionPrompt(prompts.system, prompts.user));
+  }
 
   log.debug(`Generating slide content for: ${outline.title}`);
   if (assignedImages && assignedImages.length > 0) {
@@ -952,28 +1011,85 @@ async function generateSlideContent(
   }
 
   const useComponents = componentAuthoring && !editDirective && !baselineContent;
+  const advisoryMeasurements = preserveNativeComposition && Boolean(responseAuthoringContent);
   let useFlow = useComponents && slideAuthoring === 'flow';
   let diagramAllocations: DiagramAllocation[] = [];
-  if (useComponents && !useFlow && outline.visualIntent?.diagram && textMeasure) {
+  if (useComponents && !useFlow && (!preserveNativeComposition || nativeDesignBaseline) && outline.visualIntent?.diagram && textMeasure) {
     try {
-      diagramAllocations = await measureDiagramAllocations(outline.visualIntent.diagram, textMeasure);
+      const measuredPlan = nativeDesignBaseline ? { ...outline.visualIntent.diagram, annotation: undefined }
+        : outline.visualIntent.diagram;
+      diagramAllocations = await measureDiagramAllocations(measuredPlan, textMeasure, {}, nativeDesignBaseline
+        ? { nodeFontSize: outline.presentationTypography?.bodyFontSize, preserveNativeComposition: true } : {});
     } catch (error) {
       if (isAbortError(error)) throw error;
       reportQuality(`Diagram allocation measurement was unavailable: ${error instanceof Error ? error.message : String(error)}`);
       // Decide the page layout before the first content call. Flow preserves
       // the planned relationship and can place its explanation on a continuation
       // page when a local native rectangle cannot hold the measured diagram.
-      useFlow = error instanceof Error && error.message.includes('planned diagram has no feasible measured allocation');
+      useFlow = !preserveNativeComposition && error instanceof Error
+        && error.message.includes('planned diagram has no feasible measured allocation');
     }
   }
   const textAllocations = useComponents && !useFlow && authoringContent?.length && textMeasure
     ? await measureAdoptedTextAllocations(authoringContent, textMeasure, log, outline.presentationTypography
-      ? [outline.presentationTypography.bodyFontSize, outline.presentationTypography.minimumBodyFontSize] : undefined) : undefined;
+      ? advisoryMeasurements ? [outline.presentationTypography.bodyFontSize]
+        : [outline.presentationTypography.bodyFontSize, outline.presentationTypography.minimumBodyFontSize] : undefined) : undefined;
+  const diagramHints: NativeDiagramAllocationHint[] = [];
+  if (useComponents && !useFlow && advisoryMeasurements && outline.visualIntent?.diagram && textMeasure) {
+    const planned = outline.visualIntent.diagram;
+    const nodeFontSize = outline.presentationTypography?.bodyFontSize ?? 18;
+    // The author must see measurements for the exact direction and presentation
+    // the compiler will use, including the original labels and optional caption.
+    // Reuse glyph requests across candidate rectangles/profiles; no model call.
+    const glyphMeasurements = new Map<string, ReturnType<TextMeasure>>();
+    const diagramMeasure: TextMeasure = (input) => {
+      const key = JSON.stringify(input);
+      if (!glyphMeasurements.has(key)) glyphMeasurements.set(key, textMeasure!(input));
+      return glyphMeasurements.get(key)!;
+    };
+    const profiles = (['cards', 'steps'] as const).flatMap((presentation) =>
+      (['vertical', 'horizontal'] as const).map((orientation) => ({ presentation, orientation })));
+    for (const profile of profiles) {
+      if (profile.presentation === 'steps' && planned.topology !== 'sequence') continue;
+      for (const annotationIncluded of planned.annotation ? [true, false] : [false]) {
+        try {
+          const allocations = await measureDiagramAllocations({ ...planned,
+            annotation: annotationIncluded ? planned.annotation : undefined }, diagramMeasure, {},
+          { nodeFontSize, preserveNativeComposition: true, ...profile });
+          diagramHints.push(...allocations.map((allocation) => ({ ...allocation, ...profile,
+            nodeFontSize, annotationIncluded })));
+        } catch (error) {
+          if (isAbortError(error)) throw error;
+          log.debug(`Optional native ${profile.orientation}/${profile.presentation} graph measurement hints unavailable: ${error instanceof Error ? error.message : String(error)}`);
+        }
+      }
+    }
+  }
   const authoring = useComponents ? (useFlow ? flowAuthoringContract(outline, authoringContent)
-    : componentAuthoringContract(outline, diagramAllocations, authoringContent, textAllocations)) : undefined;
+    : nativeDesignBaseline ? restoredComponentAuthoringContract(outline, diagramAllocations)
+    : componentAuthoringContract(outline, diagramAllocations, authoringContent, textAllocations,
+      preserveNativeComposition, advisoryMeasurements, diagramHints)) : undefined;
   if (authoring) userPrompt += `\n\n${authoring.user}`;
-  const response = await aiCall(authoring ? `${prompts.system}\n\n${authoring.system}` : prompts.system, userPrompt, visionImages);
+  let response = await aiCall(authoring ? `${prompts.system}\n\n${authoring.system}` : prompts.system, userPrompt, visionImages);
+  if (responseAuthoringContent) {
+    try {
+      const adopted = responseAuthoringContent(response);
+      response = adopted.response;
+      authoringContent = adopted.content;
+      for (const diagnostic of adopted.diagnostics ?? []) reportQuality(diagnostic);
+    } catch (error) {
+      if (isAbortError(error)) throw error;
+      onFailure?.({ code: 'invalid-model-output', detail: error instanceof Error ? error.message : String(error) });
+      return null;
+    }
+  }
   let generatedData = parseJsonResponse<GeneratedSlideData>(response);
+  if (useComponents && !useFlow && preserveNativeComposition && generatedData?.layout) {
+    reportQuality('Unexpected flow layout was ignored; retaining authored native elements and local components');
+    delete generatedData.layout;
+  }
+  const contentBindings = new NativeContentBindings(authoringContent);
+  if (generatedData) contentBindings.capture(generatedData, outline.id, outline.visualIntent?.diagram);
   if (generatedData && authoringContent) {
     try { generatedData = resolveAuthoringContent(generatedData, authoringContent, outline.presentationTypography, reportQuality); }
     catch (error) {
@@ -1052,15 +1168,29 @@ async function generateSlideContent(
         .filter((element) => element && element.type !== 'line' && (element.type !== 'shape' || Boolean(element.text)))
         .map(({ left, top, width, height }) => ({ left, top, width, height }));
       for (const [componentIndex, rawComponent] of components.entries()) {
-        const component = rawComponent && typeof rawComponent === 'object' ? { ...rawComponent, id: `${outline.id}-component-${componentIndex}` } : rawComponent;
+        const component = rawComponent && typeof rawComponent === 'object' ? { ...rawComponent,
+          id: 'id' in rawComponent && typeof rawComponent.id === 'string' ? rawComponent.id : `${outline.id}-component-${componentIndex}` } : rawComponent;
         if (isDiagramComponent(component)) {
           const planned = outline.visualIntent?.diagram;
           // The teaching plan owns meaning; the page author chooses only its rectangle and styling.
-          const diagram = planned ? { ...component, ...planned } : component;
+          const diagram = planned ? { ...component, ...planned,
+            // Current plans can carry a long explanatory caption. Restored
+            // native design owns selected display wording; the canonical
+            // graph still owns every node, label, edge and sequence group.
+            ...(nativeDesignBaseline ? { annotation: component.annotation } : {}),
+          } : component;
           compiled.push(...await compileMeasuredDiagramComponent(diagram, textMeasure, {
             feasibleAllocations: planned ? diagramAllocations : undefined,
+            ...(preserveNativeComposition && outline.presentationTypography
+              ? { nodeFontSize: outline.presentationTypography.bodyFontSize } : {}),
+            allowExternalAnnotation: allowExternalDiagramAnnotations,
+            // Measure this local allocation first. A retained review graph
+            // carries the unresolved fit diagnosis rather than a fit claim.
+            preserveNativeComposition,
+            retainDraftOnAllocationFailure: retainDiagramDraftOnAllocationFailure,
             onDiagnostic: reportQuality,
           }) as unknown as GeneratedSlideData['elements']);
+          contentBindings.diagram(diagram.id, diagram);
           allocated.push({ left: diagram.left, top: diagram.top, width: diagram.width, height: diagram.height });
         } else if (component && typeof component === 'object'
           && ('kind' in component)
@@ -1099,11 +1229,12 @@ async function generateSlideContent(
     } catch (error) {
       const firstDetail = error instanceof Error ? error.message : String(error);
       let allocatedFirstDraft = false;
-      if (/component allocations overlap|textBox content needs .*maximum allocation/i.test(firstDetail)) {
+      if (!preserveNativeComposition && /component allocations overlap|textBox content needs .*maximum allocation/i.test(firstDetail)) {
         try {
           const stack = await measureNativeTextStack(generatedData.elements as unknown as PPTElement[],
             components.map((component, index) => component && typeof component === 'object'
-              ? { ...component, id: `${outline.id}-component-${index}` } : component), textMeasure);
+              ? { ...component, id: 'id' in component && typeof component.id === 'string'
+                ? component.id : `${outline.id}-component-${index}` } : component), textMeasure);
           if (stack) {
             const breaks = paginateMeasuredLayoutGroups(stack.groups, stack.capacity, stack.gap);
             const allocatedIds = new Set<string>();
@@ -1147,11 +1278,14 @@ async function generateSlideContent(
       if (!allocatedFirstDraft) {
         const detail = error instanceof Error ? error.message : String(error);
         if (/component allocations overlap|textBox content needs .*maximum allocation/i.test(firstDetail)) {
-          reportQuality(`Automatic native allocation did not resolve the layout issue: ${firstDetail}; ${detail}`);
+          reportQuality(preserveNativeComposition
+            ? `Authored native composition retained after measured layout conflict: ${firstDetail}`
+            : `Automatic native allocation did not resolve the layout issue: ${firstDetail}; ${detail}`);
           generatedData.elements = [...generatedData.elements, ...compiled];
         } else {
           log.error(`First-draft component compilation failed for ${outline.title}: ${detail}`);
-          onFailure?.({ code: 'invalid-model-output', detail });
+          const category = layoutFailureCategory(error, detail);
+          onFailure?.({ code: 'invalid-model-output', detail, ...(category ? { category } : {}) });
           return null;
         }
       }
@@ -1161,7 +1295,8 @@ async function generateSlideContent(
   // Normalize the untrusted array before reading any element property. Model
   // output such as `elements: [null]` must become a recognizable content
   // failure rather than escaping as a TypeError from `el.type`.
-  const authoredElements = useComponents ? generatedData.elements.map((element, index) => element && typeof element === 'object'
+  const preserveAuthoredIds = useComponents || preserveNativeComposition;
+  const authoredElements = preserveAuthoredIds ? generatedData.elements.map((element, index) => element && typeof element === 'object'
     ? { ...element, id: typeof element.id === 'string' && element.id ? element.id : `${outline.id}-element-${index}` } : element) : generatedData.elements;
   let fixedElements = fixElementDefaults(authoredElements, assignedImages, log);
   if (fixedElements.length === 0) {
@@ -1175,9 +1310,9 @@ async function generateSlideContent(
       if (flowPages) {
         const byId = new Map(fixedElements.map((element) => [element.id, element]));
         for (const page of flowPages) page.elements = await compileNativeTextLayout(
-          page.elements.map((element) => byId.get(element.id) as unknown as PPTElement), textMeasure, { onDiagnostic: reportQuality });
+          page.elements.map((element) => byId.get(element.id) as unknown as PPTElement), textMeasure, { onDiagnostic: reportQuality, preserveNativeComposition });
         fixedElements = flowPages.flatMap((page) => page.elements) as unknown as GeneratedSlideData['elements'];
-      } else fixedElements = await compileNativeTextLayout(fixedElements as unknown as PPTElement[], textMeasure, { onDiagnostic: reportQuality }) as unknown as GeneratedSlideData['elements'];
+      } else fixedElements = await compileNativeTextLayout(fixedElements as unknown as PPTElement[], textMeasure, { onDiagnostic: reportQuality, preserveNativeComposition }) as unknown as GeneratedSlideData['elements'];
     }
     catch (error) {
       const detail = error instanceof Error ? error.message : String(error);
@@ -1229,8 +1364,9 @@ async function generateSlideContent(
   // generation so targets are unambiguous and the same draft compiles stably.
   const reservedIds = new Set(videoNormalizedElements.flatMap((element) => typeof element.id === 'string' && element.id.trim() ? [element.id] : []));
   const usedIds = new Set<string>();
+  const finalIds = new Map<string, string>();
   const processedElements: PPTElement[] = videoNormalizedElements.map((el, index) => {
-    let id = useComponents ? (typeof el.id === 'string' && el.id.trim() ? el.id : `${outline.id}-element-${index}`) : `${el.type}_${nanoid(8)}`;
+    let id = preserveAuthoredIds ? (typeof el.id === 'string' && el.id.trim() ? el.id : `${outline.id}-element-${index}`) : `${el.type}_${nanoid(8)}`;
     if (usedIds.has(id)) {
       const base = `${outline.id}-element-${index}`;
       id = base;
@@ -1238,6 +1374,7 @@ async function generateSlideContent(
       while (reservedIds.has(id) || usedIds.has(id)) id = `${base}-${suffix++}`;
     }
     usedIds.add(id);
+    if (typeof el.id === 'string') finalIds.set(el.id, id);
     return { ...el, id, rotate: 0 };
   }) as PPTElement[];
 
@@ -1245,6 +1382,15 @@ async function generateSlideContent(
     log.error(`Generated slide became empty after technical normalization for: ${outline.title}`);
     onFailure?.({ code: 'invalid-model-output' });
     return null;
+  }
+
+  for (const reference of requiredResourceRefs) {
+    const source = imageMapping?.[reference.resourceId] ?? generatedMediaMapping?.[reference.resourceId]
+      ?? reference.resourceId;
+    const present = processedElements.some((element) => reference.kind === 'generated-video'
+      ? element.type === 'video' && (element.mediaRef === reference.resourceId || element.src === source)
+      : element.type === 'image' && element.src === source);
+    if (!present) reportQuality(`Required visual resource is absent from the actual draft: ${reference.resourceId}`);
   }
 
   if (useComponents && !useFlow) {
@@ -1271,18 +1417,25 @@ async function generateSlideContent(
 
   if (flowPages) {
     const byId = new Map(processedElements.map((element) => [element.id, element]));
-    const pages = flowPages.map((page) => ({
-      elements: page.elements.flatMap((element) => byId.has(element.id) ? [byId.get(element.id)!] : []),
-      background, remark: generatedData.remark || outline.description,
-      sourceGroupIds: page.sourceGroupIds, teachingText: page.teachingText,
-      paginationVersion: page.paginationVersion, occupiedHeight: page.occupiedHeight,
-      layoutDecision: page.layoutDecision, layoutMeasurement: page.layoutMeasurement,
-      ...(qualityDiagnostics.length ? { qualityDiagnostics } : {}),
-    }));
+    const pages = flowPages.map((page) => {
+      const elements = page.elements.flatMap((element) => byId.has(element.id) ? [byId.get(element.id)!] : []);
+      const bindings = contentBindings.resolve(elements, finalIds);
+      return {
+        elements,
+        ...(bindings.length ? { contentBindings: bindings } : {}),
+        background, remark: generatedData.remark || outline.description,
+        sourceGroupIds: page.sourceGroupIds, teachingText: page.teachingText,
+        paginationVersion: page.paginationVersion, occupiedHeight: page.occupiedHeight,
+        layoutDecision: page.layoutDecision, layoutMeasurement: page.layoutMeasurement,
+        ...(qualityDiagnostics.length ? { qualityDiagnostics } : {}),
+      };
+    });
     return { ...pages[0], ...(pages.length > 1 ? { continuationPages: pages.slice(1) } : {}) };
   }
+  const bindings = contentBindings.resolve(processedElements, finalIds);
   return {
     elements: processedElements,
+    ...(bindings.length ? { contentBindings: bindings } : {}),
     background,
     remark: generatedData.remark || outline.description,
     ...(qualityDiagnostics.length ? { qualityDiagnostics } : {}),

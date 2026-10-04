@@ -99,4 +99,37 @@ describe('actual rendered teaching content', () => {
     expect(inspectRenderedSlide('scene', [image, crossing]).map((issue) => issue.id))
       .toContain('render:scene:collision-figure:crossing');
   });
+
+  it('does not confuse page 8 font descent space with ink escaping its own earlier header', () => {
+    const header: RenderedElement = { id: 'header', type: 'shape',
+      box: { left: 60, top: 150.13, width: 530, height: 46.04 }, textRects: [], text: '', opaque: true };
+    const label: RenderedElement = { ...text('header-label', 158, 40), fontSize: 22,
+      box: { left: 84, top: 158, width: 400, height: 40 },
+      textRects: [{ left: 94, top: 166.15, width: 88, height: 32.03 }],
+      inkRects: [{ left: 94, top: 173.15, width: 88, height: 22.02 }] };
+    expect(inspectRenderedSlide('scene', [header, label]).some((issue) => issue.id.includes('collision-header'))).toBe(false);
+    // Without actual font ink, keep the conservative diagnosis.
+    expect(inspectRenderedSlide('scene', [header, { ...label, inkRects: undefined }]).some((issue) => issue.id.includes('collision-header'))).toBe(true);
+  });
+
+  it('keeps text padding separate from page 9 label/body foregrounds', () => {
+    const label: RenderedElement = { ...text('label', 306.27, 32.03), fontSize: 16,
+      textRects: [{ left: 110, top: 314.28, width: 100, height: 24.02 }],
+      inkRects: [{ left: 110, top: 319.28, width: 100, height: 16.02 }] };
+    const body: RenderedElement = { ...text('body', 334.30, 74.06), fontSize: 18,
+      textRects: [{ left: 110, top: 344.31, width: 300, height: 26.02 }],
+      inkRects: [{ left: 110, top: 349.31, width: 300, height: 18.02 }] };
+    expect(inspectRenderedSlide('scene', [label, body]).some((issue) => issue.id.includes('overlap-'))).toBe(false);
+  });
+
+  it('still reports actual source-caption ink overlap, canvas overflow and later occlusion', () => {
+    const caption = { ...text('caption', 330), inkRects: [{ left: 110, top: 340, width: 300, height: 18 }] };
+    const source = { ...text('source', 336), inkRects: [{ left: 120, top: 346, width: 220, height: 16 }] };
+    expect(inspectRenderedSlide('scene', [caption, source]).some((issue) => issue.id.includes('overlap-source'))).toBe(true);
+    const overflow = { ...text('overflow', 540), inkRects: [{ left: 110, top: 552, width: 300, height: 18 }] };
+    expect(inspectRenderedSlide('scene', [overflow]).map((issue) => issue.id)).toContain('render:scene:overflow:overflow');
+    const cover: RenderedElement = { id: 'cover', type: 'shape', box: { left: 100, top: 330, width: 330, height: 45 },
+      textRects: [], text: '', opaque: true };
+    expect(inspectRenderedSlide('scene', [caption, cover]).map((issue) => issue.id)).toContain('render:scene:occluded-cover:caption');
+  });
 });

@@ -1,10 +1,68 @@
 import type { SceneOutline } from '@/lib/openmaic/types/generation';
 import type { KnowledgePoint } from '@/lib/session/types';
-import type { CourseEvidenceSnapshot, CourseEvidenceSource } from '@/lib/textbook/course-evidence-types';
+import type { CourseEvidenceItem, CourseEvidenceSnapshot, CourseEvidenceSource } from '@/lib/textbook/course-evidence-types';
 import type { FigureSequenceContract } from '@/lib/textbook/course-visual-binding';
-import { usesSourceSequence } from '@/lib/textbook/source-sequence-use';
+import { hasExplicitNativeSourceSequenceUse, usesSourceSequence } from '@/lib/textbook/source-sequence-use';
+import { authoringEvidenceBlocks, normalizeAuthoringSourceBindings, type AuthoringSourceBinding } from '@/lib/course-design/knowledge-authoring';
+import { PPT_PAGE_PLANNING_VERSION } from '@/lib/course-design/ppt-page-planning-contract';
 
-export type SourceGroundingKnowledgePoint = Pick<KnowledgePoint, 'id' | 'evidenceItemIds' | 'sourceId' | 'sourceKnowledgePointIds'>;
+export type SourceGroundingKnowledgePoint = Pick<KnowledgePoint,
+  'id' | 'evidenceItemIds' | 'sourceId' | 'sourceKnowledgePointIds' | 'authoring'>;
+
+function adoptedWholePassage(item: CourseEvidenceItem): boolean {
+  const ids = item.source.sourceBlockIds;
+  return item.kind === 'source-block' && !item.completeSourceBlocks?.length && Boolean(item.content.trim())
+    && Boolean(ids?.length && ids.every((id) => typeof id === 'string' && id.trim())
+      && new Set(ids).size === ids.length);
+}
+
+/** Reopen only explicitly adopted lists under their immutable source identity.
+ * A list excerpt is a readable source block even when retrieval saved only its
+ * anchor. Whole adopted units remain separate from their constituent blocks. */
+function nativeSourceCatalog(evidence: CourseEvidenceSnapshot | undefined, contracts: readonly FigureSequenceContract[],
+  allowedIds: ReadonlySet<string>) {
+  if (!evidence) return evidence;
+  return { ...evidence, items: evidence.items.map((item) => {
+    if (!allowedIds.has(item.id)) return item;
+    const blocks = new Map(authoringEvidenceBlocks(item).map((block) => [block.id,
+      { sourceBlockId: block.id, content: block.content, source: block.source ?? item.source }]));
+    const sequences = [
+      ...(item.sourceSequences ?? []).map((sequence) => ({ resourceId: `source-sequence:${sequence.anchorSourceBlockId}`, sequence })),
+      ...(item.figureSequences ?? []).map((sequence) => ({ resourceId: `figure-sequence:${sequence.figureId}`, sequence })),
+    ];
+    for (const { resourceId, sequence } of sequences) {
+      const contract = contracts.find((candidate) => candidate.resourceId === resourceId);
+      if (!contract) continue;
+      if (JSON.stringify(contract.orderedSteps?.map(({ label, sourceBlockId }) => [label, sourceBlockId]))
+        !== JSON.stringify(sequence.steps.map(({ label, sourceBlockId }) => [label, sourceBlockId]))) {
+        throw new Error(`页面教材序列与已采用原文身份冲突：${resourceId}`);
+      }
+      for (const step of sequence.steps) for (const block of [
+        { sourceBlockId: step.sourceBlockId, content: step.label },
+        ...(step.excerptBlockId && step.excerpt ? [{ sourceBlockId: step.excerptBlockId, content: step.excerpt }] : []),
+      ]) if (!blocks.has(block.sourceBlockId)) blocks.set(block.sourceBlockId, { ...block, source: item.source });
+    }
+    return { ...item, completeSourceBlocks: [...blocks.values()] };
+  }) };
+}
+
+function nativeSourceBindings(raw: readonly AuthoringSourceBinding[], evidence: CourseEvidenceSnapshot | undefined,
+  catalog: CourseEvidenceSnapshot | undefined, allowedIds: readonly string[]): AuthoringSourceBinding[] {
+  const result: AuthoringSourceBinding[] = [];
+  for (const binding of raw) {
+    const item = evidence?.items.find((candidate) => candidate.id === binding.evidenceItemId);
+    if (!item || !allowedIds.includes(item.id)) continue;
+    if (binding.textbookId !== item.source.textbookId || binding.revisionId !== item.source.revisionId) {
+      throw new Error(`页面原文绑定与已采用教材或版本身份不一致：${item.id}`);
+    }
+    const ids = binding.sourceBlockIds;
+    const whole = adoptedWholePassage(item) && ids.length === item.source.sourceBlockIds!.length
+      && new Set(ids).size === ids.length && ids.every((id) => item.source.sourceBlockIds!.includes(id));
+    if (whole && (!binding.quote || item.content.includes(binding.quote))) result.push(binding);
+    else result.push(...normalizeAuthoringSourceBindings([binding], catalog, allowedIds));
+  }
+  return [...new Map(result.map((binding) => [JSON.stringify(binding), binding])).values()];
+}
 
 function definingSourceSentence(label: string, descriptions: readonly string[] | undefined): string | undefined {
   // A named characteristic is a heading, not a complete teaching claim.
@@ -35,34 +93,87 @@ export function pageOriginalTeachingSources(outline: SceneOutline, input: {
   sourceSequenceContracts?: readonly FigureSequenceContract[];
 }) {
   const knowledgeIds = new Set(outline.knowledgePointIds ?? []);
+  const sourceKnowledgeIds = new Set([...knowledgeIds,
+    ...(outline.teachingBrief?.understandingCriteria?.basis ?? []).flatMap((basis) => [
+      ...basis.claimRefs.map((ref) => ref.knowledgePointId),
+      ...(basis.exampleRefs ?? []).map((ref) => ref.knowledgePointId),
+    ]),
+    ...(outline.teachingBrief?.authoring?.basisNodes ?? []).flatMap((node) =>
+      (node.claimRefs ?? []).map((ref) => ref.knowledgePointId)),
+  ]);
   const pointsById = new Map((input.sourceKnowledgePoints ?? []).map((point) => [point.id, point]));
-  const evidenceIds = new Set([...knowledgeIds].flatMap((id) => {
+  const adoptedEvidenceIds = (id: string): string[] => {
     const adoptedIds = pointsById.get(id)?.evidenceItemIds;
     // An explicit empty adoption is a real teacher decision. Retrieval mappings
     // are only a compatibility fallback for points without an adoption field.
     if (adoptedIds !== undefined) return adoptedIds;
     const point = pointsById.get(id);
     const sourceIds = new Set([id, point?.sourceId, ...(point?.sourceKnowledgePointIds ?? [])]);
-    return (input.sourceEvidence?.mappings ?? [])
+    const mappedIds = (input.sourceEvidence?.mappings ?? [])
       .filter((mapping) => sourceIds.has(mapping.sourceKnowledgePointId) && mapping.status !== 'none')
       .flatMap((mapping) => mapping.evidenceItemIds);
-  }));
+    if (mappedIds.length) return mappedIds;
+    // A compiled page can carry adopted provenance without the older mapping
+    // shape. Explicit adoption above still wins, including an empty adoption.
+    const authoring = point?.authoring ?? outline.teachingBrief?.authoring?.knowledge
+      .find((item) => item.knowledgePointId === id)?.authoring;
+    return [...(authoring?.claims ?? []), ...(authoring?.examples ?? [])]
+      .flatMap((item) => item.sources.map((binding) => binding.evidenceItemId));
+  };
+  const evidenceIds = new Set([...sourceKnowledgeIds].flatMap(adoptedEvidenceIds));
+  const teachingBindings = outline.teachingBrief?.authoring?.nodes
+    .flatMap((node) => [...(node.sourceBindings ?? []), ...(node.quoteDuties ?? []).map((duty) => duty.source)]);
+  const basisBindings = outline.teachingBrief?.authoring?.basisNodes?.flatMap((node) => node.sourceBindings ?? []) ?? [];
+  const explicitContracts = (input.sourceSequenceContracts ?? [])
+    .filter((contract) => hasExplicitNativeSourceSequenceUse(outline, contract));
+  const native = outline.teachingBrief?.pptPlanningVersion === PPT_PAGE_PLANNING_VERSION;
+  const catalogEvidenceIds = new Set([...evidenceIds,
+    ...explicitContracts.flatMap((contract) => contract.knowledgePointIds.flatMap(adoptedEvidenceIds))]);
+  const sourceCatalog = native ? nativeSourceCatalog(input.sourceEvidence, explicitContracts, catalogEvidenceIds) : input.sourceEvidence;
+  const rawBindings = [...(outline.teachingBrief?.sourceBindings ?? []), ...(teachingBindings ?? []), ...basisBindings];
+  const resolveBindings = (allowedIds: readonly string[]) => native
+    ? nativeSourceBindings(rawBindings, input.sourceEvidence, sourceCatalog, allowedIds)
+    : normalizeAuthoringSourceBindings(rawBindings, input.sourceEvidence, allowedIds);
+  if (explicitContracts.length) {
+    const allowedIds = explicitContracts.flatMap((contract) => contract.knowledgePointIds.flatMap(adoptedEvidenceIds));
+    const bindings = resolveBindings(allowedIds);
+    for (const binding of bindings) {
+      const item = input.sourceEvidence?.items.find((source) => source.id === binding.evidenceItemId);
+      if (explicitContracts.some((contract) => item?.sourceSequences?.some((sequence) =>
+        contract.resourceId === `source-sequence:${sequence.anchorSourceBlockId}`)
+        || item?.figureSequences?.some((sequence) => contract.resourceId === `figure-sequence:${sequence.figureId}`))) {
+        evidenceIds.add(binding.evidenceItemId);
+      }
+    }
+  }
   const primaryRevisionId = input.sourceEvidence?.selections.find((selection) => selection.primary)?.revisionId;
   const originalSources = (input.sourceEvidence?.items ?? []).filter((item) => evidenceIds.has(item.id))
     .map((item) => {
+      const originalBlocks = authoringEvidenceBlocks(sourceCatalog?.items.find((source) => source.id === item.id) ?? item);
+      const blockLocations = new Map((item.completeSourceBlocks ?? []).map((block) => [block.sourceBlockId, block.source]));
       const passages: Array<{ sourceBlockId?: string; text: string; source?: CourseEvidenceSource }> = [
-        ...(item.completeSourceBlocks ?? []).filter((block) => !block.source
-        || block.source.revisionId === item.source.revisionId).map((block) => ({
-        sourceBlockId: block.sourceBlockId, text: block.content,
-        ...(block.source ? { source: block.source } : {}),
+        ...originalBlocks.map((block) => ({
+        sourceBlockId: block.id, text: block.content,
+        ...(blockLocations.get(block.id) ? { source: blockLocations.get(block.id)! } : {}),
       })),
-      ...(item.source.quote?.trim() ? [{ sourceBlockId: item.source.sourceBlockId, text: item.source.quote }] : []),
+      // Historical evidence without block metadata remains readable. Modern
+      // bindings and excerpt IDs always use the verified immutable blocks.
+      ...(!item.source.sourceBlockId && item.source.quote?.trim()
+        ? [{ text: item.source.quote }] : []),
       ...(item.kind === 'source-block' && item.content.trim()
-        ? [{ sourceBlockId: item.source.sourceBlockId, text: item.content }] : [])];
+        && !originalBlocks.length
+        ? [{ sourceBlockId: item.source.sourceBlockId, text: item.content }] : []),
+      ...(native && adoptedWholePassage(item) && !originalBlocks.some((block) => block.content === item.content)
+        ? [{ text: item.content, source: item.source }] : [])];
+      const uniquePassages = new Map<string, typeof passages[number]>();
+      for (const passage of passages) {
+        const key = JSON.stringify([passage.sourceBlockId, passage.text.trim()]);
+        if (!uniquePassages.has(key)) uniquePassages.set(key, passage);
+      }
       return { evidenceId: item.id, textbookTitle: item.source.textbookTitle,
         revisionId: item.source.revisionId, primary: item.source.revisionId === primaryRevisionId,
         sectionPath: item.source.sectionPath,
-        passages: [...new Map(passages.map((passage) => [passage.text.trim(), passage])).values()],
+        passages: [...uniquePassages.values()],
         originalSequences: [...(item.figureSequences ?? []), ...(item.sourceSequences ?? [])]
           .map((sequence) => ({ steps: sequence.steps.map((step) => ({ label: step.label,
             ...(step.excerpt ? { explanation: step.excerpt } : {}) })) })),
@@ -70,13 +181,19 @@ export function pageOriginalTeachingSources(outline: SceneOutline, input: {
     }).filter((source) => source.passages.length || source.originalSequences.length)
     .sort((left, right) => Number(right.primary) - Number(left.primary));
   const originalText = originalSources.flatMap((source) => source.passages.map((passage) => passage.text)).join('\n');
-  const originalQuotes = [...new Set((outline.teachingBrief?.evidence ?? []).map((item) => item.quote.trim())
-    .filter((quote) => Boolean(quote) && (!input.sourceEvidence || originalText.includes(quote))))];
+  const nodeBindings = resolveBindings([...evidenceIds]);
+  const verifiedQuotes = new Set(nodeBindings.flatMap((binding) => binding.quote ? [binding.quote] : []));
+  const originalQuotes = [...new Set([
+    ...(outline.teachingBrief?.evidence ?? []).map((item) => item.quote.trim()),
+    ...nodeBindings.flatMap((binding) => binding.quote ? [binding.quote] : []),
+  ]
+    .filter((quote) => Boolean(quote) && (!input.sourceEvidence || verifiedQuotes.has(quote) || originalText.includes(quote))))];
   const definitionSources = originalSources;
   const sourceDefinitions = [...new Map(originalQuotes.flatMap((quote) => {
     const sentence = originalDefinitionSentence(quote);
     if (!sentence) return [];
-    return definitionSources.filter((source) => source.passages.some((passage) => passage.text.includes(quote)))
+    return definitionSources.filter((source) => source.passages.some((passage) => passage.text.includes(quote))
+      || nodeBindings.some((binding) => binding.evidenceItemId === source.evidenceId && binding.quote === quote))
       .map((source) => [JSON.stringify([source.revisionId, sentence]), sentence] as const);
   })).entries()];
   const adoptedSequences = (input.sourceEvidence?.items ?? []).filter((item) => evidenceIds.has(item.id))
@@ -91,7 +208,8 @@ export function pageOriginalTeachingSources(outline: SceneOutline, input: {
   const sameLabel = (value: string) => value.normalize('NFKC').replace(/[^\p{L}\p{N}]/gu, '');
   const requiredSourceLists = (input.sourceSequenceContracts ?? []).filter((contract) => contract.required
     && usesSourceSequence(outline, contract)
-    && contract.knowledgePointIds.some((id) => knowledgeIds.has(id)))
+    && (contract.knowledgePointIds.some((id) => knowledgeIds.has(id))
+      || hasExplicitNativeSourceSequenceUse(outline, contract)))
     .map((contract) => ({ id: contract.resourceId, semantics: contract.sequenceSemantics ?? 'ordered-steps',
       steps: (contract.orderedSteps ?? []).filter((step) => !contract.requiredStepLabels
         || contract.requiredStepLabels.includes(step.label)).map((step) => {

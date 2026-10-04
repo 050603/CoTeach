@@ -106,9 +106,41 @@ function emphasizedHtml(text: string, emphasis: readonly Emphasis[]): string {
 
 /** Retain the author's existing enclosing typography, without retaining rewritten prose. */
 function referenceHtml(texts: string[], existing: unknown, tableCell = false, bodyFontSize = 24, emphasis: readonly Emphasis[] = []): string {
-  const html = texts.map((text) => emphasizedHtml(text, emphasis).replace(/\n/g, '<br>')).join('<br><br>');
+  // Each reference is a paragraph, rather than two line breaks inside a
+  // paragraph. The renderer owns the ordinary 5px gap between paragraphs.
+  // Fill authored slots individually; if there are more references, extend
+  // the final slot (usually the body), preserving separate label typography.
+  if (texts.length > 1 && typeof existing === 'string') {
+    const paragraphs = /<p\b[^>]*>[\s\S]*?<\/p\s*>/gi;
+    const slots = [...existing.matchAll(paragraphs)];
+    const outside = existing.replace(paragraphs, '').replace(/<[^>]*>/g, '').trim();
+    if (slots.length && !outside) {
+      let index = 0;
+      return existing.replace(paragraphs, (paragraph) => {
+        const start = index++;
+        if (start >= texts.length) return '';
+        const end = start === slots.length - 1 ? texts.length : start + 1;
+        return texts.slice(start, end).map((text) => referenceHtml([text], paragraph, tableCell, bodyFontSize, emphasis)).join('');
+      });
+    }
+  }
   const prefix = typeof existing === 'string'
     ? existing.match(/^\s*((?:<(?:p|div|h[1-6]|span|strong|b|em|i|u)\b[^>]*>\s*)+)/i)?.[1] : undefined;
+  if (texts.length > 1) {
+    // Component migration can supply an unclosed shell, or native slots can
+    // have only inline typography. Keep outer divs once and repeat the actual
+    // paragraph/heading shell, putting inline-only shells inside real p tags.
+    const tags = [...(prefix ?? '').matchAll(/<(p|div|h[1-6]|span|strong|b|em|i|u)\b[^>]*>/gi)];
+    const block = tags.find((tag) => /^(?:p|h[1-6])$/i.test(tag[1]!));
+    const innerStart = block?.index ?? tags.find((tag) => tag[1]!.toLowerCase() !== 'div')?.index ?? prefix?.length ?? 0;
+    const outerPrefix = (prefix ?? '').slice(0, innerStart);
+    const outerTags = tags.filter((tag) => tag.index! < innerStart).map((tag) => tag[1]);
+    const innerPrefix = (prefix ?? '').slice(innerStart);
+    const shell = block ? innerPrefix : `${prefix || tableCell ? '<p>' : `<p style="font-size:${bodyFontSize}px">`}${innerPrefix}`;
+    return outerPrefix + texts.map((text) => referenceHtml([text], shell, false, bodyFontSize, emphasis)).join('')
+      + outerTags.reverse().map((tag) => `</${tag}>`).join('');
+  }
+  const html = texts.map((text) => emphasizedHtml(text, emphasis).replace(/\n/g, '<br>')).join('');
   if (!prefix) return tableCell ? html : `<p style="font-size:${bodyFontSize}px">${html}</p>`;
   const tags = [...prefix.matchAll(/<(p|div|h[1-6]|span|strong|b|em|i|u)\b[^>]*>/gi)].map((match) => match[1]);
   return `${prefix}${html}${tags.reverse().map((tag) => `</${tag}>`).join('')}`;

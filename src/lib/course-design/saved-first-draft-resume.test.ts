@@ -50,6 +50,9 @@ import { teachingBlueprintInputFingerprint, teachingBlueprintContentFingerprint,
 import { fingerprintGenerationValue } from "@/lib/course-generation/page-checkpoints";
 import { assertSavedCourseDesignReplayInput, hasAcceptedSavedCourseDesignOutline,
   resumeSavedCourseDesignFirstDraft } from "./saved-first-draft-resume";
+import { generateSpokenTeachingBlueprint, LEGACY_SPOKEN_SECTION_POLICY as SPOKEN_SECTION_POLICY,
+  SPOKEN_SECTION_POLICY as NATIVE_SPOKEN_SECTION_POLICY } from "./teaching-section-authoring";
+import { isUnrequestedSpokenSectionContinuation } from './saved-spoken-section-policy';
 
 function sample() {
   const section = structuredClone(fixture.section);
@@ -288,7 +291,8 @@ describe("saved complete blueprint local resume", () => {
     mocks.replace.mockReset().mockImplementation(async ({ data }) => ({ ...state.job, ...data }));
     await expect(resumeSavedCourseDesignFirstDraft('course-1')).resolves.toMatchObject({ status: 'queued' });
     expect(mocks.provider).not.toHaveBeenCalled();
-    expect(mocks.save.mock.calls[0][2]).toMatchObject({ status: 'validated', qualityDiagnostics: ['小节时间不守恒'] });
+    expect(mocks.save.mock.calls[0][2]).toMatchObject({ status: 'validated',
+      qualityDiagnostics: expect.arrayContaining(['小节时间不守恒']) });
   });
 
   it("reuses the original saved draft without calling a content audit or another author", async () => {
@@ -361,6 +365,324 @@ describe("saved complete blueprint local resume", () => {
     expect(mocks.replace).toHaveBeenCalledTimes(1);
     expect(state.saved.teachingBlueprintAttempt.attemptsStarted).toBe(1);
   });
+});
+
+describe("saved complete spoken sections local resume", () => {
+  async function spokenDraft(includeProcessEvidence = false, nativeObservation = false) {
+    state.course.content.knowledgePoints = [
+      { id: 'k1', name: '训练', description: '', level: 'core', evidenceItemIds: ['e1', ...(includeProcessEvidence ? ['e2'] : [])] },
+      { id: 'k2', name: '检验', description: '', level: 'core' },
+    ];
+    const baseInputFor = state.inputFor;
+    state.inputFor = (course, request) => ({ ...baseInputFor(course, request),
+      sectionPlans: [{ title: '训练', knowledgePointIds: ['k1'], teachingBudgetSec: 264 },
+        { title: '检验', knowledgePointIds: ['k2'], teachingBudgetSec: 264 }],
+      ...(nativeObservation ? { textbookFigures: [{ resourceId: 'textbook_fig_7463e7e21d4c', figureId: 'figure-31',
+        knowledgePointIds: ['k2'], relation: 'candidate' as const, required: false, sourceTitle: '图31 具身认知理论的认知过程' }] } : {}),
+      sourceEvidence: { schemaVersion: 2, version: 1, fingerprint: 'immutable-evidence', createdAt: '',
+        retrievalMode: 'hybrid', selections: [], mappings: [], warnings: [],
+        items: [{ id: 'e1', kind: 'source-block', title: '训练', content: '摘要',
+          source: { textbookId: 'book', textbookTitle: '教材', revisionId: 'r1', revisionVersion: 1,
+            sectionPath: ['训练'], sourceBlockId: 'b1' },
+          completeSourceBlocks: [{ sourceBlockId: 'b1', content: '训练集用于学习模型参数。' }] },
+        ...(includeProcessEvidence ? [{ id: 'e2', kind: 'source-block' as const, title: '训练与检验流程', content: '流程摘要',
+          source: { textbookId: 'book', textbookTitle: '教材', revisionId: 'r1', revisionVersion: 1,
+            sectionPath: ['训练'], sourceBlockId: 'b2' },
+          completeSourceBlocks: [{ sourceBlockId: 'b2', content: '先训练模型，再使用独立数据检验效果。' }] }] : [])] },
+    });
+    state.input = state.inputFor(state.course, state.request);
+    mocks.model.mockImplementation(async ({ stage }) => ({ stage, model: { doGenerate: mocks.provider } }));
+    mocks.modelFingerprint.mockImplementation((resolved) => resolved.stage === 'scene-content'
+      ? 'spoken-model-fingerprint' : 'model-fingerprint');
+    const spokenSections: Array<{ step: string; state: Record<string, unknown> }> = [];
+    const rawTexts = [includeProcessEvidence ? '训练集用于学习模型参数；训练后使用独立数据检验效果。' : '第一小节的完整口播原文。',
+      '第二小节接续解释检验。'];
+    await generateSpokenTeachingBlueprint({ ...state.input, generationModelFingerprint: 'spoken-model-fingerprint' },
+      teachingBlueprintInputFingerprint(state.input), async (sectionRequest, index) => {
+        const step = `spoken-section:${index + 1}`;
+        const rawResponse = JSON.stringify({ learningObjective: index === 0 ? '解释训练' : '解释检验',
+          segments: [{ id: 's1', text: rawTexts[index], knowledgePointIds: [`k${index + 1}`],
+            sourceRefs: index === 0 ? ['e1:b1', ...(includeProcessEvidence ? ['e2:b2'] : [])] : [] }],
+          pages: [{ title: '用途', type: 'slide', segmentIds: ['s1'],
+            ...(nativeObservation ? { description: '通过教材原图观察身体、大脑与环境的关系。',
+              keyPoints: ['身体与环境共同进入认知过程。'], teachingObjective: '观察身体与环境的作用',
+              ...(index === 1 ? { caseObservation: { resourceIds: ['textbook_fig_7463e7e21d4c'],
+                description: '使用教材原图观察认知过程中身体、大脑与环境的关系。',
+                observationFocus: '不要把认知只定位在大脑内部。', preserveOriginal: true } } : {}) }
+              : { presentationItems: [{ text: '显示重点', nodeIds: ['s1'], role: 'key-point' }] }), resourceNeeds: [] }] });
+        const identity = { schemaVersion: 1, inputFingerprint: sectionRequest.fingerprint,
+          modelFingerprint: 'spoken-model-fingerprint',
+          ...(nativeObservation ? { authoringPolicy: NATIVE_SPOKEN_SECTION_POLICY } : {}) };
+        spokenSections.push({ step: `design-authoring:${step}`, state: { ...identity,
+          status: 'response-complete', complete: true, rawResponse } },
+        { step: `course-design-attempt:${step}`, state: { ...identity, attemptsStarted: 1 } });
+        return rawResponse;
+      }, undefined, nativeObservation ? NATIVE_SPOKEN_SECTION_POLICY : SPOKEN_SECTION_POLICY);
+    // A projection never replaces the actual saved paragraph response.
+    spokenSections.push({ step: 'course-design:spoken-section:1', state: { status: 'validated', text: '旧投影' } });
+    const saved = { ...state.saved, teachingBlueprint: null, teachingBlueprintAttempt: null, spokenSections };
+    mocks.checkpoints.mockResolvedValue(saved);
+    mocks.raw.mockResolvedValue(null);
+    mocks.replace.mockImplementation(async ({ data }) => ({ ...state.job, ...data }));
+    return { saved, rawTexts, spokenSections };
+  }
+
+  it('resumes a saved native textbook observation locally without repurchasing speech or changing its request receipts', async () => {
+    const { saved, rawTexts } = await spokenDraft(false, true);
+    const original = structuredClone(saved);
+    const queued = await resumeSavedCourseDesignFirstDraft('course-1', 'teacher-1');
+    expect(queued).toMatchObject({ status: 'queued', request: { authoringRequestId: state.request.authoringRequestId,
+      savedFirstDraftReplay: { spokenSectionCount: 2, narrationModelFingerprint: 'spoken-model-fingerprint' } } });
+    expect(mocks.provider).not.toHaveBeenCalled();
+    expect(mocks.generate).not.toHaveBeenCalled();
+    expect(mocks.restore).not.toHaveBeenCalled();
+    expect(mocks.save).toHaveBeenCalledOnce();
+    const receipt = mocks.save.mock.calls[0][2];
+    expect(receipt).toMatchObject({ authoringPolicy: NATIVE_SPOKEN_SECTION_POLICY, providerCalls: 0, authorCalls: 0,
+      blueprint: { sections: [{ units: [{ explanationNodes: [{ content: rawTexts[0] }] }] },
+        { units: [{ explanationNodes: [{ content: rawTexts[1] }] }], pages: [{ caseObservation: {
+          kind: 'source-image', resourceIds: ['textbook_fig_7463e7e21d4c'], imageWouldHelp: true,
+          reason: '使用教材原图观察认知过程中身体、大脑与环境的关系。', observableDifference: '不要把认知只定位在大脑内部。',
+        }, resourceNeeds: [{ kind: 'source-image', assetId: 'textbook_fig_7463e7e21d4c', required: true }] }] }] } });
+    const outlines = teachingBlueprintToOutlines(receipt.blueprint, '中文');
+    expect(outlines.find((outline) => outline.lectureSectionId === 'teaching-section-2' && outline.type === 'slide')?.suggestedImageIds)
+      .toEqual(['textbook_fig_7463e7e21d4c']);
+    expect(saved).toEqual(original);
+    expect(mocks.replace.mock.calls[0][0]).toMatchObject({ where: { id: state.job.id, status: 'failed', version: state.job.version },
+      checkpointPolicy: {} });
+    await expect(assertSavedCourseDesignReplayInput(state.course, queued!.request as unknown as QuickDesignRequest))
+      .resolves.toBeUndefined();
+  });
+
+  it('compiles every original paragraph locally and queues the same request without replacing raw responses or attempts', async () => {
+    const { saved, rawTexts, spokenSections } = await spokenDraft();
+    const original = structuredClone(saved);
+    await expect(resumeSavedCourseDesignFirstDraft('course-1', 'teacher-1')).resolves.toMatchObject({ status: 'queued',
+      request: { authoringRequestId: 'original-request-identity', savedFirstDraftReplay: {
+        modelFingerprint: 'model-fingerprint', authoringRequestId: 'original-request-identity',
+        spokenSectionCount: 2, narrationModelFingerprint: 'spoken-model-fingerprint' } } });
+    expect(mocks.provider).not.toHaveBeenCalled();
+    expect(mocks.generate).not.toHaveBeenCalled();
+    expect(mocks.restore).not.toHaveBeenCalled();
+    expect(mocks.save).toHaveBeenCalledOnce();
+    const [jobId, receiptStep, receipt] = mocks.save.mock.calls[0];
+    expect(jobId).toBe('design-1');
+    expect(receiptStep).toMatch(/^course-design:local-blueprint-replay:/u);
+    expect(receipt).toMatchObject({ status: 'validated', providerCalls: 0, authorCalls: 0,
+      authoringPolicy: SPOKEN_SECTION_POLICY, narrationModelFingerprint: 'spoken-model-fingerprint',
+      sectionRawFingerprints: spokenSections.filter((row) => row.step.startsWith('design-authoring:')).map((row, index) => ({
+        step: `spoken-section:${index + 1}`, rawFingerprint: fingerprintGenerationValue(row.state.rawResponse) })),
+    });
+    expect(receipt.blueprint.sections.flatMap((section: { units: Array<{ explanationNodes: Array<{ content: string }> }> }) =>
+      section.units.flatMap((unit) => unit.explanationNodes.map((node) => node.content)))).toEqual(rawTexts);
+    expect(receipt.blueprint.sections[0].units[0].explanationNodes[0].sourceBindings)
+      .toEqual([{ evidenceItemId: 'e1', sourceBlockIds: ['b1'], textbookId: 'book', revisionId: 'r1' }]);
+    expect(saved).toEqual(original);
+    expect(mocks.replace.mock.calls[0][0]).toMatchObject({
+      where: { id: 'design-1', status: 'failed', version: 506 }, checkpointPolicy: {},
+    });
+  });
+
+  it('continues a validated saved prefix and leaves never-requested later sections for the worker', async () => {
+    const { saved, rawTexts, spokenSections } = await spokenDraft();
+    for (let index = spokenSections.length - 1; index >= 0; index--) {
+      if (spokenSections[index].step.endsWith('spoken-section:2')) spokenSections.splice(index, 1);
+    }
+    const original = structuredClone(saved);
+    const queued = await resumeSavedCourseDesignFirstDraft('course-1', 'teacher-1');
+    expect(queued).toMatchObject({ status: 'queued', request: { authoringRequestId: 'original-request-identity',
+      savedFirstDraftReplay: { spokenSectionCount: 1, narrationModelFingerprint: 'spoken-model-fingerprint' } } });
+    expect(mocks.preflight).not.toHaveBeenCalled();
+    expect(mocks.generate).not.toHaveBeenCalled();
+    expect(mocks.provider).not.toHaveBeenCalled();
+    expect(mocks.save).toHaveBeenCalledOnce();
+    const receipt = mocks.save.mock.calls[0][2];
+    expect(receipt).toMatchObject({ status: 'validated', scope: 'saved-spoken-sections', providerCalls: 0, authorCalls: 0,
+      spokenSectionCount: 1, totalSectionCount: 2, pendingSectionCount: 1,
+      sections: [{ contentMode: 'spoken', units: [{ explanationNodes: [{ content: rawTexts[0] }] }] }] });
+    expect(receipt).not.toHaveProperty('blueprint');
+    expect(saved).toEqual(original);
+    await expect(assertSavedCourseDesignReplayInput(state.course, queued!.request as unknown as QuickDesignRequest))
+      .resolves.toBeUndefined();
+  });
+
+  it('treats a valid unspent suffix attempt as unrequested while preserving the same request and all saved checkpoint identities', async () => {
+    const { saved, rawTexts, spokenSections } = await spokenDraft();
+    const pendingAttempt = spokenSections.find((row) => row.step === 'course-design-attempt:spoken-section:2')!;
+    pendingAttempt.state.attemptsStarted = 0;
+    spokenSections.splice(spokenSections.findIndex((row) => row.step === 'design-authoring:spoken-section:2'), 1);
+    const original = structuredClone(saved);
+    const queued = await resumeSavedCourseDesignFirstDraft('course-1', 'teacher-1');
+    expect(queued).toMatchObject({ status: 'queued', request: { authoringRequestId: state.request.authoringRequestId,
+      savedFirstDraftReplay: { spokenSectionCount: 1, narrationModelFingerprint: 'spoken-model-fingerprint' } } });
+    const resumedRequest = queued!.request as unknown as QuickDesignRequest;
+    expect(isUnrequestedSpokenSectionContinuation(resumedRequest.savedFirstDraftReplay!, 'spoken-section:2', pendingAttempt.state)).toBe(true);
+    expect(mocks.provider).not.toHaveBeenCalled();
+    expect(mocks.generate).not.toHaveBeenCalled();
+    expect(mocks.preflight).not.toHaveBeenCalled();
+    expect(mocks.save).toHaveBeenCalledOnce();
+    expect(mocks.save.mock.calls[0][2]).toMatchObject({ status: 'validated', scope: 'saved-spoken-sections',
+      providerCalls: 0, authorCalls: 0, spokenSectionCount: 1, totalSectionCount: 2, pendingSectionCount: 1,
+      sections: [{ units: [{ explanationNodes: [{ content: rawTexts[0] }] }] }] });
+    expect(saved).toEqual(original);
+    expect(mocks.replace.mock.calls[0][0]).toMatchObject({
+      where: { id: 'design-1', status: 'failed', version: 506 }, checkpointPolicy: {},
+    });
+    await expect(assertSavedCourseDesignReplayInput(state.course, queued!.request as unknown as QuickDesignRequest))
+      .resolves.toBeUndefined();
+  });
+
+  it.each(['spent', 'missing-count', 'negative', 'fractional', 'string-count', 'schema', 'missing-input', 'missing-model'] as const)(
+    'rejects a %s suffix attempt without a raw response instead of reopening its request', async (reason) => {
+      const { saved, spokenSections } = await spokenDraft();
+      const pendingAttempt = spokenSections.find((row) => row.step === 'course-design-attempt:spoken-section:2')!;
+      spokenSections.splice(spokenSections.findIndex((row) => row.step === 'design-authoring:spoken-section:2'), 1);
+      pendingAttempt.state.attemptsStarted = 0;
+      if (reason === 'spent') pendingAttempt.state.attemptsStarted = 1;
+      if (reason === 'missing-count') delete pendingAttempt.state.attemptsStarted;
+      if (reason === 'negative') pendingAttempt.state.attemptsStarted = -1;
+      if (reason === 'fractional') pendingAttempt.state.attemptsStarted = 0.5;
+      if (reason === 'string-count') pendingAttempt.state.attemptsStarted = '0';
+      if (reason === 'schema') pendingAttempt.state.schemaVersion = 2;
+      if (reason === 'missing-input') delete pendingAttempt.state.inputFingerprint;
+      if (reason === 'missing-model') delete pendingAttempt.state.modelFingerprint;
+      const original = structuredClone(saved);
+      await expect(resumeSavedCourseDesignFirstDraft('course-1')).rejects.toMatchObject({ code: 'SAVED_FIRST_DRAFT_INCOMPLETE' });
+      expect(mocks.provider).not.toHaveBeenCalled();
+      expect(mocks.save).not.toHaveBeenCalled();
+      expect(mocks.replace).not.toHaveBeenCalled();
+      expect(saved).toEqual(original);
+    });
+
+  it('does not treat a zero-spend suffix as untouched when it already has a compiled receipt without its raw response', async () => {
+    const { saved, spokenSections } = await spokenDraft();
+    spokenSections.find((row) => row.step === 'course-design-attempt:spoken-section:2')!.state.attemptsStarted = 0;
+    spokenSections.splice(spokenSections.findIndex((row) => row.step === 'design-authoring:spoken-section:2'), 1);
+    spokenSections.push({ step: 'course-design:spoken-section:2', state: { schemaVersion: 1, status: 'validated' } });
+    const original = structuredClone(saved);
+    await expect(resumeSavedCourseDesignFirstDraft('course-1')).rejects.toMatchObject({ code: 'SAVED_FIRST_DRAFT_INCOMPLETE' });
+    expect(mocks.provider).not.toHaveBeenCalled();
+    expect(mocks.save).not.toHaveBeenCalled();
+    expect(mocks.replace).not.toHaveBeenCalled();
+    expect(saved).toEqual(original);
+  });
+
+  it('rejects a later spent section after an untouched zero-spend gap rather than skipping the missing section', async () => {
+    const { saved, spokenSections } = await spokenDraft();
+    const laterDraft = structuredClone(spokenSections.find((row) => row.step === 'design-authoring:spoken-section:2')!);
+    const laterAttempt = structuredClone(spokenSections.find((row) => row.step === 'course-design-attempt:spoken-section:2')!);
+    spokenSections.find((row) => row.step === 'course-design-attempt:spoken-section:2')!.state.attemptsStarted = 0;
+    spokenSections.splice(spokenSections.findIndex((row) => row.step === 'design-authoring:spoken-section:2'), 1);
+    laterDraft.step = 'design-authoring:spoken-section:3';
+    laterAttempt.step = 'course-design-attempt:spoken-section:3';
+    spokenSections.push(laterDraft, laterAttempt);
+    const previousInputFor = state.inputFor;
+    state.inputFor = (course, request) => {
+      const input = previousInputFor(course, request);
+      return { ...input, sectionPlans: [...input.sectionPlans!, { title: '后续检验', knowledgePointIds: ['k2'], teachingBudgetSec: 264 }] };
+    };
+    const original = structuredClone(saved);
+    await expect(resumeSavedCourseDesignFirstDraft('course-1')).rejects.toMatchObject({ code: 'SAVED_FIRST_DRAFT_INCOMPLETE' });
+    expect(mocks.provider).not.toHaveBeenCalled();
+    expect(mocks.save).not.toHaveBeenCalled();
+    expect(mocks.replace).not.toHaveBeenCalled();
+    expect(saved).toEqual(original);
+  });
+
+  it('locally compiles an adopted process passage with another adopted same-revision wrapper prefix without rewriting raw responses or buying a request', async () => {
+    const { saved, rawTexts, spokenSections } = await spokenDraft(true);
+    const first = spokenSections.find((row) => row.step === 'design-authoring:spoken-section:1')!;
+    const raw = JSON.parse(first.state.rawResponse as string);
+    raw.segments[0].sourceRefs = ['e1:b1', 'e1:b2'];
+    first.state.rawResponse = JSON.stringify(raw);
+    const original = structuredClone(saved);
+    await expect(resumeSavedCourseDesignFirstDraft('course-1')).resolves.toMatchObject({ status: 'queued',
+      request: { authoringRequestId: state.request.authoringRequestId, savedFirstDraftReplay: { spokenSectionCount: 2 } } });
+    expect(mocks.provider).not.toHaveBeenCalled();
+    expect(mocks.generate).not.toHaveBeenCalled();
+    expect(mocks.restore).not.toHaveBeenCalled();
+    expect(mocks.save).toHaveBeenCalledOnce();
+    const receipt = mocks.save.mock.calls[0][2];
+    expect(receipt).toMatchObject({ status: 'validated', providerCalls: 0, authorCalls: 0,
+      sectionRawFingerprints: spokenSections.filter((row) => row.step.startsWith('design-authoring:')).map((row, index) => ({
+        step: `spoken-section:${index + 1}`, rawFingerprint: fingerprintGenerationValue(row.state.rawResponse) })),
+    });
+    expect(receipt.blueprint.sections[0].units[0].explanationNodes[0]).toMatchObject({ content: rawTexts[0], sourceBindings: [
+      { evidenceItemId: 'e1', sourceBlockIds: ['b1'], textbookId: 'book', revisionId: 'r1' },
+      { evidenceItemId: 'e2', sourceBlockIds: ['b2'], textbookId: 'book', revisionId: 'r1' },
+    ] });
+    expect(receipt.blueprint.sections[1].units[0].explanationNodes[0].content).toBe(rawTexts[1]);
+    expect(saved).toEqual(original);
+    expect(mocks.replace.mock.calls[0][0]).toMatchObject({ checkpointPolicy: {},
+      data: { request: { authoringRequestId: state.request.authoringRequestId } } });
+  });
+
+  it.each(['missing', 'incomplete', 'empty'] as const)('rejects a %s final section instead of commissioning its draft', async (reason) => {
+    const { spokenSections } = await spokenDraft();
+    const final = spokenSections.find((row) => row.step === 'design-authoring:spoken-section:2')!;
+    if (reason === 'missing') spokenSections.splice(spokenSections.indexOf(final), 1);
+    if (reason === 'incomplete') final.state.complete = false;
+    if (reason === 'empty') final.state.rawResponse = '';
+    await expect(resumeSavedCourseDesignFirstDraft('course-1')).rejects.toMatchObject({ code: 'SAVED_FIRST_DRAFT_INCOMPLETE' });
+    expect(mocks.provider).not.toHaveBeenCalled();
+    expect(mocks.preflight).not.toHaveBeenCalled();
+    expect(mocks.replace).not.toHaveBeenCalled();
+    expect(mocks.save).not.toHaveBeenCalled();
+  });
+
+  it('rejects a saved request after a gap instead of accepting it as an unrequested suffix', async () => {
+    const { spokenSections } = await spokenDraft();
+    spokenSections.push({ step: 'course-design-attempt:spoken-section:3', state: { attemptsStarted: 1 } });
+    await expect(resumeSavedCourseDesignFirstDraft('course-1')).rejects.toMatchObject({ code: 'SAVED_FIRST_DRAFT_INCOMPLETE' });
+    expect(mocks.save).not.toHaveBeenCalled();
+    expect(mocks.replace).not.toHaveBeenCalled();
+    expect(mocks.provider).not.toHaveBeenCalled();
+  });
+
+  it('checks the later request against the actual saved preceding speech', async () => {
+    const { spokenSections } = await spokenDraft();
+    const first = spokenSections.find((row) => row.step === 'design-authoring:spoken-section:1')!;
+    const changed = JSON.parse(first.state.rawResponse as string);
+    changed.segments[0].text = '首节口播后来被替换。';
+    first.state.rawResponse = JSON.stringify(changed);
+    await expect(resumeSavedCourseDesignFirstDraft('course-1')).rejects.toMatchObject({ code: 'SAVED_FIRST_DRAFT_INPUT_CHANGED' });
+    expect(mocks.preflight).not.toHaveBeenCalled();
+    expect(mocks.replace).not.toHaveBeenCalled();
+    expect(mocks.provider).not.toHaveBeenCalled();
+  });
+
+  it('rechecks the narration configuration after local validation before queueing', async () => {
+    await spokenDraft();
+    mocks.preflight.mockImplementation(async (outlines) => {
+      mocks.modelFingerprint.mockImplementation((resolved) => resolved.stage === 'scene-content'
+        ? 'changed-spoken-model' : 'model-fingerprint');
+      return { outlines, assessments: [], changed: false };
+    });
+    await expect(resumeSavedCourseDesignFirstDraft('course-1')).rejects.toMatchObject({ code: 'SAVED_FIRST_DRAFT_INPUT_CHANGED' });
+    expect(mocks.replace).not.toHaveBeenCalled();
+    expect(mocks.provider).not.toHaveBeenCalled();
+    expect(mocks.save.mock.calls[0][2]).toMatchObject({ status: 'rejected', providerCalls: 0, authorCalls: 0 });
+  });
+
+  it.each(['response-input', 'response-model', 'attempt-input', 'attempt-model', 'attempt-missing'] as const)(
+    'keeps all drafts after a changed %s identity', async (reason) => {
+      const { saved, spokenSections } = await spokenDraft();
+      const response = spokenSections.find((row) => row.step === 'design-authoring:spoken-section:2')!;
+      const attempt = spokenSections.find((row) => row.step === 'course-design-attempt:spoken-section:2')!;
+      if (reason === 'response-input') response.state.inputFingerprint = 'another-source';
+      if (reason === 'response-model') response.state.modelFingerprint = 'another-model';
+      if (reason === 'attempt-input') attempt.state.inputFingerprint = 'another-request';
+      if (reason === 'attempt-model') attempt.state.modelFingerprint = 'another-model';
+      if (reason === 'attempt-missing') spokenSections.splice(spokenSections.indexOf(attempt), 1);
+      const original = structuredClone(saved);
+      await expect(resumeSavedCourseDesignFirstDraft('course-1')).rejects.toMatchObject({ code: 'SAVED_FIRST_DRAFT_INPUT_CHANGED' });
+      expect(mocks.provider).not.toHaveBeenCalled();
+      expect(mocks.preflight).not.toHaveBeenCalled();
+      expect(mocks.replace).not.toHaveBeenCalled();
+      expect(mocks.save).toHaveBeenCalledWith('design-1', expect.stringMatching(/^course-design:local-blueprint-replay:/u),
+        expect.objectContaining({ status: 'rejected', providerCalls: 0, authorCalls: 0 }));
+      expect(saved).toEqual(original);
+    });
 });
 
 describe("resume after an accepted outline", () => {

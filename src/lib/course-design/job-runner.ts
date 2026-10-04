@@ -13,7 +13,7 @@ import { formatTeachingConstraintsForChinesePrompt } from "@/lib/openmaic/pedago
 import { getCourse, updateCourse } from "@/lib/session/server-store";
 import {
   generateKnowledgeStructureOnce,
-  KNOWLEDGE_STRUCTURE_POLICY_VERSION,
+  KNOWLEDGE_STRUCTURE_COMPATIBLE_POLICY_VERSIONS,
   parseKnowledgeStructureJson,
   type KnowledgeStructureGenerationContext,
 } from "@/lib/knowledge-structure-generation";
@@ -64,6 +64,7 @@ import { generateOpenMaicBaselineOutlines } from "@/lib/openmaic/generation/open
 import { ZH_CN_COURSE_LANGUAGE_DIRECTIVE } from "@/lib/openmaic/generation/course-language";
 import { loadSnippet } from "@/lib/openmaic/prompts";
 import { findServerDefaultModelString } from "@/lib/openmaic/server/provider-config";
+import { resolveServerTtsTimingSelection } from '@/lib/openmaic/server/classroom-media-generation';
 import { resolveModel } from "@/lib/openmaic/server/resolve-model";
 import {
   createCourseGenerationAiCall,
@@ -98,6 +99,7 @@ import {
 import {
   generateNewSystemAiDurationRecommendation,
   normalizeNewSystemAiDurationRecommendation,
+  NEW_SYSTEM_AI_DURATION_AUTHORING_POLICY_VERSION,
   type NewSystemAiDurationInput,
 } from "@/lib/classroom/new-system-ai-duration";
 import {
@@ -160,6 +162,9 @@ import {
   type TeachingBlueprintSectionPlan,
   type TeachingBlueprintTextbookFigure,
 } from "./teaching-blueprint";
+import { generateSpokenTeachingBlueprint, savedSpokenSectionPolicy, type SpokenSectionPolicy } from './teaching-section-authoring';
+import { adaptTeachingBlueprintResourceCapabilities } from './teaching-blueprint';
+import { isUnrequestedSpokenSectionContinuation } from './saved-spoken-section-policy';
 
 const POLL_INTERVAL_MS = 1_500;
 const HEARTBEAT_INTERVAL_MS = 5_000;
@@ -181,7 +186,8 @@ export type QuickDesignRequest = {
   /** New identity for an explicitly submitted replacement; accepted stages retain their own identities. */
   authoringRequestId?: string;
   /** Local replay keeps the original authoring identity and guards its source input. */
-  savedFirstDraftReplay?: { contentFingerprint: string; modelFingerprint: string; authoringRequestId?: string };
+  savedFirstDraftReplay?: { contentFingerprint: string; modelFingerprint: string; authoringRequestId?: string;
+    spokenSectionCount?: number; narrationModelFingerprint?: string };
   /** Exact teacher-selected model captured when this durable task is submitted. */
   generationModelString?: string;
   /** Persisted at submission so a worker restart cannot cross generation modes. */
@@ -354,6 +360,14 @@ function checkpointRecord(value: unknown): Record<string, unknown> | undefined {
     : undefined;
 }
 
+export function compatibleCourseDesignKnowledgeFingerprints(
+  input: Parameters<typeof generateKnowledgeStructureOnce>[0], context: KnowledgeStructureGenerationContext,
+): string[] {
+  return KNOWLEDGE_STRUCTURE_COMPATIBLE_POLICY_VERSIONS.map((policyVersion) => fingerprintGenerationValue({
+    schemaVersion: 3, policyVersion, input, context,
+  }));
+}
+
 /** Upgrade identity projections only for an exact known previous contract.
  * Keep raw output and spent attempts; changing prompt policy is not a retry. */
 export function migrateCourseDesignCheckpointIdentity(value: unknown, inputFingerprint: string,
@@ -420,6 +434,7 @@ type KnowledgeResponseCheckpoint = {
   bestCandidateRawResponse?: string;
   bestCandidateIssues?: string[];
   bestCandidateAttempt?: number;
+  responseContract?: 'knowledge-plan-v1';
 };
 
 function knowledgeDiagnosticIssues(value: unknown): string[] {
@@ -471,6 +486,7 @@ export function restoreCourseDesignKnowledgeCheckpoint(
   return {
     schemaVersion: 1, inputFingerprint, modelFingerprint,
     status: checkpoint.status as KnowledgeResponseDiagnostic["status"],
+    ...(checkpoint.responseContract === 'knowledge-plan-v1' ? { responseContract: 'knowledge-plan-v1' as const } : {}),
     ...(rawResponse !== undefined ? { rawResponse } : {}),
     ...(typeof checkpoint.complete === 'boolean' ? { complete: checkpoint.complete } : {}),
     ...(checkpoint.status === "rejected" ? { validationIssues: knowledgeDiagnosticIssues(checkpoint.validationIssues) } : {}),
@@ -543,6 +559,7 @@ export function recordCourseDesignKnowledgeResponse(
   return {
     schemaVersion: 1, inputFingerprint, modelFingerprint,
     status: response.status, rawResponse: response.rawResponse, complete: true,
+    ...(previous?.responseContract ? { responseContract: previous.responseContract } : {}),
     ...(response.status === "rejected" ? { validationIssues: issues } : {}),
     responseHistory: [...history.values()].sort((a, b) => a.attempt - b.attempt),
     ...(bestCandidateRawResponse !== undefined ? {
@@ -587,12 +604,14 @@ export async function generateDurableCourseDesignKnowledgeStructure(
     aiCall: options.aiCall,
     retrySleep: options.retrySleep,
     initialResponse,
+    responseContract: checkpoint?.responseContract,
     onCandidate: async ({ rawResponse }) => {
       acceptedRawResponse = rawResponse;
       candidateAttempt = options.getAttemptsStarted();
       checkpoint = recordCourseDesignKnowledgeResponse(checkpoint, inputFingerprint, modelFingerprint, {
         rawResponse, attempt: candidateAttempt, status: "response-complete", issues: [],
       });
+      checkpoint.responseContract = 'knowledge-plan-v1';
       await options.saveCheckpoint(checkpoint);
       await options.setOutputPhase("validating-output");
     },
@@ -754,6 +773,9 @@ async function createDesignStreamingAiCall(input: {
   maxOutputTokens?: number;
   temperature?: number;
   firstAuthoringContract?: 'blueprint-v5';
+  outputResource?: 'planning' | 'narration';
+  authoringPolicy?: SpokenSectionPolicy;
+  modelStage?: 'scene-outlines-stream' | 'scene-content';
 }): Promise<{
   aiCall: AICallFn;
   getAttemptsStarted: () => number;
@@ -762,7 +784,7 @@ async function createDesignStreamingAiCall(input: {
 }> {
   const resolved = await resolveModel({
     modelString: courseDesignModelString(input.request),
-    stage: "scene-outlines-stream",
+    stage: input.modelStage ?? "scene-outlines-stream",
   });
   const modelFingerprint = resolvedCourseDesignModelFingerprint(resolved);
   let attemptsStarted = restoreCourseDesignAttemptCount(
@@ -812,7 +834,7 @@ async function createDesignStreamingAiCall(input: {
     });
   };
   const outputBudget = createCourseOutputBudget({
-    resource: 'planning',
+    resource: input.outputResource ?? 'planning',
     modelOutputWindow: resolved.modelInfo?.outputWindow,
     thinking: resolved.thinkingConfig,
   });
@@ -825,7 +847,7 @@ async function createDesignStreamingAiCall(input: {
       ? (system, prompt) => Math.min(input.maxOutputTokens!, outputBudget(system, prompt))
       : outputBudget,
     executionBudget: resolveCourseExecutionBudgetOptions(),
-    temperature: input.temperature ?? 0.5,
+    ...(input.outputResource === 'narration' && input.temperature === undefined ? {} : { temperature: input.temperature ?? 0.5 }),
     thinking: resolved.thinkingConfig,
     timeoutMs: resolveLlmRequestTimeoutMs("long-generation"),
     maxRetries: 1,
@@ -837,7 +859,9 @@ async function createDesignStreamingAiCall(input: {
         schemaVersion: 1, status: 'response-complete', contractVersion: COURSE_FIRST_PASS_CONTRACT_VERSION,
         inputFingerprint: input.inputFingerprint, modelFingerprint,
         rawResponse: text, complete, source, systemCharacters: system.length, promptCharacters: prompt.length,
+        ...(input.stage === 'knowledgePoints' ? { responseContract: 'knowledge-plan-v1' as const } : {}),
         ...(input.firstAuthoringContract ? { firstAuthoringContract: input.firstAuthoringContract } : {}),
+        ...(input.authoringPolicy ? { authoringPolicy: input.authoringPolicy } : {}),
       };
       // Accepted projections must never replace the original model response.
       await saveGenerationCheckpoint(input.job.id, `design-authoring:${input.stage}`, rawCheckpoint,
@@ -870,6 +894,7 @@ async function createDesignStreamingAiCall(input: {
         inputFingerprint: input.inputFingerprint,
         modelFingerprint,
         attemptsStarted: totalAttempt,
+        ...(input.authoringPolicy ? { authoringPolicy: input.authoringPolicy } : {}),
       }, designCheckpointOptions(input.job));
       attemptsStarted = totalAttempt;
     },
@@ -905,7 +930,9 @@ async function createDesignStreamingAiCall(input: {
   });
   return {
     aiCall: async (system, prompt, images) => {
-      if (input.request.savedFirstDraftReplay) {
+      if (input.request.savedFirstDraftReplay && !isUnrequestedSpokenSectionContinuation(
+        input.request.savedFirstDraftReplay, input.stage, input.storedAttempt,
+      )) {
         throw Object.assign(new Error('已保存首稿恢复禁止新的设计创作请求，原稿和已完成成果已保留。'), {
           code: 'SAVED_FIRST_DRAFT_AUTHORING_FORBIDDEN', isRetryable: false,
         });
@@ -2401,6 +2428,7 @@ export function buildTeachingBlueprintInput(
   const verificationSource = priorEvidenceIsCurrent
     ? `${sourceContext}\n${JSON.stringify(priorContent.courseEvidence ?? "")}`
     : sourceContext;
+  const speechTiming = resolveServerTtsTimingSelection({ language: 'zh-CN' });
   return {
     generationModelFingerprint: request.generationModelString ?? findServerDefaultModelString(),
     courseTitle: course.name,
@@ -2413,11 +2441,18 @@ export function buildTeachingBlueprintInput(
     knowledgeGraph: content.knowledgeGraph,
     teachingOrder: content.knowledgeScopePlan?.teachingOrder,
     totalDurationSec,
+    speechTiming: { providerId: speechTiming.providerId, modelId: speechTiming.modelId,
+      voiceId: speechTiming.voiceId, language: speechTiming.language },
     assessmentMode: request.assessmentMode ?? "adaptive",
     generationMode: request.generationMode ?? "standard",
+    resourceCapabilities: {
+      imageGenerationEnabled: request.options?.enableImageGeneration === true,
+      videoGenerationEnabled: request.options?.enableVideoGeneration === true,
+    },
     teacherBrief: [teacherGenerationBrief(request), blueprintResourceCapabilityBrief(request)].filter(Boolean).join("\n"),
     teachingRequirements: recoverCourseTeachingRequirements(content.teachingRequirements, request.resourcePackage),
     sourceContext,
+    sourceEvidence: request.textbookEvidence,
     sourceConceptStatements: buildSourceConceptStatements(content.knowledgePoints, request.textbookEvidence),
     priorSourceExamples: collectPriorSourceExamples(
       priorContent?.teachingBlueprint,
@@ -2448,7 +2483,7 @@ export async function prepareTeachingBlueprintInput(
 }> {
   const evidence = request.textbookEvidence ? { ...request.textbookEvidence,
     items: await hydrateCourseEvidenceFigureReferences(request.textbookEvidence.items,
-      { includeAncestorIntroductions: true }) } : undefined;
+      { includeAncestorIntroductions: true, includeSectionContext: true }) } : undefined;
   const hydratedRequest = { ...request, textbookEvidence: evidence };
   // The source catalog is an authoring input. Figure choices are outputs of
   // this same draft and are scoped after compilation; feeding them back here
@@ -2636,6 +2671,55 @@ async function generateNewSystemTeachingBlueprintOutlines(
       candidate: checkpoint.blueprint, issues: rechecked.issues, preserveAcceptedPagePlans: true,
     };
   }
+  // Fresh work owns one final spoken draft per confirmed section. Older saved
+  // responses keep their original compiler and are never silently reauthored.
+  if (!blueprint && !persistedInvalidRepair && !checkpoint?.rawResponse && !storedBlueprintAttempt) {
+    const narrationModel = await resolveModel({ modelString: courseDesignModelString(request), stage: 'scene-content' });
+    const narrationModelFingerprint = resolvedCourseDesignModelFingerprint(narrationModel);
+    const sectionRows = stored.spokenSections ?? [];
+    const authoringPolicy = savedSpokenSectionPolicy(sectionRows);
+    const sectionCheckpoints = new Map(sectionRows.map((row) => [row.step, row.state]));
+    blueprint = await generateSpokenTeachingBlueprint({ ...input, generationModelFingerprint: narrationModelFingerprint },
+      expectedFingerprint, async (sectionRequest, index) => {
+        const step = `spoken-section:${index + 1}`;
+        const saved = checkpointRecord(sectionCheckpoints.get(`design-authoring:${step}`));
+        if (saved) {
+          if (saved.inputFingerprint !== sectionRequest.fingerprint || saved.modelFingerprint !== narrationModelFingerprint) {
+            throw new Error('已保存小节主稿的来源或模型身份已变化，不能自动覆盖原稿');
+          }
+          if (saved.complete !== true || typeof saved.rawResponse !== 'string') {
+            throw new Error('已保存小节响应未完整返回；保留原稿，不自动重新编写');
+          }
+          return saved.rawResponse;
+        }
+        const attemptStep = `course-design-attempt:${step}`;
+        const streaming = await createDesignStreamingAiCall({ job, request, signal,
+          stage: step, source: 'teaching-narration', inputFingerprint: sectionRequest.fingerprint,
+          attemptCheckpointStep: attemptStep, storedAttempt: sectionCheckpoints.get(attemptStep),
+          outputResource: 'narration', modelStage: 'scene-content',
+          authoringPolicy: sectionRequest.authoringPolicy,
+        });
+        try {
+          return await streaming.aiCall(sectionRequest.system, sectionRequest.prompt);
+        } finally {
+          await streaming.clear();
+        }
+      }, async (section, sectionRequest, index, response) => {
+        await saveGenerationCheckpoint(job.id, `course-design:spoken-section:${index + 1}`, {
+          schemaVersion: 1, status: 'validated', inputFingerprint: sectionRequest.fingerprint,
+          modelFingerprint: narrationModelFingerprint, rawFingerprint: fingerprintGenerationValue(response), section,
+          authoringPolicy: sectionRequest.authoringPolicy,
+        }, designCheckpointOptions(job));
+      }, authoringPolicy);
+    blueprint = adaptTeachingBlueprintResourceCapabilities(blueprint, {
+      imageGenerationEnabled: request.options?.enableImageGeneration === true,
+      videoGenerationEnabled: request.options?.enableVideoGeneration === true,
+    });
+    await saveGenerationCheckpoint(job.id, TEACHING_BLUEPRINT_STEP, {
+      schemaVersion: 1, status: 'validated', inputFingerprint: expectedFingerprint, modelFingerprint,
+      contentFingerprint, blueprint, authoringPolicy,
+    }, designCheckpointOptions(job));
+  }
   if (!blueprint) {
     const storedResponse = persistedInvalidRepair ? null : restoreCourseDesignStageResponse(
       checkpoint,
@@ -2816,7 +2900,7 @@ async function generateNewSystemAiOutlines(
 ): Promise<Array<SceneOutline & OpenMaicSceneOutlineSnapshot>> {
   const evidence = request.textbookEvidence ? { ...request.textbookEvidence,
     items: await hydrateCourseEvidenceFigureReferences(request.textbookEvidence.items,
-      { includeAncestorIntroductions: true }) } : undefined;
+      { includeAncestorIntroductions: true, includeSectionContext: true }) } : undefined;
   const sourceSequences = resolveCourseSourceSequenceContracts(evidence, content.knowledgePoints);
   const textbookFigureResources = scopeCourseTextbookFigures(await resolveCourseTextbookFigures(evidence, content.knowledgePoints),
     content.teachingBlueprint?.sections.flatMap((section) => section.pages) ?? [{ sourceSequenceUses: [] }]);
@@ -2992,7 +3076,7 @@ async function enqueueClassroomGeneration(
 ): Promise<void> {
   const sourceEvidence = textbookEvidence ? { ...textbookEvidence,
     items: await hydrateCourseEvidenceFigureReferences(textbookEvidence.items,
-      { includeAncestorIntroductions: true }) } : undefined;
+      { includeAncestorIntroductions: true, includeSectionContext: true }) } : undefined;
   const sourceSequences = resolveCourseSourceSequenceContracts(sourceEvidence, course.content.knowledgePoints);
   const textbookFigureResources = scopeCourseTextbookFigures(await resolveCourseTextbookFigures(sourceEvidence, course.content.knowledgePoints),
     course.content._openmaicSceneOutlines ?? course.content.teachingBlueprint?.sections.flatMap((section) => section.pages) ?? []);
@@ -3475,7 +3559,7 @@ async function runNewSystemCourseDesign(
     )))
     && initialCourse.content.knowledgePoints.length > 0
     && initialCourse.content.knowledgeScopePlan?.schemaVersion === 1
-    && [KNOWLEDGE_STRUCTURE_POLICY_VERSION, 'textbook-evidence-mapping-v8-complete-source-sequences']
+    && KNOWLEDGE_STRUCTURE_COMPATIBLE_POLICY_VERSIONS
       .includes(initialCourse.content.knowledgeScopePlan.policyVersion ?? '')
     && (initialCourse.content.knowledgeGraph?.nodes.length ?? 0) >= initialCourse.content.knowledgePoints.length;
 
@@ -3582,17 +3666,10 @@ async function runNewSystemCourseDesign(
       textbookEvidence: request.textbookEvidence,
       teachingCapacity,
     };
-    const knowledgeInputFingerprint = fingerprintGenerationValue({
-      schemaVersion: 3,
-      policyVersion: KNOWLEDGE_STRUCTURE_POLICY_VERSION,
-      input: knowledgeInput,
-      context: knowledgeContext,
-    });
+    const knowledgeIdentities = compatibleCourseDesignKnowledgeFingerprints(knowledgeInput, knowledgeContext);
+    const knowledgeInputFingerprint = knowledgeIdentities[0];
     const knowledgeModelFingerprint = await courseDesignModelFingerprint(request);
     const storedCheckpoints = await loadGenerationCheckpoints(job.id);
-    const previousKnowledgeFingerprint = fingerprintGenerationValue({ schemaVersion: 3,
-      policyVersion: 'textbook-evidence-mapping-v8-complete-source-sequences', input: knowledgeInput, context: knowledgeContext });
-    const knowledgeIdentities = [knowledgeInputFingerprint, previousKnowledgeFingerprint];
     const storedKnowledge = migrateCourseDesignCheckpointIdentity(storedCheckpoints.knowledgeStructure,
       knowledgeInputFingerprint, knowledgeModelFingerprint, knowledgeIdentities);
     const storedKnowledgeAttempt = migrateCourseDesignCheckpointIdentity(storedCheckpoints.knowledgeStructureAttempt,
@@ -3614,7 +3691,7 @@ async function runNewSystemCourseDesign(
       && Array.isArray(checkpointRecord(storedKnowledge.knowledgeGraph)?.nodes)
       && Array.isArray(checkpointRecord(storedKnowledge.knowledgeGraph)?.edges)
       && checkpointRecord(storedKnowledge.knowledgeScopePlan)?.schemaVersion === 1
-      && [KNOWLEDGE_STRUCTURE_POLICY_VERSION, 'textbook-evidence-mapping-v8-complete-source-sequences']
+      && KNOWLEDGE_STRUCTURE_COMPATIBLE_POLICY_VERSIONS
         .includes(String(checkpointRecord(storedKnowledge.knowledgeScopePlan)?.policyVersion))) {
       generated = {
         knowledgePoints: storedKnowledge.knowledgePoints as KnowledgePoint[],
@@ -3629,7 +3706,7 @@ async function runNewSystemCourseDesign(
       const authoringKnowledgeContext = { ...knowledgeContext,
         textbookEvidence: request.textbookEvidence ? { ...request.textbookEvidence,
           items: await hydrateCourseEvidenceFigureReferences(request.textbookEvidence.items,
-            { includeAncestorIntroductions: true }) } : undefined };
+            { includeAncestorIntroductions: true, includeSectionContext: true }) } : undefined };
       const streaming = await createDesignStreamingAiCall({
         job,
         request,
@@ -3813,6 +3890,7 @@ async function runNewSystemCourseDesign(
     const durationInputFingerprint = fingerprintGenerationValue({
       schemaVersion: 2,
       policyVersion: NEW_SYSTEM_AI_TIMING_POLICY_VERSION,
+      authoringPolicyVersion: NEW_SYSTEM_AI_DURATION_AUTHORING_POLICY_VERSION,
       input: durationInput,
     });
     const durationModelFingerprint = await courseDesignModelFingerprint(request);
@@ -3821,7 +3899,9 @@ async function runNewSystemCourseDesign(
       policyVersion: NEW_SYSTEM_AI_TIMING_POLICY_VERSION, input: { ...durationInput,
         teacherBrief: [teacherGenerationBrief(request), formatCourseEvidenceContext(request.textbookEvidence)]
           .filter(Boolean).join('\n\n') } });
-    const durationIdentities = [durationInputFingerprint, previousDurationFingerprint];
+    const legacyDurationFingerprint = fingerprintGenerationValue({ schemaVersion: 2,
+      policyVersion: NEW_SYSTEM_AI_TIMING_POLICY_VERSION, input: durationInput });
+    const durationIdentities = [durationInputFingerprint, legacyDurationFingerprint, previousDurationFingerprint];
     const storedDuration = migrateCourseDesignCheckpointIdentity(storedCheckpoints.aiDuration,
       durationInputFingerprint, durationModelFingerprint, durationIdentities);
     const storedDurationAttempt = migrateCourseDesignCheckpointIdentity(storedCheckpoints.aiDurationAttempt,

@@ -49,6 +49,100 @@ function retrievalBlockIds(metadata: unknown, firstId?: string): string[] {
   ])];
 }
 
+export const COURSE_SOURCE_CONTEXT_POLICY_VERSION = 1;
+
+/** Resolve the real topical section, rather than just paragraphs with example
+ * markers. A case may start before the retrieved chunk and finish after it. */
+async function hydrateSectionAuthoringContext(
+  items: readonly CourseEvidenceItem[],
+  idsByItem: ReadonlyMap<string, readonly string[]>,
+  blockById: ReadonlyMap<string, { id: string; revisionId: string; sectionId: string; position: number }>,
+): Promise<CourseEvidenceItem[]> {
+  const needsContext = (item: CourseEvidenceItem) => item.sourceContext?.policyVersion !== COURSE_SOURCE_CONTEXT_POLICY_VERSION
+    || item.sourceContext.status !== 'complete' || item.sourceContext.sectionId !== item.source.sectionId;
+  const anchorsByItem = new Map(items.filter(needsContext).map((item) => [item.id,
+    (idsByItem.get(item.id) ?? []).flatMap((id) => {
+      const block = blockById.get(id);
+      return block && block.revisionId === item.source.revisionId && block.sectionId
+        && (!item.source.sectionId || block.sectionId === item.source.sectionId) ? [block] : [];
+    }),
+  ]));
+  const revisionIds = [...new Set([...anchorsByItem.values()].flat().map((block) => block.revisionId))];
+  if (!revisionIds.length) return items.map((item) => needsContext(item)
+    ? { ...item, sourceContext: { policyVersion: COURSE_SOURCE_CONTEXT_POLICY_VERSION,
+      status: 'partial' as const, sectionId: item.source.sectionId, sourceBlockIds: [] } } : item);
+  const sections = await prisma.textbookSection.findMany({
+    where: { revisionId: { in: revisionIds } },
+    select: { id: true, revisionId: true, parentId: true, title: true, path: true,
+      kind: true, level: true, position: true },
+  });
+  const sectionById = new Map(sections.map((section) => [section.id, section]));
+  const scopesByItem = new Map([...anchorsByItem].map(([id, anchors]) => {
+    const roots = [...new Set(anchors.map((block) => block.sectionId))].flatMap((sectionId) => {
+      const section = sectionById.get(sectionId);
+      return section && section.revisionId === anchors[0]?.revisionId ? [section] : [];
+    });
+    const scope = roots.flatMap((root) => {
+      // A retrieved chapter introduction does not authorize expanding its
+      // unrelated topics. Within a topic, child subsections retain case prose.
+      const included = new Set([root.id]);
+      if (root.kind !== 'CHAPTER' && root.kind !== 'FRONT_MATTER') {
+        let changed = true;
+        while (changed) {
+          changed = false;
+          for (const section of sections) {
+            if (section.revisionId === root.revisionId && section.parentId && included.has(section.parentId)
+              && !included.has(section.id) && section.kind !== 'CHAPTER' && section.kind !== 'FRONT_MATTER') {
+              included.add(section.id); changed = true;
+            }
+          }
+        }
+      }
+      return [{ root, revisionId: root.revisionId, sectionId: { in: [...included] } }];
+    });
+    return [id, scope] as const;
+  }));
+  const scopes = [...new Map([...scopesByItem.values()].flat().map((scope) => [scope.root.id, scope])).values()];
+  const blocks = scopes.length ? await prisma.textbookSourceBlock.findMany({
+    where: { OR: scopes.map(({ revisionId, sectionId }) => ({ revisionId, sectionId })) },
+    orderBy: { position: 'asc' },
+    select: { id: true, revisionId: true, sectionId: true, position: true, blockType: true, content: true },
+  }) : [];
+  return items.map((item) => {
+    if (!needsContext(item)) return item;
+    const scopes = scopesByItem.get(item.id) ?? [];
+    const contextBlocks = blocks.filter((block) => scopes.some((scope) => block.revisionId === scope.revisionId
+      && scope.sectionId.in.includes(block.sectionId)) && block.blockType !== 'HEADING' && block.blockType !== 'TITLE'
+      && Boolean(normalizeTextbookText(block.content)));
+    const complete = scopes.length === 1 && scopes[0]!.root.kind !== 'CHAPTER' && scopes[0]!.root.kind !== 'FRONT_MATTER'
+      && Boolean(contextBlocks.length) && (idsByItem.get(item.id) ?? []).every((id) =>
+        contextBlocks.some((block) => block.id === id));
+    const additions = new Map((item.completeSourceBlocks ?? []).map((block) => [block.sourceBlockId, block]));
+    for (const block of contextBlocks) {
+      const section = sectionById.get(block.sectionId);
+      if (!section) continue;
+      const hierarchy: NonNullable<CourseEvidenceItem['source']['sectionHierarchy']> = [];
+      let ancestor: typeof section | undefined = section;
+      const visited = new Set<string>();
+      while (ancestor && ancestor.revisionId === item.source.revisionId && !visited.has(ancestor.id)) {
+        visited.add(ancestor.id);
+        hierarchy.unshift({ id: ancestor.id, title: ancestor.title, kind: ancestor.kind, level: ancestor.level });
+        ancestor = ancestor.parentId ? sectionById.get(ancestor.parentId) : undefined;
+      }
+      additions.set(block.id, { sourceBlockId: block.id, content: block.content,
+        source: { textbookId: item.source.textbookId, textbookTitle: item.source.textbookTitle,
+          revisionId: block.revisionId, revisionVersion: item.source.revisionVersion,
+          sectionId: section.id, sectionPath: sectionPath(section.path, section.title), sectionHierarchy: hierarchy,
+          sectionPosition: section.position, sourceBlockId: block.id, sourceBlockPosition: block.position,
+          quote: block.content } });
+    }
+    return { ...item, ...(additions.size ? { completeSourceBlocks: [...additions.values()] } : {}),
+      sourceContext: { policyVersion: COURSE_SOURCE_CONTEXT_POLICY_VERSION,
+        status: complete ? 'complete' as const : 'partial' as const,
+        sectionId: item.source.sectionId, sourceBlockIds: contextBlocks.map((block) => block.id) } };
+  });
+}
+
 /** Add direct parent prose to an authoring view without changing adopted IDs. */
 async function hydrateAncestorIntroductions(
   items: readonly CourseEvidenceItem[],
@@ -128,7 +222,7 @@ async function hydrateAncestorIntroductions(
 /** Recover figure links from all blocks of the adopted retrieval chunks. */
 export async function hydrateCourseEvidenceFigureReferences(
   items: readonly CourseEvidenceItem[],
-  options: { includeAncestorIntroductions?: boolean } = {},
+  options: { includeAncestorIntroductions?: boolean; includeSectionContext?: boolean } = {},
 ): Promise<CourseEvidenceItem[]> {
   const missingChunkIds = items.filter((item) => !item.source?.sourceBlockIds?.length && item.source?.revisionId && item.id)
     .map((item) => item.id);
@@ -178,7 +272,7 @@ export async function hydrateCourseEvidenceFigureReferences(
           .includes(normalizeTextbookText(block.content)))
         .map((block) => ({ sourceBlockId: block.id, content: block.content }))
       : [];
-    const completeSourceBlocks = options.includeAncestorIntroductions
+    const completeSourceBlocks = options.includeAncestorIntroductions || options.includeSectionContext
       ? [...new Map((item.completeSourceBlocks ?? []).map((block) => [block.sourceBlockId, block])).values(),
         ...omittedSourceBlocks.filter((block) => !item.completeSourceBlocks
           ?.some((existing) => existing.sourceBlockId === block.sourceBlockId))]
@@ -265,8 +359,10 @@ export async function hydrateCourseEvidenceFigureReferences(
     return { ...item, sourceSequences, sourceSequencesResolved: true,
       sourceSequencePolicyVersion: SOURCE_SEQUENCE_POLICY_VERSION };
   });
-  return options.includeAncestorIntroductions
-    ? hydrateAncestorIntroductions(hydrated, idsByItem, blockById) : hydrated;
+  const withIntroductions = options.includeAncestorIntroductions
+    ? await hydrateAncestorIntroductions(hydrated, idsByItem, blockById) : hydrated;
+  return options.includeSectionContext
+    ? hydrateSectionAuthoringContext(withIntroductions, idsByItem, blockById) : withIntroductions;
 }
 
 function supportStatus(point: ResourcePackageTeachingPoint, item: CourseEvidenceItem | undefined): CourseEvidenceMapping["status"] {

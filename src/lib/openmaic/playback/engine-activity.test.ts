@@ -331,6 +331,28 @@ describe('PlaybackEngine activity gates', () => {
     expect(actionEngine.execute).toHaveBeenCalledTimes(1);
   });
 
+  it('plays every persisted canonical paragraph before opening the interactive activity', async () => {
+    const events: string[] = [];
+    const actionEngine = { clearEffects: vi.fn(), execute: vi.fn().mockResolvedValue(undefined) } as unknown as ActionEngine;
+    const audioPlayer = { play: vi.fn().mockResolvedValue(false), onEnded: vi.fn(), pause: vi.fn(), resume: vi.fn(),
+      stop: vi.fn(), isPlaying: vi.fn().mockReturnValue(false), hasActiveAudio: vi.fn().mockReturnValue(false) } as unknown as AudioPlayer;
+    const scene: Scene = { ...legacyInteractiveScene(), actions: [
+      { id: 'intro', type: 'speech', text: '先观察结果。' },
+      { id: 'conditions', type: 'speech', text: '保持其余条件不变。' },
+      { id: 'instructions', type: 'speech', text: '现在调整参数。' },
+      { id: 'gate', type: 'speech', text: '', activityPauseSec: 60, activityPausePurpose: 'interaction',
+        activityPauseSource: 'page-timing', activityPausePosition: 'after-narration' },
+    ] as Action[] };
+    const engine = new PlaybackEngine([JSON.parse(JSON.stringify(scene))], actionEngine, audioPlayer, {
+      onSpeechStart: (text) => { events.push(text); }, onActivityStart: () => { events.push('activity'); },
+    });
+    engine.start();
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(events).toEqual(['先观察结果。', '保持其余条件不变。', '现在调整参数。', 'activity']);
+    expect(engine.completeActivity('interactive-scene', 'interaction')).toBe(true);
+    engine.stop();
+  });
+
   it('normalizes legacy interactive scenes so automation waits for the learner', async () => {
     const onActivityStart = vi.fn();
     const actionEngine = {

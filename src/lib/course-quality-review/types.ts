@@ -50,7 +50,7 @@ export type SharedTeachingContext = {
   fixedWording: string[];
   /** Step names and technical terms that remain stable across the section. */
   stableTerms: string[];
-  /** Necessary distinctions, qualifications, and non-equivalences. */
+  /** Internal scope guidance; actual taught qualifications belong to source-bound nodes. */
   conceptBoundaries: string[];
 };
 
@@ -64,11 +64,27 @@ export type PageLearningTask = {
 };
 
 /** Defined during section design and kept stable while concrete quiz items are authored later. */
+export type TeachingAnswerRelation = 'source-statement' | 'conditional-application' | 'comparative-fit' | 'insufficient-evidence';
+
 export type TeachingUnderstandingCriteria = {
+  /** Internal compatibility marker written by the compiler, never another model-authored goal field. */
+  goalSource?: 'basis' | 'references';
+  /** Modern first authoring projects these compatibility fields from bound operations and topics. */
   goals: string[];
+  /** Historical answer projections; modern judgment uses bound statements and actual node bodies. */
   answerEssentials: string[];
   misconceptions: string[];
   supportingUnitIds: string[];
+  /** New authoring binds an operation to taught facts; prose goals remain a compatibility projection. */
+  basis?: Array<{ id: string; goal: string;
+    /** Absent on saved prose-basis drafts, whose original goal contract is preserved. */
+    operation?: import("@/lib/course-design/knowledge-authoring").AuthoringLearningTask['operation'];
+    /** Chosen during the same blueprint call; describes the judgment, not a semantic review result. */
+    answerRelation?: TeachingAnswerRelation;
+    claimRefs: import("@/lib/course-design/knowledge-authoring").AuthoringClaimRef[];
+    nodeIds: string[];
+    exampleRefs?: import("@/lib/course-design/knowledge-authoring").AuthoringExampleRef[];
+    requiredConditions?: string[] }>;
 };
 
 export type TeachingDifficultyStrategy = {
@@ -173,12 +189,29 @@ export type TeacherReviewVersion = {
 
 /** Shared teaching meaning supplied by the existing outline call, not another generation step. */
 export type TeachingBrief = {
+  /** Page plan owned by the joint authoring contract; absent on historical drafts. */
+  pptPlanningVersion?: string;
+  /** Actual adopted provenance, independent of slide text and canonical speech. */
+  sourceBindings?: import('@/lib/course-design/knowledge-authoring').AuthoringSourceBinding[];
+  /** References into canonical blueprint speech; never a second writable body. */
+  manuscript?: { sectionId: string; segmentIds: string[] };
   schemaVersion: 1;
   designVersion?: string;
   sharedContext?: SharedTeachingContext;
   pageTask?: PageLearningTask;
   /** Compiled from the confirmed course order; models may consume but never rewrite it. */
   learningBoundary?: TeachingLearningBoundary;
+  /** Page-local authoring evidence. Candidate examples are not teaching coverage. */
+  authoring?: {
+    nodes: import("@/lib/session/types").TeachingExplanationNode[];
+    /** Previously taught evidence only; never current introduction, deepening or quotation duties. */
+    basisNodes?: import("@/lib/session/types").TeachingExplanationNode[];
+    examplePlans: import("@/lib/session/types").TeachingExamplePlan[];
+    knowledge: Array<{ knowledgePointId: string;
+      authoring: import("@/lib/course-design/knowledge-authoring").KnowledgeAuthoring }>;
+    /** Structural address gaps retained for review, never a generation gate. */
+    diagnostics?: string[];
+  };
   teachingPlan?: {
     purpose: string;
     priorKnowledge: string;
@@ -205,6 +238,7 @@ export type TeachingBrief = {
       kind: "familiar-experience" | "concrete-observation" | "problem" | "direct-explanation" | "continuation";
       object: string;
       bridge: string;
+      basis?: import('@/lib/session/types').TeachingFactBasis;
     };
     /** Stable explanation ownership inherited from the teaching blueprint. */
     introduces?: string[];

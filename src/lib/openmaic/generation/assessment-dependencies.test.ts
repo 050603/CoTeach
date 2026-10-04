@@ -15,6 +15,34 @@ const quiz = page('quiz', { type: 'quiz', order: 10, lectureSectionId: 'section-
 } });
 
 describe('assessment teaching dependencies', () => {
+  it('does not append reference-mode compatibility conclusions as another answer authority', () => {
+    const unsupported = '所有任务都必须重新训练';
+    const check: SceneOutline = { ...quiz, teachingBrief: { ...quiz.teachingBrief!,
+      conditions: [unsupported], assessmentFocus: unsupported,
+      sharedContext: { ...quiz.teachingBrief!.sharedContext!, learningPurpose: unsupported, conceptBoundaries: [unsupported] },
+      understandingCriteria: { goalSource: 'references', goals: [unsupported], answerEssentials: [unsupported],
+        misconceptions: [unsupported], supportingUnitIds: ['unit-a'], basis: [{ id: 'use', goal: unsupported,
+          operation: 'apply', nodeIds: ['application'], claimRefs: [{ knowledgePointId: 'point', claimId: 'source' }] }] },
+      authoring: { nodes: [], knowledge: [], examplePlans: [] },
+    } };
+    const first = taught(page('first', { lectureSectionId: 'section-a', teachingUnitIds: ['unit-a'],
+      teachingBrief: { ...quiz.teachingBrief!, teachingPlan: { purpose: '', priorKnowledge: '', newContent: unsupported,
+        learnerQuestion: '', reasoningSteps: [], takeaway: unsupported, visibleContent: [], narrationFocus: [] } } }),
+    '可以复用已有模型处理新任务或新领域。');
+    const next = taught(page('next', { order: 11, lectureSectionId: 'section-b', teachingObjective: unsupported,
+      teachingBrief: first.outline.teachingBrief }), '接下来比较给定接口的输入方式。');
+    const assessment = JSON.parse(buildAssessmentContext(check, [first]));
+    expect(assessment).not.toHaveProperty('answerAuthority');
+    expect(JSON.stringify(assessment)).not.toContain(unsupported);
+    expect(assessment.pages[0].narration).toEqual(first.speech.map(({ text }) => text));
+    const narration = JSON.parse(buildQuizNarrationContext(check, [first, next], [first.outline, check, next.outline]));
+    expect(JSON.stringify(narration)).not.toContain(unsupported);
+    expect(narration.currentSection.understandingCriteria).toMatchObject({ goalSource: 'references',
+      basis: [{ operation: 'apply', claimRefs: [{ knowledgePointId: 'point', claimId: 'source' }] }] });
+    expect(narration.precedingSection[0].actualNarration).toEqual(first.speech.map(({ text }) => text));
+    expect(narration.nextPage.actualOpening).toBe(next.speech[0].text);
+  });
+
   it('uses only completed earlier student narration from this section, in teaching order', () => {
     const context = JSON.parse(buildAssessmentContext(quiz, [
       taught(page('second', { lectureSectionId: 'section-a', order: 2 }), '第二个例子'),

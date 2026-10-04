@@ -2,7 +2,8 @@ import { describe, expect, it } from 'vitest';
 import type { SceneOutline, GeneratedSlideContent } from '@/lib/openmaic/types/generation';
 import { assertSourceSequencesInOutlines, type FigureSequenceContract } from './course-visual-binding';
 import { findSourceContentIssues, findSectionSourceContentIssues } from '@/lib/course-generation/source-content-acceptance';
-import { mergeSourceSequenceUses, normalizeSourceSequenceUses, scopeSourceSequenceContracts, type SourceSequenceUse } from './source-sequence-use';
+import { hasExplicitNativeSourceSequenceUse, mergeSourceSequenceUses, normalizeSourceSequenceUses, scopeSourceSequenceContracts, type SourceSequenceUse } from './source-sequence-use';
+import { PPT_PAGE_PLANNING_VERSION } from '@/lib/course-design/ppt-page-planning-contract';
 
 const source = (id: string, labels: string[]): FigureSequenceContract => ({ resourceId: id,
   required: false, coveragePolicy: 'authored-scope', scope: 'knowledge-point',
@@ -23,6 +24,24 @@ function content(text: string): GeneratedSlideContent {
 }
 
 describe('goal-scoped textbook references', () => {
+  it('allows canonical cross-knowledge references only for the native contract', () => {
+    const page = outline('观察', [{ resourceId: first.resourceId, coverage: 'selected', sourceStepIds: ['book-a-0'] }]);
+    page.knowledgePointIds = ['application'];
+    expect(hasExplicitNativeSourceSequenceUse(page, first)).toBe(false);
+    page.teachingBrief!.pptPlanningVersion = PPT_PAGE_PLANNING_VERSION;
+    expect(hasExplicitNativeSourceSequenceUse(page, first)).toBe(true);
+    expect(hasExplicitNativeSourceSequenceUse(page, second)).toBe(false);
+    page.teachingBrief!.teachingPlan!.sourceSequenceUses = [{ resourceId: first.resourceId,
+      coverage: 'selected', sourceStepIds: ['other-source-step'] }];
+    expect(hasExplicitNativeSourceSequenceUse(page, first)).toBe(false);
+    page.teachingBrief!.teachingPlan!.sourceSequenceUses = [
+      { resourceId: first.resourceId, coverage: 'complete' }, { resourceId: first.resourceId, coverage: 'complete' },
+    ];
+    expect(hasExplicitNativeSourceSequenceUse(page, first)).toBe(false);
+    page.teachingBrief!.teachingPlan!.sourceSequenceUses = [{ resourceId: first.resourceId, coverage: 'complete' }];
+    expect(hasExplicitNativeSourceSequenceUse(page, first)).toBe(true);
+  });
+
   it('does not impose a textbook contract on a course without textbooks', () => {
     const page = outline('根据观察提出可检验的猜想，并用证据判断。', []);
     expect(scopeSourceSequenceContracts([], [page])).toEqual([]);

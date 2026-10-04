@@ -31,37 +31,29 @@ export function formatText(text: string): string {
   return text.replace(/\n/g, '<br/>').replace(/ /g, '&nbsp;');
 }
 
-/**
- * Compute hidden cell positions based on colspan/rowspan merges.
- * Returns a Set of "row_col" keys for cells that should be hidden.
- */
-export function getHiddenCells(data: TableCell[][]): Set<string> {
-  const hidden = new Set<string>();
-
-  for (let rowIdx = 0; rowIdx < data.length; rowIdx++) {
-    let realColIdx = 0;
-    for (let colIdx = 0; colIdx < data[rowIdx].length; colIdx++) {
-      // Skip positions already occupied by a previous merge
-      while (hidden.has(`${rowIdx}_${realColIdx}`)) {
-        realColIdx++;
+/** DSL rows contain real cells, not one entry per logical column. Resolve
+ * their grid positions without treating a compact array index as a column.
+ * Historical full-grid rows may still contain empty covered placeholders. */
+export function tableCellLayout(data: TableCell[][], columnCount: number): Array<Array<{
+  cell: TableCell; columnIndex: number;
+}>> {
+  const occupied = new Set<string>();
+  return data.map((row, rowIndex) => {
+    let columnIndex = 0;
+    return row.flatMap((cell, dataIndex) => {
+      const colspan = Math.max(1, cell.colspan ?? 1);
+      const rowspan = Math.max(1, cell.rowspan ?? 1);
+      // Only a rectangular legacy row can carry a placeholder at its data
+      // index. Never discard an authored text cell or a compact empty cell.
+      if (row.length === columnCount && occupied.has(`${rowIndex}:${dataIndex}`)
+        && colspan === 1 && rowspan === 1 && !cell.text.trim()) return [];
+      while (occupied.has(`${rowIndex}:${columnIndex}`)) columnIndex += 1;
+      const anchor = columnIndex;
+      for (let r = 0; r < rowspan; r += 1) for (let c = 0; c < colspan; c += 1) {
+        occupied.add(`${rowIndex + r}:${anchor + c}`);
       }
-
-      const cell = data[rowIdx][colIdx];
-      const colspan = cell.colspan ?? 1;
-      const rowspan = cell.rowspan ?? 1;
-
-      if (colspan > 1 || rowspan > 1) {
-        for (let r = 0; r < rowspan; r++) {
-          for (let c = 0; c < colspan; c++) {
-            if (r === 0 && c === 0) continue;
-            hidden.add(`${rowIdx + r}_${realColIdx + c}`);
-          }
-        }
-      }
-
-      realColIdx += colspan;
-    }
-  }
-
-  return hidden;
+      columnIndex += colspan;
+      return [{ cell, columnIndex: anchor }];
+    });
+  });
 }

@@ -120,8 +120,8 @@ describe('slide visual intent', () => {
     );
   });
 
-  test('fails before layout generation when a required source image is unavailable', async () => {
-    const aiCall = vi.fn<AICallFn>();
+  test('retains the usable draft and diagnoses an unavailable required source image', async () => {
+    const aiCall = vi.fn<AICallFn>().mockResolvedValue(JSON.stringify({ elements: [textElement()] }));
     const failures: unknown[] = [];
 
     const result = await generateSceneContent(
@@ -143,12 +143,16 @@ describe('slide visual intent', () => {
       { onFailure: (failure) => failures.push(failure) },
     );
 
-    expect(result).toBeNull();
-    expect(aiCall).not.toHaveBeenCalled();
-    expect(failures).toEqual([{ code: 'invalid-model-output' }]);
+    expect((result as GeneratedSlideContent)?.elements).toHaveLength(1);
+    expect(aiCall).toHaveBeenCalledTimes(1);
+    expect((result as GeneratedSlideContent)?.qualityDiagnostics).toEqual(expect.arrayContaining([
+      expect.stringContaining('Required source images are unavailable'),
+      expect.stringContaining('Required visual resource is absent from the actual draft: textbook_fig_missing'),
+    ]));
+    expect(failures).toEqual([]);
   });
 
-  test('fails the first pass when the model omits a required bound resource', async () => {
+  test('retains the first pass with a truthful diagnosis when the model omits a required bound resource', async () => {
     const aiCall: AICallFn = async () =>
       JSON.stringify({
         background: { type: 'solid', color: '#ffffff' },
@@ -175,8 +179,11 @@ describe('slide visual intent', () => {
       { onFailure: (failure) => failures.push(failure) },
     );
 
-    expect(result).toBeNull();
-    expect(failures).toEqual([{ code: 'invalid-model-output' }]);
+    expect((result as GeneratedSlideContent)?.elements).toHaveLength(1);
+    expect((result as GeneratedSlideContent)?.qualityDiagnostics).toContain(
+      'Required visual resource is absent from the actual draft: gen_img_animal-contrast',
+    );
+    expect(failures).toEqual([]);
   });
 
   test('accepts a shared generated image reference without a second generation request', async () => {

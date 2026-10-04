@@ -19,6 +19,7 @@ import { hasCurrentTeachingBrief } from "@/lib/openmaic/generation/teaching-enha
 import { compileDiagramComponent } from "@openmaic/generation";
 import type { TeachingBlueprintUnit, TeachingExplanationNode } from "@/lib/session/types";
 import { assertSourceSequencesInOutlines, bindRequiredTextbookFiguresToBlueprint } from "@/lib/textbook/course-visual-binding";
+import { PPT_PAGE_PLANNING_CONTRACT, PPT_PAGE_PLANNING_GUIDANCE } from './legacy-ppt-page-planning-contract';
 
 it("uses confirmed class readiness in planning and invalidates cached plans when it changes", () => {
   const base = input();
@@ -36,6 +37,15 @@ it("uses confirmed class readiness in planning and invalidates cached plans when
     ],
   };
   const prompt = buildTeachingBlueprintPrompt(enriched);
+  expect(prompt.system).toContain(PPT_PAGE_PLANNING_GUIDANCE);
+  expect(prompt.system).toContain('视觉焦点指学生正在理解的对象、机制或关系');
+  expect(prompt.system).toContain('同一核心认识下的定义、必要条件、相关案例与补充特征优先完整共页');
+  expect(prompt.system).toContain('未测量的“争抢空间/视觉焦点”猜测');
+  expect(prompt.system).toContain('旧分页名称或过去版面的过载诊断，均不证明恢复后的组合也过载');
+  expect(prompt.system).toContain('不要把完整解释节点、整段教材或连续讲稿直接复制成 presentationItems');
+  expect(prompt.user).toContain(PPT_PAGE_PLANNING_CONTRACT.planningVersion);
+  expect(prompt.system).not.toContain('方便各自成框');
+  expect(prompt.system).not.toContain('分开写成可分别绑定的展示项');
   expect(prompt.user).toContain("会分类，还没接触训练集");
   expect(prompt.user).toContain("需要图例支架");
   expect(prompt.user).toContain("校园植物");
@@ -44,11 +54,11 @@ it("uses confirmed class readiness in planning and invalidates cached plans when
   expect(prompt.system).toContain("JSON 字符串内的英文双引号必须转义");
   expect(prompt.system).toContain("概念辨析、因果机制、数学推导、操作技能、历史材料和综合应用");
   expect(prompt.system).toContain("从实际落页正文派生 unit.explanationNodes、page.unitIds、introducesNodeIds 和 referencesNodeIds");
-  expect(prompt.system).toContain("不得把后页才出现的术语、案例、问题或任务伪装成上一页已经讲过");
+  expect(prompt.system).toContain("nodeIds 引用真实落页或此前已讲授的节点");
   expect(prompt.system).toContain("entryPoint 写出实际开场对象");
   expect(prompt.system).toContain("Instructional Slide Title Contract");
   expect(prompt.system).toContain("Name a case, practice, comparison, or recap page by its actual subject and purpose");
-  expect(prompt.system).toContain("不要把 entryPoint 的问题、口语化过渡、醒目结论句或 learningTask 的操作要求写成 slide 标题");
+  expect(prompt.system).toContain("entryPoint 的问题、口语过渡、醒目结论或 learningTask 的操作要求不作为 slide 标题");
   expect(prompt.system).toContain("课程第一页应在简短问候和必要承接后，直接讲授本阶段的第一个新知识");
   expect(prompt.system).toContain("教师已制作并讲解的图片观察、课堂对比、提问和活动属于已完成的先前学习经历");
   expect(prompt.system).toContain("正式致谢和告别");
@@ -75,9 +85,10 @@ it("uses confirmed class readiness in planning and invalidates cached plans when
   expect(prompt.system).toContain("不出现‘教材原例’‘教学改编’‘AI 补充’");
   expect(prompt.system).toContain("preferredForm 是教学表达偏好");
   expect(prompt.system).toContain("没有每节必须使用几种形式的配额");
-  expect(prompt.system).toContain("定义、并列原则与少量核心命题用 text 和分组说明");
-  expect(prompt.system).toContain("仅需记住步骤顺序时可用编号列表");
-  expect(prompt.system).toContain("概念层级不得默认包装成时间流程");
+  expect(prompt.system).toContain("少量核心命题可用 text");
+  expect(prompt.system).toContain("并列原则或要素需要分别观察时使用独立分组框");
+  expect(prompt.system).toContain("简短操作提示不需要观察整体结构时可用编号列表");
+  expect(prompt.system).toContain("概念层级和并列要素不得包装成时间流程");
   expect(prompt.system).toContain("相邻页面重复同一流程时，须说明本页新增的教学作用");
   expect(prompt.system).toContain("preferredForm=text、table、chart 或 illustration 时省略 diagram");
   expect(prompt.system).not.toContain("步骤、因果、系统和概念关系通常优先 diagram");
@@ -86,15 +97,15 @@ it("uses confirmed class readiness in planning and invalidates cached plans when
   expect(outputExample.sections[0].pages[0].visualRelationship).not.toHaveProperty("diagram");
   expect(outputExample.sections[0].pages[0].caseObservation.aspectRatio).toBe("image 可选 16:9|4:3|1:1|9:16");
   expect(prompt.user).toContain("仅在已决定 diagram 或含图示的 mixed 最能帮助理解时加入 visualRelationship");
-  expect(prompt.system).toContain("具有完整、可比较数值并需要看趋势");
-  expect(prompt.system).toContain("不得考未讲内容");
+  expect(prompt.system).toContain("具有完整可比较数值并需要看趋势");
+  expect(prompt.system).toContain("不考未讲内容");
   expect(prompt.system).toContain("条目数量不等于最终题数");
-  expect(prompt.system).toContain("也不要在其中指定题型");
+  expect(prompt.system).toContain("不指定题型");
   expect(prompt.system).toContain("Constructed examples or data must not be given a fabricated institution");
   expect(prompt.system).toContain("未启用图片或视频时不得请求对应种类");
   expect(prompt.user).toContain('"sharedContext"');
   expect(prompt.user).toContain('"learningTask"');
-  expect(prompt.system).toContain('type=slide 的概念首次讲解页用其规范名称作正式 PPT 标题，如‘项目式学习’');
+  expect(prompt.system).toContain('type=slide 的概念首次讲解页用规范名称作正式 PPT 标题');
   expect(outputExample.sections[0].pages[0].title).toBe("slide 页用知识对象的正式标题，首次定义概念时用规范名称如项目式学习；interactive 页用具体任务名称");
   expect(prompt.user).not.toContain('"title":"学生可见标题"');
   expect(prompt.user).toContain('"taskConnection"');
@@ -103,7 +114,7 @@ it("uses confirmed class readiness in planning and invalidates cached plans when
   expect(prompt.user).toContain("每节页面数量由实际教学任务和可读性决定");
   expect(prompt.user).not.toContain('"maxPages"');
   expect(prompt.system).toContain("可直接制作资源的小节内容设计");
-  expect(prompt.system).toContain("禁止只写");
+  expect(prompt.system).toContain("直接写出学生需要理解的具体正文，不写生成任务名称");
   expect(prompt.user).toContain('"understandingCriteria"');
   expect(prompt.system).toContain("准确的核心含义及必要边界");
   expect(prompt.system).toContain("供讲稿直接依据原始来源展开");
@@ -119,8 +130,29 @@ it("uses confirmed class readiness in planning and invalidates cached plans when
   expect(prompt.user).toContain("机器结构验收合同");
   expect(outputExample.sections[0].pages[0].explanationNodes[0].knowledgePointIds).toEqual(["该节点实际解释的本单元知识点ID"]);
   expect(prompt.system).toContain("辅助案例优先嵌入相关知识页");
-  expect(prompt.system).toContain("完整故事、原因与条件由该页实际拥有的 example 节点支持讲稿");
-  expect(prompt.user).toContain("输入时间无法承载必需解释");
+  expect(prompt.system).toContain("完整故事、原因与条件由实际 owned example 节点支持讲稿");
+  expect(prompt.user).toContain("输入时间仅作参考，解释清楚优先，必要超时允许");
+  expect(prompt.user).not.toContain("输入时间无法承载必需解释");
+  expect(prompt.system).toContain("必要超时不构成 capacityConflict");
+  expect(prompt.system).toContain("不能自动写成“只有 A 才 B”");
+  expect(prompt.system).toContain("不把明确含义扩写成唯一含义、跨环境永不改变或保证有效");
+  expect(prompt.system).toContain("定义引句后的正文直接推进实际含义或具体已采用事实的分析");
+  expect(prompt.system).toContain("来源未确立的替代、优劣、互斥或必要关系留在这些内部范围或 reviewItems");
+  expect(prompt.system).toContain("先区分呈现困难与解决示范");
+  expect(prompt.system).toContain("比较适合程度不等于排他真假");
+  expect(prompt.system).toContain("来源未提的关系仅留内部范围或 reviewItems，不增加考点");
+  expect(prompt.user).toContain("上游时长理由、evidence 或教学建议不成为教材事实");
+  expect(outputExample.sections[0].understandingCriteria.basis[0].answerRelation).toBe('source-statement');
+  expect(outputExample.sections[0].understandingCriteria.basis[0].operation).toBe('identify|explain|compare|apply');
+  expect(outputExample.sections[0].understandingCriteria.basis[0]).not.toHaveProperty('goal');
+  expect(outputExample.sections[0].pages[0].explanationNodes[0]).toHaveProperty('quoteRefs');
+  expect(outputExample.sections[0].pages[0].explanationNodes[0]).not.toHaveProperty('quoteDuties');
+  expect(Object.keys(outputExample.sections[0].understandingCriteria)).toEqual(['basis']);
+  expect(outputExample.sections[0]).not.toHaveProperty('learningObjective');
+  expect(outputExample.sections[0]).not.toHaveProperty('assessmentFocus');
+  expect(outputExample.sections[0].units[0]).not.toHaveProperty('learningOutcome');
+  expect(outputExample.sections[0].pages[0]).not.toHaveProperty('teachingObjective');
+  expect(outputExample.sections[0].pages[0].explanationNodes[0].contentParts).toHaveLength(1);
   expect(prompt.user).toContain("只为本次 AI 知识讲授的必要承接、新知识解释、推理、例子、操作、短测和正式收束估时");
   expect(prompt.system).not.toContain("relative stability");
   expect(prompt.system).not.toContain("concretization");
@@ -128,6 +160,51 @@ it("uses confirmed class readiness in planning and invalidates cached plans when
   expect(prompt.user).not.toContain("至少三个实质要点");
   expect(teachingBlueprintInputFingerprint(enriched)).not.toBe(teachingBlueprintInputFingerprint(base));
   expect(teachingBlueprintInputFingerprint({ ...enriched, teachingConstraints: { ...teachingConstraints, learnerFoundation: "已能独立划分数据集" } })).not.toBe(teachingBlueprintInputFingerprint(enriched));
+});
+
+it('executes a v5 page with coherent definitions, conditions and examples from multiple units without splitting its node duties', async () => {
+  const legacy = modelBlueprint().sections[0]!, scoped: TeachingBlueprintInput = {
+    ...input(), knowledgeGraph: undefined, knowledgePoints: input().knowledgePoints.slice(0, 2),
+    sectionPlans: [{ title: legacy.title, knowledgePointIds: ['kp-train', 'kp-test'], teachingBudgetSec: 528 }],
+  };
+  const node = (id: string, unitId: string, kind: string, content: string, knowledgePointId: string, prior: string[] = []) => ({
+    id, unitId, kind, contentParts: [{ id: 'body', text: content }], knowledgePointIds: [knowledgePointId],
+    prerequisiteNodeIds: prior, provenance: 'general-knowledge',
+  });
+  const nodes = [
+    node('training', 'train', 'concept', '训练集用于学习模型参数。', 'kp-train'),
+    node('training-case', 'train', 'example', '本例中，已标注的植物照片参与模型参数学习，因此它们属于训练数据。', 'kp-train', ['training']),
+    node('testing', 'test', 'concept', '测试集用于在模型学习结束后独立检验对新对象的表现。', 'kp-test', ['training']),
+    node('testing-condition', 'test', 'condition', '测试数据不能参与选择模型或调整参数，否则这次检验就不再独立。', 'kp-test', ['testing']),
+  ];
+  const candidate = { authoringContract: 'blueprint-v5', sections: [{ ...legacy,
+    units: [
+      { id: 'train', title: '训练用途', knowledgePointIds: ['kp-train'], learningOutcome: '解释训练的实际用途', sourceKind: 'general-knowledge' },
+      { id: 'test', title: '测试用途', knowledgePointIds: ['kp-test'], learningOutcome: '解释独立检验及其条件', sourceKind: 'general-knowledge' },
+    ],
+    pages: [{ ...legacy.pages[0]!, unitIds: undefined, introducesNodeIds: undefined, keyPoints: undefined,
+      title: '训练与独立测试', explanationNodes: nodes,
+      presentationItems: [{ text: '训练集学习参数；测试集独立检验新对象。', nodeIds: ['training', 'testing'], role: 'comparison' },
+        { text: '测试数据不能参与模型选择或调参。', nodeIds: ['testing-condition'], role: 'key-point' }] }],
+    understandingCriteria: { ...legacy.understandingCriteria, supportingUnitIds: ['train', 'test'] },
+  }] };
+  const authored = structuredClone(candidate), call = vi.fn().mockResolvedValue(JSON.stringify(candidate));
+  const blueprint = await generateTeachingBlueprint(scoped, call);
+  expect(call).toHaveBeenCalledTimes(1);
+  expect(blueprint.sections[0]!.pages).toHaveLength(1);
+  expect(blueprint.sections[0]!.pages[0]!.unitIds).toEqual(blueprint.sections[0]!.units.map((unit) => unit.id));
+  expect(blueprint.sections[0]!.pages[0]!.introducesNodeIds).toHaveLength(4);
+  expect(blueprint.sections[0]!.units.flatMap((unit) => unit.knowledgePointIds)).toEqual(['kp-train', 'kp-test']);
+  expect(blueprint.sections[0]!.units.flatMap((unit) => unit.explanationNodes!.map((node) => node.content)))
+    .toEqual(nodes.map((node) => node.contentParts[0]!.text));
+  const outlines = teachingBlueprintToOutlines(blueprint, '使用简体中文');
+  expect(outlines.map((outline) => outline.type)).toEqual(['slide', 'quiz']);
+  expect(outlines[0]!.teachingUnitIds).toEqual(blueprint.sections[0]!.units.map((unit) => unit.id));
+  expect(outlines[0]!.teachingBrief!.teachingPlan!.introduces).toHaveLength(4);
+  for (const node of nodes) expect(outlines[0]!.teachingBrief!.explanation).toContain(node.contentParts[0]!.text);
+  expect(outlines[1]!.knowledgePointIds).toEqual(['kp-train', 'kp-test']);
+  expect(validateTeachingBlueprintBudget(blueprint, outlines)).toEqual([]);
+  expect(candidate).toEqual(authored);
 });
 
 function input(assessmentMode: TeachingBlueprintInput["assessmentMode"] = "adaptive"): TeachingBlueprintInput {

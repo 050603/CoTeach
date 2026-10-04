@@ -85,3 +85,56 @@ describe('generateSceneContent — non-vision text ordering with a mapping prese
     expect(availableMedia).not.toContain('[see attached]');
   });
 });
+
+describe('separate vision and rendering image transports', () => {
+  test('attaches known source bytes while planned image placeholders remain text resources and render bindings stay intact', async () => {
+    const bytes = 'data:image/png;base64,AQID';
+    const aiCall = vi.fn(async (_system: string, user: string, images?: Array<{ id: string; src: string }>) => {
+      expect(images).toEqual([{ id: 'img_1', src: bytes, width: 640, height: 480 }]);
+      const placeholderDescription = user.split('\n').find((line) => line.includes('**gen_img_future**'));
+      expect(placeholderDescription).toBeTruthy();
+      expect(placeholderDescription).not.toContain('[see attached]');
+      return JSON.stringify({ elements: [imageElement('img_1'), imageElement('gen_img_future')] });
+    });
+    const result = await generateSceneContent(slideOutline(), aiCall, {
+      assignedImages: [{ id: 'img_1', src: bytes, width: 640, height: 480, pageNumber: 3 },
+        { id: 'gen_img_future', src: 'gen_img_future', pageNumber: 0 }],
+      imageMapping: { img_1: '/api/protected/source-image', gen_img_future: 'gen_img_future' },
+      visionImageMapping: { img_1: bytes, gen_img_future: 'gen_img_future' },
+      resolvedVisionImages: [{ id: 'img_1', src: '/api/protected/source-image' }],
+      visionEnabled: true,
+    });
+    expect(result && 'elements' in result ? result.elements.map((element) => element.type === 'image' ? element.src : '') : [])
+      .toEqual(['/api/protected/source-image', 'gen_img_future']);
+    expect(aiCall).toHaveBeenCalledOnce();
+  });
+
+  const unavailableVisionMaps: Array<Record<string, string>> = [
+    {}, { img_1: '/api/protected/image' }, { img_1: 'ast_unresolved' }, { img_1: '/tmp/local.png' },
+  ];
+  test.each(unavailableVisionMaps)(
+    'never attaches unresolved transport values from an explicit vision map %j', async (visionImageMapping) => {
+      const aiCall = vi.fn(async (_system: string, user: string, images?: Array<{ id: string; src: string }>) => {
+        expect(images ?? []).toEqual([]);
+        expect(user).not.toContain('[see attached]');
+        return JSON.stringify({ elements: [imageElement('img_1')] });
+      });
+      const result = await generateSceneContent(slideOutline(), aiCall, {
+        assignedImages: [{ id: 'img_1', src: '/api/protected/image', pageNumber: 1 }],
+        imageMapping: { img_1: '/api/protected/image' }, visionImageMapping, visionEnabled: true,
+      });
+      expect(result && 'elements' in result ? result.elements[0] : null).toMatchObject({ src: '/api/protected/image' });
+      expect(aiCall).toHaveBeenCalledOnce();
+    },
+  );
+
+  test('keeps the existing allocated-asset vision hydration transport when no separate map is supplied', async () => {
+    const aiCall = vi.fn(async (_system: string, _user: string, images?: Array<{ id: string; src: string }>) => {
+      expect(images).toEqual([{ id: 'img_1', src: 'ast_allocated', width: undefined, height: undefined }]);
+      return JSON.stringify({ elements: [imageElement('img_1')] });
+    });
+    await generateSceneContent(slideOutline(), aiCall, { assignedImages: [{ id: 'img_1', src: '', pageNumber: 1 }],
+      imageMapping: { img_1: 'ast_allocated' }, visionEnabled: true });
+    expect(aiCall).toHaveBeenCalledOnce();
+  });
+});

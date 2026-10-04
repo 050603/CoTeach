@@ -1,5 +1,6 @@
 import type { PPTElement } from '@openmaic/dsl';
 import type { CourseQualityIssue } from './types';
+import { measureBrowserTextInk } from './browser-text-ink';
 
 export type VisibleRect = { left: number; top: number; width: number; height: number };
 export type RenderedElement = {
@@ -7,6 +8,8 @@ export type RenderedElement = {
   type: PPTElement['type'];
   box: VisibleRect;
   textRects: VisibleRect[];
+  /** Actual font ink; absent when typography or transforms cannot be measured. */
+  inkRects?: VisibleRect[];
   text: string;
   fontSize?: number;
   opacity?: number;
@@ -35,15 +38,16 @@ export function inspectRenderedSlide(sceneId: string, elements: RenderedElement[
     issues.push({ id: `render:${sceneId}:${code}:${elementId ?? 'canvas'}`, origin: 'render', severity: 'suggestion', sceneId, elementId, title, evidence, suggestion, status: 'open' });
   }
   const textItems = elements.filter((item) => item.text.trim() && (item.opacity ?? 1) > 0.05);
+  const visibleRects = (item: RenderedElement) => item.inkRects ?? item.textRects;
   for (const item of textItems) {
     if (!item.textRects.length) {
       add('invisible-text', '文字未能正常显示', '存在教学文字，但没有可见文字行。', '检查字体、透明度和文本布局。', item.id);
       continue;
     }
-    if (item.textRects.some((rect) => rect.left < -2 || rect.top < -2 || right(rect) > width + 2 || bottom(rect) > height + 2)) {
+    if (visibleRects(item).some((rect) => rect.left < -2 || rect.top < -2 || right(rect) > width + 2 || bottom(rect) > height + 2)) {
       add('overflow', '实际文字超出页面', '渲染后的文字行越过了画布边界。', '调整文本宽度、位置或分页，保留必要结论和条件。', item.id);
     }
-    if (item.textRects.some((rect) => bottom(rect) > bottom(item.box) + 6 || right(rect) > right(item.box) + 6 || rect.left < item.box.left - 6)) {
+    if (visibleRects(item).some((rect) => bottom(rect) > bottom(item.box) + 6 || right(rect) > right(item.box) + 6 || rect.left < item.box.left - 6)) {
       add('box-overflow', '文字超出原有排版区域', '实际文字行超过文本或图形容器。', '按实际行数重新分配空间，避免与相邻内容相撞。', item.id);
     }
     const visibleCharacters = item.text.replace(/\s+/g, '').length;
@@ -58,7 +62,7 @@ export function inspectRenderedSlide(sceneId: string, elements: RenderedElement[
   for (let i = 0; i < textItems.length; i++) {
     for (let j = i + 1; j < textItems.length; j++) {
       const a = textItems[i], b = textItems[j];
-      if (a.textRects.some((ra) => b.textRects.some((rb) => intersection(ra, rb) > Math.min(area(ra), area(rb)) * 0.2))) {
+      if (visibleRects(a).some((ra) => visibleRects(b).some((rb) => intersection(ra, rb) > Math.min(area(ra), area(rb)) * 0.2))) {
         add(`overlap-${b.id}`, '两处文字相互重叠', `文字 ${a.id} 与 ${b.id} 的实际文字行重叠。`, '重新安排两处内容的位置或尺度。', a.id);
       }
     }
@@ -74,7 +78,7 @@ export function inspectRenderedSlide(sceneId: string, elements: RenderedElement[
       // labeled illustration. Its pixels cannot cover later-drawn text. Text
       // crossing an image edge still indicates a likely layout collision.
       if (block.type === 'image' && blockIndex < itemIndex
-        && item.textRects.every((rect) => contains(block.box, rect, 4))) continue;
+        && visibleRects(item).every((rect) => contains(block.box, rect, item.inkRects ? 0 : 4))) continue;
       if (
         block.type === 'shape'
         && block.opaque
@@ -84,10 +88,10 @@ export function inspectRenderedSlide(sceneId: string, elements: RenderedElement[
           // colored node for alignment, while every rendered glyph remains
           // safely inside that node. Judge what the learner can actually see;
           // otherwise valid OpenMAIC process diagrams become false collisions.
-          || item.textRects.every((rect) => contains(block.box, rect, 4))
+          || (blockIndex < itemIndex && visibleRects(item).every((rect) => contains(block.box, rect, item.inkRects ? 0 : 4)))
         )
       ) continue;
-      if (item.textRects.some((rect) => intersection(rect, block.box) > area(rect) * 0.08)) {
+      if (visibleRects(item).some((rect) => intersection(rect, block.box) > area(rect) * 0.08)) {
         add(`collision-${block.id}`, '文字侵入相邻内容区域', `文字 ${item.id} 与 ${block.type} ${block.id} 的实际显示区域相交。`, '为表格、图示和面板分配互不相交的区域；容器内文字应完整留在内边距中。', item.id);
       }
     }
@@ -98,7 +102,7 @@ export function inspectRenderedSlide(sceneId: string, elements: RenderedElement[
     if (!item.textRects.length) continue;
     for (const cover of elements.slice(i + 1)) {
       if (!cover.opaque || (cover.opacity ?? 1) < 0.85 || !['image', 'shape'].includes(cover.type)) continue;
-      if (item.textRects.some((rect) => intersection(rect, cover.box) > area(rect) * 0.5)) {
+      if (visibleRects(item).some((rect) => intersection(rect, cover.box) > area(rect) * 0.5)) {
         add(`occluded-${cover.id}`, '文字可能被图形或图片遮挡', `后绘制的 ${cover.id} 覆盖了文字区域。`, '检查图层顺序和图文关系。', item.id);
       }
     }
@@ -107,7 +111,7 @@ export function inspectRenderedSlide(sceneId: string, elements: RenderedElement[
   // content; full-page backgrounds and decoration must not mask top-heavy text.
   const bodyRects = elements.flatMap((item) => {
     if (item.type === 'image' && (item.imageType === 'background' || area(item.box) >= width * height * 0.65)) return [];
-    const rects = item.textRects.length ? item.textRects : ['image', 'chart', 'table', 'latex', 'code', 'video'].includes(item.type) ? [item.box] : [];
+    const rects = item.textRects.length ? visibleRects(item) : ['image', 'chart', 'table', 'latex', 'code', 'video'].includes(item.type) ? [item.box] : [];
     return rects.filter((rect) => rect.top >= height * 0.22 && rect.top < height * 0.85 && area(rect) < width * height * 0.8);
   });
   if (bodyRects.length) {
@@ -126,7 +130,7 @@ export function measureSlideElements(root: HTMLElement, elements: readonly PPTEl
   const origin = root.getBoundingClientRect();
   const scaleX = origin.width > 0 ? origin.width / Math.max(1, root.offsetWidth || origin.width) : 1;
   const scaleY = origin.height > 0 ? origin.height / Math.max(1, root.offsetHeight || origin.height) : 1;
-  const translate = (rect: DOMRect): VisibleRect => ({ left: (rect.left - origin.left) / scaleX, top: (rect.top - origin.top) / scaleY,
+  const translate = (rect: VisibleRect): VisibleRect => ({ left: (rect.left - origin.left) / scaleX, top: (rect.top - origin.top) / scaleY,
     width: rect.width / scaleX, height: rect.height / scaleY });
   return elements.map((element) => {
     const wrapper = Array.from(root.querySelectorAll<HTMLElement>('[data-review-element]')).find((node) => node.dataset.reviewElement === element.id);
@@ -152,6 +156,7 @@ export function measureSlideElements(root: HTMLElement, elements: readonly PPTEl
       }
     }
     const images = Array.from(wrapper.querySelectorAll('img'));
+    const glyphs = textRoot ? measureBrowserTextInk({ root: textRoot }) : undefined;
     const opaque = element.type === 'image' || (element.type === 'shape' && Boolean(element.fill && element.fill !== 'none' && element.fill !== 'transparent'));
     const formula = element.type === 'latex' ? wrapper.querySelector<HTMLElement>('.katex') : null;
     const formulaSize = formula ? Number.parseFloat(getComputedStyle(formula).fontSize) : NaN;
@@ -164,7 +169,8 @@ export function measureSlideElements(root: HTMLElement, elements: readonly PPTEl
     // the renderer scales it into its editable frame.
     const fontSize = Number.isFinite(formulaSize) ? formulaSize * formulaScale
       : sizes.length ? Math.min(...sizes) : undefined;
-    return { id: element.id, type: element.type, box, textRects, text: textRoot?.textContent ?? '', fontSize,
+    return { id: element.id, type: element.type, box, textRects, inkRects: glyphs?.exact ? glyphs.rects.map(translate) : undefined,
+      text: textRoot?.textContent ?? '', fontSize,
       opacity: 'opacity' in element ? element.opacity : 1, opaque,
       imageType: element.type === 'image' ? element.imageType : undefined,
       imageLoaded: element.type === 'image' ? images.length > 0 && images.every((img) => img.complete && img.naturalWidth > 0) : undefined };

@@ -155,6 +155,8 @@ export type AppScene = DslScene<Action, SceneContent> & PblSceneMetadata & {
   outlineId?: string;
   /** Identifies narration that passed the required whole-course speech policy. */
   narrationRevision?: string;
+  /** Independent visual orchestration applied to the saved page and speech. */
+  visualActionRevision?: string;
 };
 export type Scene = AppScene;
 

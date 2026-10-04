@@ -58,6 +58,10 @@ describe('natural teacher narration', () => {
       { id: 's1', text: '大家先看这个回答。它说得很顺，但流畅只能说明表达自然。' },
     ] }));
     const rewritten = await naturalizeKnowledgeNarration({ outline, actions, aiCall: ai });
+    expect(ai.mock.calls[0]?.[0]).toContain('Teach adopted knowledge, reasoning, and cases directly');
+    expect(ai.mock.calls[0]?.[0]).toContain('“教材指出”“教材中提到”“书中说”“根据提供的资料”');
+    expect(ai.mock.calls[0]?.[0]).toContain('authoritative definitions, supported facts, quantities, negation, uncertainty, and necessary conditions');
+    expect(ai.mock.calls[0]?.[0]).toContain("comparing named authors' views, analyzing original wording, or explaining a particular standard's scope");
     expect(rewritten.map((action) => action.id)).toEqual(['s1', 'laser', 's2']);
     expect(rewritten[1]).toEqual(actions[1]);
     expect(rewritten[2]).toEqual(actions[2]);

@@ -16,6 +16,26 @@ function firstDraft() {
 }
 
 describe('first authoring with actual page ownership', () => {
+  it('compiles one coherent page owning multiple units and nodes without deriving smaller pages from those responsibilities', () => {
+    const split = firstDraft(), section = split.sections[0]!, saved = structuredClone(split);
+    const combined = { ...split, authoringContract: 'blueprint-v5', sections: [{ ...section, pages: [{
+      ...section.pages[0]!, explanationNodes: section.pages.flatMap((page) => page.explanationNodes),
+      keyPointRefs: section.pages.flatMap((page) => page.keyPointRefs),
+      presentationItems: [{ text: '概念的完整含义及其应用条件', nodeIds: ['meaning', 'boundary'], role: 'key-point' }],
+    }] }] };
+    const result = compilePageOwnedTeachingNodes(combined), original = compilePageOwnedTeachingNodes(split);
+    expect(result.issues).toEqual([]);
+    const value = result.value as { sections: Array<{ units: Array<{ explanationNodes: unknown[] }>; pages: Array<Record<string, unknown>> }> };
+    const baseline = original.value as typeof value;
+    expect(value.sections[0]!.pages).toHaveLength(1);
+    expect(value.sections[0]!.pages[0]).toMatchObject({ unitIds: ['concept-unit', 'application-unit'],
+      introducesNodeIds: ['meaning', 'boundary'], referencesNodeIds: [],
+      presentationItems: combined.sections[0]!.pages[0]!.presentationItems });
+    expect(value.sections[0]!.units.map((unit) => unit.explanationNodes))
+      .toEqual(baseline.sections[0]!.units.map((unit) => unit.explanationNodes));
+    expect(split).toEqual(saved);
+  });
+
   it('derives one unit body and page duties from the actual ordered teaching without mutating source authoring', () => {
     const source = firstDraft();
     const before = structuredClone(source);

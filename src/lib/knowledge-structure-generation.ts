@@ -23,11 +23,26 @@ import { textbookTeachingBaseline, type TeachingOrderAdjustment } from "@/lib/te
 import type { AICallFn } from "@/lib/openmaic/generation/pipeline-types";
 import { invalidGeneratedOutput, isInvalidGeneratedOutput } from "@/lib/openmaic/generation/generated-output-retry";
 import { jsonrepair } from "jsonrepair";
+import { normalizeKnowledgeAuthoring, type KnowledgeAuthoring } from '@/lib/course-design/knowledge-authoring';
 
 type ModelCall = typeof callLLM;
 
-export const KNOWLEDGE_STRUCTURE_POLICY_VERSION = "textbook-evidence-mapping-v9-single-authoring";
-
+export const KNOWLEDGE_STRUCTURE_POLICY_VERSION = "textbook-evidence-mapping-v18-scope-plan";
+export const KNOWLEDGE_PLANNING_CONTRACT = "knowledge-plan-v1" as const;
+/** Saved first drafts keep their original content and spent request identity. */
+export const KNOWLEDGE_STRUCTURE_COMPATIBLE_POLICY_VERSIONS: readonly string[] = [
+  KNOWLEDGE_STRUCTURE_POLICY_VERSION,
+  "textbook-evidence-mapping-v17-source-block-readings",
+  'textbook-evidence-mapping-v16-authoritative-excerpt-duties',
+  'textbook-evidence-mapping-v15-reference-learning-intents',
+  'textbook-evidence-mapping-v14-planning-facts-separated',
+  'textbook-evidence-mapping-v13-case-element-correspondence',
+  'textbook-evidence-mapping-v12-immutable-excerpt-authoring',
+  'textbook-evidence-mapping-v11-conditional-case-authoring',
+  'textbook-evidence-mapping-v10-source-bound-authoring',
+  'textbook-evidence-mapping-v9-single-authoring',
+  'textbook-evidence-mapping-v8-complete-source-sequences',
+];
 
 export type KnowledgeStructureGenerationContext = {
   /** Upstream teacher requirements; textbook-driven courses may map, split, or merge them into lesson-owned nodes. */
@@ -145,6 +160,25 @@ function pointDescription(name: string): string {
 
 function masteryBoundary(name: string): string {
   return `能够用自己的话解释“${name}”，并在一个课程情境中作出正确判断或应用。`;
+}
+
+/** Read-only display projection for historical v6-v8 paid responses. */
+function learningIntentDisplay(name: string, authoring?: KnowledgeAuthoring): {
+  description: string; keyInfo: string; masteryBoundary: string;
+} {
+  const labels = { identify: '识别', explain: '解释', compare: '比较', apply: '应用' } as const;
+  const operations = [...new Set(authoring?.learningTasks?.map((task) => labels[task.operation]) ?? [])];
+  if (!operations.length) return {
+    description: `围绕“${name}”建立与本课范围相符的理解。`,
+    keyInfo: `依据所选陈述及条件理解“${name}”。`,
+    masteryBoundary: `在给定事实与条件下完成“${name}”的理解任务。`,
+  };
+  const actions = operations.join('、');
+  return {
+    description: `围绕“${name}”完成所选陈述的${actions}任务。`,
+    keyInfo: `理解所选陈述及其条件，完成${actions}。`,
+    masteryBoundary: `能够依据所选陈述及给定情境${actions}“${name}”。`,
+  };
 }
 
 type OrderedKnowledgeStructure = Pick<CourseContent, "knowledgePoints"> & {
@@ -280,6 +314,7 @@ function prepareKnowledgeStructureForTeacherReview(
   parsed: JsonRecord,
   input: GenerateInput,
   context: KnowledgeStructureGenerationContext,
+  expectedAuthoringContract?: typeof KNOWLEDGE_PLANNING_CONTRACT,
 ): { knowledgePoints: CourseContent["knowledgePoints"]; knowledgeGraph: KnowledgeGraph; knowledgeScopePlan?: KnowledgeScopePlan } {
   const nested = [parsed, record(parsed.data), record(parsed.result), record(parsed.content)]
     .find((candidate) =>
@@ -301,7 +336,14 @@ function prepareKnowledgeStructureForTeacherReview(
     ...(input.learningObjectives ?? []),
   ].map((item) => item.trim()).filter(Boolean);
   const fallbackNames = instructedNames.length > 0 ? instructedNames : [input.name];
-  const singleAuthoring = parsed.authoringContract === "knowledge-v1";
+  const reportedAuthoringContract = firstText(nested, ['authoringContract']) || firstText(parsed, ['authoringContract']);
+  // The requested planning contract is authoritative for fresh responses, even
+  // if the model omits its marker. Historical paid responses keep their reader.
+  const planningOnly = expectedAuthoringContract === KNOWLEDGE_PLANNING_CONTRACT
+    || reportedAuthoringContract === KNOWLEDGE_PLANNING_CONTRACT;
+  const authoringContract = planningOnly ? KNOWLEDGE_PLANNING_CONTRACT : reportedAuthoringContract;
+  const singleAuthoring = planningOnly
+    || ['knowledge-v1', 'knowledge-v2', 'knowledge-v3', 'knowledge-v4', 'knowledge-v5', 'knowledge-v6', 'knowledge-v7', 'knowledge-v8'].includes(authoringContract);
   if (!rawPoints.length) {
     throw invalidGeneratedOutput(new Error("缺少模型实际生成的知识点"), "知识结构字段不完整");
   }
@@ -352,7 +394,7 @@ function prepareKnowledgeStructureForTeacherReview(
     const sourceKnowledgePointIds = [...new Set([
       ...suppliedSourceIds,
       ...scopedSourceIds,
-      ...(confirmed && sourceIdsValue === undefined && !singleAuthoring && !scopedSourceIds.length ? [confirmed.id] : []),
+      ...(confirmed && sourceIdsValue === undefined && (!singleAuthoring || planningOnly) && !scopedSourceIds.length ? [confirmed.id] : []),
     ])];
     const sourceKnowledgePoints = sourceKnowledgePointIds.map((id) => sourcePointById.get(id)!).filter(Boolean);
     const requestedId = (confirmed && sourceKnowledgePointIds.length === 1 && sourceKnowledgePointIds[0] === confirmed.id)
@@ -363,7 +405,10 @@ function prepareKnowledgeStructureForTeacherReview(
       : `kp-generated-${knowledgePoints.length + 1}`;
     while (usedPointIds.has(id)) id = `${id}-next`;
     const description = firstText(source, ["description", "summary", "explanation"])
-      || confirmed?.description || pointDescription(name);
+      // A new draft's missing planning field must not import an upstream answer.
+      // Older saved drafts keep their existing fallback for read compatibility.
+      || (authoringContract === 'knowledge-v5' ? undefined : confirmed?.description)
+      || pointDescription(name);
     const inheritedGroup = sourceKnowledgePoints.length
       && (sourceKnowledgePoints[0]?.groupId?.trim() || sourceKnowledgePoints[0]?.groupName?.trim())
       && sourceKnowledgePoints.every((point) => (
@@ -392,14 +437,47 @@ function prepareKnowledgeStructureForTeacherReview(
       normalizedTargetIds.set(modelTargetId, id);
       originalTargetIds.set(id, modelTargetId);
     }
+    const evidenceItemIds = Array.isArray(source.evidenceItemIds)
+      ? [...new Set(source.evidenceItemIds.filter((value): value is string =>
+          typeof value === 'string' && Boolean(value.trim())).map((value) => value.trim()))]
+      : undefined;
+    const sourceBlockReadings = authoringContract === 'knowledge-v8';
+    const referenceLearningIntents = authoringContract === 'knowledge-v6' || authoringContract === 'knowledge-v7'
+      || sourceBlockReadings;
+    const excerptQuotationDuties = authoringContract === 'knowledge-v7' || sourceBlockReadings;
+    const sourceAuthoring = record(source.authoring);
+    const missingQuotationDuties: string[] = [];
+    const suppliedAuthoring = referenceLearningIntents
+      ? { ...sourceAuthoring, learningTasks: Array.isArray(sourceAuthoring.learningTasks)
+        ? sourceAuthoring.learningTasks : [],
+        ...(excerptQuotationDuties ? {
+          claims: (Array.isArray(sourceAuthoring.claims) ? sourceAuthoring.claims : []).map((value, index) => {
+            const claim = record(value);
+            if (claim.kind === 'textbook' && !Array.isArray(claim.authoritativeExcerpts)) {
+              missingQuotationDuties.push(`教材陈述“${firstText(claim, ['id']) || `第${index + 1}条`}”未声明片段引用职责，保留原文依据，不自动安排逐字朗读。`);
+            }
+            return { ...claim, authoritativeExcerpts: Array.isArray(claim.authoritativeExcerpts)
+              ? claim.authoritativeExcerpts : [] };
+          }),
+          diagnostics: [...(Array.isArray(sourceAuthoring.diagnostics) ? sourceAuthoring.diagnostics : []),
+            ...missingQuotationDuties],
+        } : {}) } : source.authoring;
+    const authoring = planningOnly ? undefined : normalizeKnowledgeAuthoring(suppliedAuthoring, context.textbookEvidence, evidenceItemIds,
+      sourceBlockReadings ? { readingContract: 'source-blocks-v1' } : undefined);
+    if (referenceLearningIntents && authoring && !authoring.learningTasks?.length) {
+      authoring.diagnostics = [...new Set([...(authoring.diagnostics ?? []),
+        '本知识点未提供有效的来源引用能力意图，保留教学范围与首稿供后续编排。'])];
+    }
+    const intentDisplay = referenceLearningIntents ? learningIntentDisplay(name, authoring) : undefined;
     knowledgePoints.push({
       id,
       name,
-      description,
-      keyInfo: firstText(source, ["keyInfo", "key_info", "keyPoint", "coreIdea"])
-        || description,
-      masteryBoundary: firstText(source, ["masteryBoundary", "mastery_boundary", "successCriteria"])
-        || masteryBoundary(name),
+      description: intentDisplay?.description ?? description,
+      // Legacy UI reads keyInfo too; it projects the same planning scope.
+      keyInfo: planningOnly ? description : intentDisplay?.keyInfo ?? (firstText(source, ["keyInfo", "key_info", "keyPoint", "coreIdea"])
+        || description),
+      masteryBoundary: intentDisplay?.masteryBoundary ?? (firstText(source, ["masteryBoundary", "mastery_boundary", "successCriteria"])
+        || masteryBoundary(name)),
       objectiveIndexes,
       relatedIds: Array.isArray(source.relatedIds)
         ? source.relatedIds.filter((value): value is string => typeof value === "string" && Boolean(value.trim()))
@@ -407,11 +485,8 @@ function prepareKnowledgeStructureForTeacherReview(
       level: validLevel(source.level),
       ...(textbookDriven ? { teachingDepth: source.teachingDepth === "detailed" || source.teachingDepth === "extension"
         ? source.teachingDepth : "brief" as const } : {}),
-      evidenceItemIds: Array.isArray(source.evidenceItemIds)
-        ? [...new Set(source.evidenceItemIds.filter((value): value is string =>
-            typeof value === "string" && Boolean(value.trim())
-          ))]
-        : undefined,
+      evidenceItemIds,
+      ...(authoring ? { authoring } : {}),
       groupId,
       groupName,
       ...(sourceKnowledgePointIds.length ? {
@@ -593,10 +668,10 @@ function prepareKnowledgeStructureForTeacherReview(
   }));
   const sourcePoints = context.teacherKnowledgePoints ?? [];
   const capacity = context.teachingCapacity;
-  const knowledgeScopePlan: KnowledgeScopePlan | undefined = capacity || sourcePoints.length || textbookDriven
+  const knowledgeScopePlan: KnowledgeScopePlan | undefined = planningOnly || capacity || sourcePoints.length || textbookDriven
       ? {
         schemaVersion: 1,
-        policyVersion: KNOWLEDGE_STRUCTURE_POLICY_VERSION,
+        policyVersion: planningOnly ? KNOWLEDGE_STRUCTURE_POLICY_VERSION : "textbook-evidence-mapping-v17-source-block-readings",
         planningDurationMin: capacity?.planningDurationMin ?? Math.max(1, Math.round(input.hours * 60)),
         durationRangeMin: capacity?.durationRangeMin ?? Math.max(1, Math.round(input.hours * 60)),
         durationRangeMax: capacity?.durationRangeMax ?? Math.max(1, Math.round(input.hours * 60)),
@@ -684,6 +759,8 @@ export async function generateKnowledgeStructureOnce(
     retrySleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
     /** Identity-checked saved response; validating it does not make another request. */
     initialResponse?: string;
+    /** Contract of an identity-checked saved request, independent of the response marker. */
+    responseContract?: typeof KNOWLEDGE_PLANNING_CONTRACT;
     /** Persist complete visible text before parsing, including malformed drafts. */
     onCandidate?: (candidate: { rawResponse: string; attempt: number }) => Promise<void> | void;
     onRejected?: (candidate: { rawResponse: string; attempt: number; issues: string[] }) => Promise<void> | void;
@@ -691,10 +768,10 @@ export async function generateKnowledgeStructureOnce(
 ): Promise<ReviewedKnowledgeStructure> {
   const prompt = buildKnowledgeGraphPrompt(input, context);
   const messages = [
-    { role: "system", content: `${prompt.system}\n上游节点中的 teachingRole=core-concept 表示该父概念自身具有教学含义，必须作为基本含义、核心主张及其与下位知识关系的解释责任保留，不能降为分组标签。parentKnowledgePointId 指出的下位机制、原则或应用必须在上位概念建立之后或同页展开。纯目录不会带 core-concept 标记，不得为目录机械新增课程节点。masteryBoundary 表示学生完成本课后应达到的可观察表现，不代表学生在课程开始前已经掌握。目录和学习目标可以预告后续概念名称，但前段讲解、例子、比较和练习不得把尚未讲授的概念当作已知；跨概念综合判断只能安排在相关概念均已建立之后。` },
+    { role: "system", content: `${prompt.system}\n上游节点中的 teachingRole=core-concept 表示该父概念自身具有教学含义，必须作为基本含义、核心主张及其与下位知识关系的解释责任保留，不能降为分组标签。parentKnowledgePointId 指出的下位机制、原则或应用必须在上位概念建立之后或同页展开。纯目录不会带 core-concept 标记，不得为目录机械新增课程节点。masteryBoundary 表示学生完成本课后应达到的表现，不代表学生在课程开始前已经掌握。目录和学习目标可以预告后续概念名称，但前段讲解、例子、比较和练习不得把尚未讲授的概念当作已知；跨概念综合判断只能安排在相关概念均已建立之后。` },
     { role: "user", content: [prompt.user,
       "缺乏明确依据的先修关系保留待核对，不能按节点顺序或为了连通图谱编造必要关系。课程目标映射也必须有实质依据。",
-      "description 和 keyInfo 是准确的课程知识摘要，完整教材列表由所采用 evidenceItemIds 的原始步骤合同传给后续教学设计，不要把摘要当作已讲授全文。摘要中的数量和流程顺序必须与对应来源一致；若宣称列出完整流程或全部条目，须逐项保留该列表，不得用‘等’隐藏遗漏。sourceSequenceReferences 由系统按当前来源身份、版本和完整原文机械绑定，不由模型编造或改写。"].join("\n\n") },
+      "本次仅生成知识规划：description/masteryBoundary 保留教师可确认的范围和目标，evidenceItemIds 定位采用原文，不生成正文、案例故事或答案。完整教材列表由实际来源机械绑定，不把规划说明当作已讲授全文；sourceSequenceReferences 不由模型编造或改写。"].join("\n\n") },
   ] as const;
   const attempt = 1;
   const restoring = options.initialResponse !== undefined;
@@ -719,7 +796,8 @@ export async function generateKnowledgeStructureOnce(
     } catch (error) {
       throw invalidGeneratedOutput(error, "知识结构 JSON 无法解析");
     }
-    const prepared = prepareKnowledgeStructureForTeacherReview(parsed, input, context);
+    const prepared = prepareKnowledgeStructureForTeacherReview(parsed, input, context,
+      restoring ? options.responseContract : KNOWLEDGE_PLANNING_CONTRACT);
     if (!prepared.knowledgePoints.length || !prepared.knowledgeGraph.nodes.length) {
       throw invalidGeneratedOutput(new Error("缺少可用知识点或图谱节点"), "知识结构字段不完整");
     }

@@ -5,6 +5,7 @@ import type { Scene } from '@/lib/openmaic/types/stage';
 import { fingerprintSceneOutline, type SceneStageCheckpointSnapshot } from './page-checkpoints';
 import { planFailedStageRegeneration, explicitFailedStageRequestIdentity } from './failed-stage-regeneration';
 import { serializeCourseGenerationFailure } from './failure-policy';
+import { fingerprintStageAuthoringInput } from './authoring-checkpoints';
 const clause = '在协作学习中注意小组分工的合理安排';
 const secondClause = '注意对学生自主完成项目的过程进行监督和调整';
 const fullSource = `${clause}。${secondClause}。`;
@@ -31,6 +32,30 @@ function fixture(text = fullSource) {
 }
 const request = { sceneOutlines: outlines };
 describe('explicit failed-stage regeneration plan', () => {
+  it('preserves validated native slide drafts with compiled input hashes when only the quiz request failed', () => {
+    const slides = Array.from({ length: 4 }, (_, index) => ({ ...page, id: `slide-${index}`, order: index }));
+    const stages = slides.flatMap((outline) => ['content', 'narration', 'actions'].map((kind) =>
+      stage(outline, kind as SceneStageCheckpointSnapshot['stage'])));
+    const authoringAcceptances = slides.map((outline) => ({ ...stage(outline), accepted: true,
+      inputFingerprint: fingerprintStageAuthoringInput(outline, 'content', `raw-request-${outline.id}`) }));
+    const saved = { stages, authoringAcceptances, pages: slides.map((outline) => ({ pageKey: outline.id, scene: { id: outline.id } })),
+      stageAttempts: [...slides.map((outline) => ({ ...stage(outline), attemptsStarted: 1, status: 'response',
+        inputFingerprint: `raw-request-${outline.id}` })), { ...stage(quiz), attemptsStarted: 1, status: 'failed' }],
+      sourceContents: [], preparedOutlines: [...slides, quiz] };
+    const before = JSON.stringify(saved);
+    expect(planFailedStageRegeneration({ request: { sceneOutlines: [...slides, quiz] }, saved, reviewContent: false }).resetSteps)
+      .toEqual(['authoring-acceptance:q1:content', 'authoring-response:q1:content', 'stage-attempt:q1:content']);
+    expect(JSON.stringify(saved)).toBe(before);
+    for (const changed of [
+      { ...saved, authoringAcceptances: authoringAcceptances.map((receipt) => ({ ...receipt, accepted: false })) },
+      { ...saved, authoringAcceptances: authoringAcceptances.map((receipt) => ({ ...receipt, modelFingerprint: 'other-model' })) },
+      { ...saved, authoringAcceptances: authoringAcceptances.map((receipt) => ({ ...receipt, outlineFingerprint: 'other-source' })) },
+      { ...saved, authoringAcceptances: authoringAcceptances.map((receipt) => ({ ...receipt, inputFingerprint: 'other-request' })) },
+    ]) {
+      expect(planFailedStageRegeneration({ request: { sceneOutlines: [...slides, quiz] }, saved: changed, reviewContent: false }).resetSteps)
+        .toContain('authoring-response:slide-0:content');
+    }
+  });
   it('preserves accepted first-pass teaching even when historical source-content diagnoses remain', () => {
     const saved = fixture('教师将在终稿判断的原始说明。');
     const failed = { ...stage(other, 'actions'), attemptsStarted: 1, status: 'response' };

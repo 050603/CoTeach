@@ -6,6 +6,8 @@ type ActivityPauseSpeechAction = Extract<Action, { type: 'speech' }> & {
   activityPauseSec: number;
   activityPausePurpose: 'interaction' | 'quiz-submit' | 'quiz';
   activityPauseSource?: 'page-timing';
+  /** Canonical interactive speech is complete before the learner begins. */
+  activityPausePosition?: 'after-narration';
 };
 
 type TimelinePauseSpeechAction = Extract<Action, { type: 'speech' }> & {
@@ -122,13 +124,15 @@ export function normalizeSlideActivityPause(actions: Action[]): Action[] {
   ];
 }
 
-function getStudentActivityInsertionIndex(actions: Action[]): number {
-  const firstSpeechIndex = actions.findIndex((action) => action.type === 'speech');
-  if (firstSpeechIndex < 0) return 0;
+function getStudentActivityInsertionIndex(actions: Action[], afterNarration = false): number {
+  const speechIndex = afterNarration
+    ? actions.findLastIndex((action) => action.type === 'speech' && Boolean(action.text.trim()))
+    : actions.findIndex((action) => action.type === 'speech');
+  if (speechIndex < 0) return 0;
 
   // A highlight may point learners to the control they should use. Every
   // state-changing/revealing action must wait until the learner has acted.
-  let insertionIndex = firstSpeechIndex + 1;
+  let insertionIndex = speechIndex + 1;
   while (actions[insertionIndex]?.type === 'widget_highlight') {
     insertionIndex += 1;
   }
@@ -169,7 +173,7 @@ export function normalizeStudentActivityPause(actions: Action[] | undefined): Ac
       : clampStudentActivitySec(originalGate.activityPauseSec),
   };
   const withoutGate = actions.filter((_, index) => index !== gateIndex);
-  const insertionIndex = getStudentActivityInsertionIndex(withoutGate);
+  const insertionIndex = getStudentActivityInsertionIndex(withoutGate, gate.activityPausePosition === 'after-narration');
   if (
     gateIndex === insertionIndex
     && gate.activityPauseSec === originalGate.activityPauseSec
@@ -225,7 +229,7 @@ export function addStudentActivityPause(outline: SceneOutline, actions: Action[]
   // their end-of-page reflection time.
   if (outline.type === 'slide') {
     const caseUse = outline.teachingBrief?.pageTask?.caseUse;
-    if ((caseUse === 'variant' || caseUse === 'independent')
+    if (!outline.teachingBrief?.manuscript && (caseUse === 'variant' || caseUse === 'independent')
       && actions.filter((action) => action.type === 'speech' && action.text.trim()).length >= 2) {
       const insertionIndex = getStudentActivityInsertionIndex(actions);
       return [
@@ -237,7 +241,7 @@ export function addStudentActivityPause(outline: SceneOutline, actions: Action[]
     return [...actions, createSlideReflectionPause(activityPauseSec)];
   }
 
-  const normalizedActions = actions.filter((action) => action.type === 'speech').length >= 2
+  const normalizedActions = outline.teachingBrief?.manuscript || actions.filter((action) => action.type === 'speech').length >= 2
     ? actions
     : [
         ...actions,
@@ -259,9 +263,11 @@ export function addStudentActivityPause(outline: SceneOutline, actions: Action[]
     activityPauseSec,
     activityPausePurpose: outline.type === 'quiz' ? 'quiz' : 'interaction',
     activityPauseSource: 'page-timing',
+    ...(outline.type === 'interactive' && outline.teachingBrief?.manuscript
+      ? { activityPausePosition: 'after-narration' as const } : {}),
   };
 
-  const insertionIndex = getStudentActivityInsertionIndex(normalizedActions);
+  const insertionIndex = getStudentActivityInsertionIndex(normalizedActions, pauseAction.activityPausePosition === 'after-narration');
   return normalizeStudentActivityPause([
     ...normalizedActions.slice(0, insertionIndex),
     pauseAction,

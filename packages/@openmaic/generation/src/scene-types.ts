@@ -9,6 +9,7 @@ import type {
   Scene,
   SlideBackground,
   SlideContent,
+  SlideContentBinding,
   WidgetConfigBase,
   WidgetType,
 } from '@openmaic/dsl';
@@ -17,6 +18,7 @@ import type { FlowLayoutDecision, FlowPageMeasurement } from './flow-layout-comp
 /** AI-generated slide payload before it is assembled into a scene. */
 export interface GeneratedSlideContent {
   elements: PPTElement[];
+  contentBindings?: SlideContentBinding[];
   background?: SlideBackground;
   remark?: string;
   sourceGroupIds?: string[];

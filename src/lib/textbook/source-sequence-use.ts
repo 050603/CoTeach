@@ -1,4 +1,5 @@
 import type { FigureSequenceContract } from './course-visual-binding';
+import { PPT_PAGE_PLANNING_VERSION } from '@/lib/course-design/ppt-page-planning-contract';
 
 export type SourceSequenceUse = {
   resourceId: string;
@@ -9,7 +10,7 @@ export type SourceSequenceUse = {
 
 type SourceUsePage = {
   sourceSequenceUses?: readonly SourceSequenceUse[];
-  teachingBrief?: { teachingPlan?: { sourceSequenceUses?: readonly SourceSequenceUse[] } };
+  teachingBrief?: { pptPlanningVersion?: string; teachingPlan?: { sourceSequenceUses?: readonly SourceSequenceUse[] } };
 };
 
 export function pageSourceSequenceUses(page: SourceUsePage): readonly SourceSequenceUse[] {
@@ -19,6 +20,16 @@ export function pageSourceSequenceUses(page: SourceUsePage): readonly SourceSequ
 export function usesSourceSequence(page: SourceUsePage, contract: FigureSequenceContract): boolean {
   return contract.coveragePolicy !== 'authored-scope'
     || pageSourceSequenceUses(page).some((use) => use.resourceId === contract.resourceId);
+}
+
+/** Compiled native pages may reuse a validated source without changing their
+ * knowledge ownership. This only admits canonical references to this contract. */
+export function hasExplicitNativeSourceSequenceUse(page: SourceUsePage, contract: FigureSequenceContract,
+  planningVersion = page.teachingBrief?.pptPlanningVersion): boolean {
+  if (planningVersion !== PPT_PAGE_PLANNING_VERSION) return false;
+  const uses = pageSourceSequenceUses(page).filter((use) => use.resourceId === contract.resourceId);
+  const checked = normalizeSourceSequenceUses(uses, [contract], contract.knowledgePointIds);
+  return checked.issues.length === 0 && checked.uses?.length === 1;
 }
 
 /** One deterministic scope projection shared by authoring, outlines and native narration.

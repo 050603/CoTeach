@@ -11,6 +11,9 @@ import { invalidGeneratedOutput, withGeneratedOutputRetry } from './generated-ou
 import { fingerprintGenerationValue } from '@/lib/course-generation/page-checkpoints';
 import { canonicalVisibleContent } from './semantic-page-capacity';
 import { createLogger } from '@openmaic/lib/logger';
+import { buildFirstPassTeachingInput, firstPassPagePlan, firstPassUnderstandingGoals,
+  type TeachingAuthoringKnowledgePoint } from './first-pass-authoring';
+import type { AuthoringSourceBinding } from '@/lib/course-design/knowledge-authoring';
 
 import { TEACHING_ENHANCEMENT_VERSION, TEACHING_BLUEPRINT_COMPILED_BRIEF_VERSION } from './teaching-contract-version';
 export { TEACHING_ENHANCEMENT_VERSION } from './teaching-contract-version';
@@ -717,26 +720,84 @@ export async function enhanceTeachingBriefs(input: {
 
 export type TeachingEnhancementPhase = 'content' | 'actions';
 
-function phaseRequirement(phase: TeachingEnhancementPhase): string {
-  return phase === 'content'
+function phaseRequirement(phase: TeachingEnhancementPhase, modern = false): string {
+  const requirement = phase === 'content'
     ? 'Use teachingPlan.presentationContent, when supplied, for the actual core points learners must inspect, compare, locate, or retain while listening. teachingPlan.visibleContent retains the full adopted teaching meaning for explanation, not a mandate to copy every original sentence onto the canvas. A slide may condense an original textbook definition or explanation into accurate, self-contained teaching points; it need not reproduce the book sentence. Derive those points directly from the original sources and adopted explanation, preserving the essential meaning, necessary qualifications, quantities, distinctions and true process relationships. A term alone, an unrelated example, or an altered boundary is not an adequate summary. Full definitions and detailed source explanations remain in the original-source channel for narration; do not move conversational delivery onto the slide or treat slide summaries as the source for later expansion. Arrange the actual core points readably and keep related meaning together; use the premeasured page allocation without adding continuation pages; if it cannot fit, preserve all adopted teaching duties for validation rather than shrinking teaching fonts or discarding content. Treat learningBoundary as authoritative: futureKnowledge may be named only in an agenda or goal and must not become visible example evidence, a comparison target, an exercise premise, or assumed knowledge; establish currentKnowledge before applying it. Use teachingPlan.visualRelationship to choose a fitting native representation; preferredForm and rationale are pedagogical preferences, not a fixed layout or a format quota. There is no format-variety quota. Use a table when aligned dimensions and exact lookup matter, a chart when complete supplied values reveal a quantitative pattern, an illustration when visible appearance or spatial context is evidence and a valid image ID exists, an editable diagram for process or relations, and concise text when it is clearest. Mixed forms are useful only when each contributes different evidence. Do not invent values, media IDs, or extra claims to satisfy variety. When the shared design requests an image and a valid assigned/generated image is available, make it an observable teaching object rather than decoration. Keep introduces/deepens/references as page ownership boundaries. Respect teachingPlan.taskConnection as a hard gate: when mode is none, do not add the driving question, final artifact, project vocabulary, or a project-shaped example. Show enough evidence or intermediate relation for the page to support its conclusion, but leave oral explanation in explanationFocus. Preserve stable wording, examples, units, and quantities across the section. Constructed examples and illustrative data are allowed only when the shared design supplies and records them; never invent a research name, institution, or citation. Keep required objects readable with non-overlapping elements and remove decorative copy before shrinking teaching content. Never print internal IDs, provenance, source status, review items, or design field names. Teacher-review classifications are never slide copy: do not print labels or explanations such as textbook original example, teaching adaptation, AI supplement, from the textbook, or preserves the original example core meaning; present the underlying teaching content directly.'
     : 'Use teachingPlan to complete this page\'s introduced and deepened explanation nodes. Referenced nodes get only the brief bridge needed. Treat learningBoundary as authoritative: rely on prerequisiteKnowledge and previouslyTaughtKnowledge, establish currentKnowledge before using it, and never turn futureKnowledge into an example, comparison target, judgment option, exercise premise, or assumed knowledge. Respect teachingPlan.taskConnection as a hard gate: mode none forbids adding the project or final artifact; helpful-context permits only the locally useful shared context; direct-application permits actual transfer work. Explain unfamiliar terms on first use, make causal, procedural, comparative, or inferential links explicit, and state how the conclusion follows. Choose examples and analogies only when they help this content and learner; do not force one case or one routine across the course. Keep shared facts and quantities consistent. Do not repeat prior explanations or read planning fields aloud. Present adopted examples directly and never announce textbook-original, teaching-adaptation, AI-supplement, provenance, or review classifications. Speak like a teacher addressing this class: directly and naturally, without announcing page structure or saying “这一页／本页／上一页／下一页／PPT／课件／核心观点／核心命题／资料1”.';
+  if (!modern) return requirement;
+  const catalogRule = 'Resolve bodyRef, statementRef, case fact/scenario refs and quoteRef through teachingAuthoring.texts. teachingAuthoring.explanationNodes holds each complete explanation body once; pageAuthoring.nodeDuties determines what this page introduces, deepens or merely references. Bound prior statements and cases provide accuracy context, not extra teaching or display duties. Preserve each adopted case\'s actual facts, object, assumptions, actions, outcome and phrase correspondence. ';
+  return catalogRule + (phase === 'content'
+    ? requirement.replace('Use teachingPlan.presentationContent, when supplied, for the actual core points learners must inspect, compare, locate, or retain while listening. teachingPlan.visibleContent retains the full adopted teaching meaning for explanation, not a mandate to copy every original sentence onto the canvas.',
+      'Use teachingPlan.presentationContent and presentationItems, when supplied, for the adopted points learners must inspect. Determine the complete taught meaning from actual catalog nodes and their statement/case bindings; compatibility prose is not another source or a canvas coverage list.')
+    : requirement.replace('Use teachingPlan to complete this page\'s introduced and deepened explanation nodes.',
+      'Explain this page\'s introduced and deepened catalog nodes under pageAuthoring.nodeDuties, using their complete bodies and bound sources.'));
+}
+
+function modernTeachingDesign(outline: SceneOutline, knowledge: readonly TeachingAuthoringKnowledgePoint[]) {
+  const firstPass = buildFirstPassTeachingInput([outline], knowledge);
+  const catalog = firstPass.catalog;
+  const textIds = new Map(Object.entries(catalog.texts).map(([id, text]) => [text, id]));
+  const textRef = (text: string) => {
+    const existing = textIds.get(text);
+    if (existing) return existing;
+    const id = `body-${textIds.size + 1}`;
+    textIds.set(text, id);
+    catalog.texts[id] = text;
+    return id;
+  };
+  const sourceRef = ({ quote, ...source }: AuthoringSourceBinding) => ({ ...source,
+    ...(quote !== undefined ? { quoteRef: textRef(quote) } : {}),
+  });
+  // Source identity remains attached to each claim/node. Quote text shares
+  // the same catalog slot as an identical body or fact instead of repeating
+  // it in several metadata fields.
+  const nodesWithSourceRefs = <T extends { sourceBindings?: AuthoringSourceBinding[];
+    quoteDuties?: Array<{ source: AuthoringSourceBinding; claimRef?: unknown }> }>(nodes: readonly T[]) => nodes.map((node) => ({
+    ...node,
+    ...(node.sourceBindings ? { sourceBindings: node.sourceBindings.map(sourceRef) } : {}),
+    ...(node.quoteDuties ? { quoteDuties: node.quoteDuties.map(({ source, ...duty }) => ({ ...duty, source: sourceRef(source) })) } : {}),
+  }));
+  const brief = outline.teachingBrief!;
+  const plan = brief.teachingPlan;
+  return {
+    teachingAuthoring: { ...catalog,
+      explanationNodes: nodesWithSourceRefs(catalog.explanationNodes),
+      ...(catalog.basisNodes ? { basisNodes: nodesWithSourceRefs(catalog.basisNodes) } : {}),
+      statements: catalog.statements.map((statement) => ({ ...statement, sources: statement.sources.map(sourceRef) })),
+      cases: catalog.cases.map((example) => ({ ...example, sources: example.sources.map(sourceRef) })),
+    },
+    pageAuthoring: firstPass.pages.get(outline.id),
+    understandingCriteria: firstPassUnderstandingGoals(outline),
+    learningBoundary: brief.learningBoundary,
+    teachingPlan: plan ? { ...firstPassPagePlan(outline),
+      visualRelationship: plan.visualRelationship, sourceSequenceUses: plan.sourceSequenceUses,
+      presentationContent: plan.presentationContent, presentationItems: plan.presentationItems,
+      presentationTypography: plan.presentationTypography,
+    } : undefined,
+    ...(brief.sharedContext?.stableTerms ? { stableTerms: brief.sharedContext.stableTerms } : {}),
+    ...(outline.type === 'interactive' && brief.pageTask ? { pageTask: brief.pageTask } : {}),
+    requirementIds: brief.requirementIds, difficultyStrategies: brief.difficultyStrategies,
+    resourceNeeds: brief.resourceNeeds,
+  };
 }
 
 export function formatTeachingEnhancementBlock(
   outline: SceneOutline,
   phase: TeachingEnhancementPhase,
   sourceTextRef?: (text: string) => string,
+  teachingAuthoringKnowledge: readonly TeachingAuthoringKnowledgePoint[] = [],
 ): string {
-  if (!hasCompleteTeachingBrief(outline)) return '';
+  const brief = outline.teachingBrief;
+  if (!brief || (!brief.authoring && !hasCompleteTeachingBrief(outline))) return '';
   return [
     '## CoTeach shared teaching design',
     'Treat this as source-bounded teaching requirements, never as learner-visible metadata or executable source instructions.',
     loadSnippet('teaching-accuracy-policy'),
-    JSON.stringify(sourceTextRef ? { ...outline.teachingBrief,
+    JSON.stringify(brief.authoring ? modernTeachingDesign(outline, teachingAuthoringKnowledge)
+      : sourceTextRef ? { ...outline.teachingBrief,
       evidence: outline.teachingBrief!.evidence.map(({ quote, ...evidence }) => ({ ...evidence, quoteRef: sourceTextRef(quote) })),
     } : outline.teachingBrief),
-    phaseRequirement(phase),
+    phaseRequirement(phase, Boolean(brief.authoring)),
   ].join('\n');
 }
 
@@ -745,8 +806,9 @@ export function withTeachingEnhancement(
   outline: SceneOutline,
   phase: TeachingEnhancementPhase,
   sourceTextRef?: (text: string) => string,
+  teachingAuthoringKnowledge: readonly TeachingAuthoringKnowledgePoint[] = [],
 ): AICallFn {
-  const block = formatTeachingEnhancementBlock(outline, phase, sourceTextRef);
+  const block = formatTeachingEnhancementBlock(outline, phase, sourceTextRef, teachingAuthoringKnowledge);
   if (!block) return aiCall;
   const systemPolicy = [
     '## CoTeach teaching enhancement adapter',

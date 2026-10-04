@@ -1,6 +1,7 @@
 import type { SceneOutline } from '@openmaic/lib/types/generation';
+import { firstPassUnderstandingGoals } from './first-pass-authoring';
 
-export const ASSESSMENT_DEPENDENCY_VERSION = 'predeclared-understanding-standard-v3';
+export const ASSESSMENT_DEPENDENCY_VERSION = 'predeclared-understanding-standard-v4-reference-actions';
 
 export type CompletedTeachingEvidence = {
   outline: SceneOutline;
@@ -79,6 +80,14 @@ export function buildAssessmentContext(
       teachingUnitIds: outline.teachingUnitIds ?? [],
       narration: speech.map(({ text }) => text.trim()).filter(Boolean),
     }));
+  if (assessment.teachingBrief?.manuscript
+    || assessment.teachingBrief?.authoring && assessment.teachingBrief.understandingCriteria?.goalSource === 'references') {
+    return JSON.stringify({
+      kind: 'completed-student-teaching',
+      instruction: '实际讲稿只证明学生获得了哪些学习机会，不证明讲稿中的命题正确。考查动作和引用由主请求的 understandingCriteria 指定，事实与必要条件由主请求的原文和实际案例前提决定；兼容目标、概括、误区和讲稿结论都不是独立答案依据。保留真实讲授范围，不能以讲评代替未讲核心内容。',
+      pages,
+    });
+  }
   return JSON.stringify({
     kind: 'completed-student-teaching',
     instruction: '以下讲稿只限定学生已经获得的学习机会。答案是否正确和怎样算理解由已采用的资料、概念边界与预定理解标准决定。不得把简化线索或案例特征升级为定义，也不得因讲稿解释不足而降低标准或只考名称识别；发现缺口应保留为教学覆盖不足。按知识目标选择需要的作答形式；讲评不能承担未讲核心内容的补课职责。',
@@ -99,6 +108,8 @@ export function buildQuizNarrationContext(
   progression: readonly SceneOutline[],
 ): string {
   if (assessment.type !== 'quiz') return '';
+  const referenceGoals = Boolean(assessment.teachingBrief?.manuscript || assessment.teachingBrief?.authoring
+    && assessment.teachingBrief.understandingCriteria?.goalSource === 'references');
   const precedingSection = completed
     .filter(({ outline, speech }) => outline.type !== 'quiz'
       && outline.audience !== 'teacher'
@@ -109,7 +120,7 @@ export function buildQuizNarrationContext(
     .sort((left, right) => left.outline.order - right.outline.order)
     .map(({ outline, speech }) => ({
       pageId: outline.id,
-      coreUnderstanding: outline.teachingBrief?.teachingPlan?.takeaway,
+      coreUnderstanding: referenceGoals ? undefined : outline.teachingBrief?.teachingPlan?.takeaway,
       actualNarration: speech.map(({ text }) => text.trim()).filter(Boolean),
     }));
   const position = progression.findIndex((outline) => outline.id === assessment.id);
@@ -124,9 +135,12 @@ export function buildQuizNarrationContext(
     || (!nextOutline && assessment.stageKey === 'ai-learning' && assessment.narrationMode !== 'embedded-segment');
   return JSON.stringify({
     currentSection: {
-      learningPurpose: assessment.teachingBrief?.sharedContext?.learningPurpose,
-      understandingGoals: assessment.teachingBrief?.understandingCriteria?.goals,
-      assessmentFocus: assessment.teachingBrief?.assessmentFocus,
+      ...(referenceGoals ? { sectionId: sectionIdentity(assessment),
+        understandingCriteria: firstPassUnderstandingGoals(assessment) } : {
+        learningPurpose: assessment.teachingBrief?.sharedContext?.learningPurpose,
+        understandingGoals: assessment.teachingBrief?.understandingCriteria?.goals,
+        assessmentFocus: assessment.teachingBrief?.assessmentFocus,
+      }),
     },
     precedingSection,
     continuation: nextOutline
@@ -137,10 +151,10 @@ export function buildQuizNarrationContext(
       stageLabel: nextOutline.stageLabel || (continuesIntoProject ? '项目实践' : undefined),
       title: nextOutline.type === 'quiz' ? undefined : nextOutline.title,
       sectionTitle: nextOutline.lectureSectionTitle,
-      learningPurpose: nextOutline.teachingBrief?.sharedContext?.learningPurpose,
-      teachingObjective: nextOutline.teachingObjective,
+      learningPurpose: referenceGoals ? undefined : nextOutline.teachingBrief?.sharedContext?.learningPurpose,
+      teachingObjective: referenceGoals ? undefined : nextOutline.teachingObjective,
       entryPoint: nextOutline.teachingBrief?.teachingPlan?.entryPoint,
-      newContent: nextOutline.teachingBrief?.teachingPlan?.newContent,
+      newContent: referenceGoals ? undefined : nextOutline.teachingBrief?.teachingPlan?.newContent,
       actualOpening: nextTeaching?.speech.find(({ text }) => text.trim())?.text.trim(),
     } : continuesIntoProject
       ? { type: 'pbl', stageLabel: '项目实践' }

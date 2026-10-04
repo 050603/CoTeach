@@ -17,6 +17,7 @@
  */
 
 import type { AssetRef } from './storage.js';
+import type { VisualTargetSelector } from './action.js';
 
 /**
  * Regular (not `const`) enum on purpose: consumers compile with
@@ -962,14 +963,46 @@ export interface SlidePresentationItem {
   label?: string;
   text: string;
   emphasis?: string[];
+  /** Optional keyword treatment; teaching wording and source ownership stay intact. */
+  emphasisStyle?: 'bold' | 'color' | 'highlight';
   /** A real comparison dimension/object, never a decorative grid position. */
   row?: string;
   column?: string;
+  /** Exact node ownership; independent of the display label's wording. */
+  diagramNodeId?: string;
+  /** Source-declared knowledge membership, independent of visual card count.
+   * Multiple bindings allow a fact to participate in distinct real groups. */
+  semanticBindings?: Array<{
+    groupId: string;
+    role: 'overview' | 'member' | 'context';
+    memberId?: string;
+  }>;
+}
+
+/** Composable spatial intent, not a template identifier. Pixel geometry is measured. */
+export interface SlidePresentationDesign {
+  flow: 'rows' | 'columns';
+  align: 'start' | 'center';
+  gap: number;
+  groups: Array<{
+    id: string;
+    itemIds: string[];
+    span: number;
+    columns?: 1 | 2 | 3;
+    treatment: 'plain' | 'panel' | 'accent';
+  }>;
+  media?: { placement: 'left' | 'right' | 'top' | 'bottom'; fraction: number };
 }
 
 export interface SlidePresentationProjection {
   schemaVersion: 1;
-  layoutVersion: 'teaching-infographic-v1';
+  layoutVersion: 'teaching-infographic-v1' | 'teaching-infographic-v2';
+  /** Semantic composition selected by the author; geometry is measured by the host. */
+  composition?: 'focus' | 'comparison' | 'process' | 'image-focus' | 'relationship' | 'editorial';
+  focusItemId?: string;
+  /** An authored conclusion, not a host-invented summary. */
+  takeawayItemId?: string;
+  design?: SlidePresentationDesign;
   items: SlidePresentationItem[];
   /** Directed relationships authored from the adopted content and sources. */
   links?: Array<{ from: string; to: string; label?: string }>;
@@ -979,12 +1012,22 @@ export interface SlidePresentationProjection {
   elementIdsBySource: Record<string, string[]>;
 }
 
+/** A displayed content reference bound to a real, compiled playback target. */
+export interface SlideContentBinding {
+  sourceContentId: string;
+  elementId: string;
+  selector?: VisualTargetSelector;
+}
+
 export interface Slide {
   id: string;
   viewportSize: number;
   viewportRatio: number;
   theme: SlideTheme;
   elements: PPTElement[];
+  contentBindings?: SlideContentBinding[];
+  /** Display wording adopted by the native page author with source ownership. */
+  displayItems?: SlidePresentationItem[];
   presentationProjection?: SlidePresentationProjection;
   background?: SlideBackground;
   animations?: PPTAnimation[];

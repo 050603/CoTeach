@@ -1,5 +1,6 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
+import type { TeachingBlueprint } from "@/lib/session/types";
 import type { SceneOutline } from "@/lib/openmaic/types/generation";
 
 vi.mock("@/components/openmaic/generation/outlines-editor", async () => {
@@ -35,6 +36,20 @@ describe("QuickOutlineReviewDialog", () => {
     expect(screen.getByText(/教学蓝图尚未生成/)).toBeTruthy();
     fireEvent.keyDown(window, { key: "Escape" });
     expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("reads spoken preview paragraphs from canonical references rather than compatibility copies", () => {
+    const outline = { id: "page-1", title: "课程导入", type: "slide", lectureSectionId: "section",
+      teachingBrief: { manuscript: { sectionId: "section", segmentIds: ["second", "first"] },
+        teachingPlan: { newContent: "过时的正文副本" } },
+    } as SceneOutline;
+    const blueprint = { sections: [{ id: "section", contentMode: "spoken", units: [{ explanationNodes: [
+      { id: "first", content: "第一个原始段落。" }, { id: "second", content: "教师调整到前面的段落。" },
+    ] }] }] } as TeachingBlueprint;
+    render(<QuickOutlineReviewDialog initialOutlines={[outline]} blueprint={blueprint} readOnly onClose={vi.fn()} />);
+    expect(screen.queryByText("过时的正文副本")).toBeNull();
+    const paragraphs = screen.getAllByRole("listitem").map((item) => item.textContent);
+    expect(paragraphs.slice(0, 2)).toEqual(["教师调整到前面的段落。", "第一个原始段落。"]);
   });
 
   it("provides OpenMAIC i18n context while expanding the outline editor", () => {

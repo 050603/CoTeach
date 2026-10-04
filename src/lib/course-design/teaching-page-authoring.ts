@@ -1,7 +1,7 @@
 type RecordValue = Record<string, unknown>;
 
 /** Shared authoring instruction; source ownership does not create a display quota. */
-export const PAGE_PRESENTATION_AUTHORING_GUIDANCE = '先确定每页主要教学任务与视觉焦点，再选择学生可扫读的核心展示命题，组织 presentationItems 和图表，最后检查可读容量。原则解释、要素构成、流程操作与维度比较承担不同任务时分别规划页面，不因同属一个主题或文字能放下一页而合并。完整讲授的 explanationNodes 不是逐项上屏目录；一个节点可支持多个展示项，也可只负责口头解释，不必为每个节点制作展示项。heading 定位学习对象或分组，key-point 提炼一个核心认识，comparison 写共同维度下一个对象的对应事实，process-label 保留必要名称与真实关系，case-observation 指出要看的事实与差异。需要逐项观察的并列要素各写独立展示项，并保留其名称与必要作用，方便各自成框；比较对象、共同维度和各对象对应事实分开写成可分别绑定的展示项，方便形成表头、行标签和单元格，不能把双方全部比较拼进一条长句。一个解释节点可关联这些多个展示项。完整流程节点与真实连接写入 visualRelationship.diagram，已由图示呈现的名称不用再复制成文字清单。role 不能只是给完整解释段落换一个名字，也不能把三段定义改成三个卡片便视为提炼。展示需要内容取舍、关系组织和关键词层级，让学生在听讲时能迅速定位核心认识；完整定义、推理、详细案例和展开条件落实在原节点与实际讲稿。所选展示命题仍须准确，保留它的主体、数量、否定关系、程度和适用条件；不能用无意义词条、空泛口号或改变边界的短句替代核心认识。';
+export const PAGE_PRESENTATION_AUTHORING_GUIDANCE = '根据本页完整认识独立提炼学生需要查看的核心展示命题，组织 presentationItems 与必要图文，不按内容角色重新切页。完整讲授的 explanationNodes 不是逐项上屏目录；一个节点可支持多个展示项，多个节点也可共同支持一项完整认识，节点还可以只负责口头解释，不必为每个节点制作展示项。heading 定位学习对象或分组，key-point 提炼核心认识，comparison 说明共同维度下的对应事实，process-label 保留必要名称与真实关系，case-observation 指出要看的事实与差异。并列要素保留必要名称和作用，比较保留对象、共同维度及对应事实；根据实际关系自然组合展示文案，不强制逐项成框、逐事实拆项或预先绑定表头和单元格。展示项数量不决定页面、文本框或栏目数量。完整流程节点与真实连接写入 visualRelationship.diagram，已由图示呈现的名称不用再复制成文字清单。role 不能只是给完整解释段落换一个名字，也不能把三段定义改成三个卡片便视为提炼。展示需要内容取舍、关系组织和关键词层级，让学生在听讲时能迅速定位核心认识；完整定义、推理、详细案例和展开条件落实在原节点与实际讲稿。所选展示命题仍须准确，保留它的主体、数量、否定关系、程度和适用条件；不能用无意义词条、空泛口号或改变边界的短句替代核心认识。';
 
 function record(value: unknown): RecordValue | undefined {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as RecordValue : undefined;

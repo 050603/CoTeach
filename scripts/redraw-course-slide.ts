@@ -22,6 +22,7 @@ import type { PersistedClassroomData } from '../src/lib/openmaic/server/classroo
 import type { GenerateClassroomInput } from '../src/lib/openmaic/server/classroom-generation';
 import type { PblTemplateDesign } from '../src/lib/platform/pbl-template';
 import type { ThinkingConfig } from '../src/lib/openmaic/types/provider';
+import { buildSlideTargetInventory, extractVisibleElementText, isValidSlideVisualTarget } from '../src/lib/openmaic/generation/semantic-visual-cues';
 
 const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const secrets = new Set<string>();
@@ -35,7 +36,8 @@ type Snapshot = {
   media: Array<{ url: string; file?: string; sha256?: string; unavailable?: string }>;
 };
 type SourcePoint = { id: string; text: string };
-type TargetMapping = { actionId: string; from: string; to?: string; sources?: string[]; diagnostic?: string };
+type TargetMapping = { actionId: string; from: string; to?: string; selector?: VisualTargetSelector; sources?: string[]; diagnostic?: string };
+type VisualTarget = { elementId: string; selector?: VisualTargetSelector };
 
 function arg(name: string): string | undefined {
   const index = process.argv.indexOf(name);
@@ -214,10 +216,22 @@ async function prepareSnapshot(directory: string): Promise<Snapshot> {
 }
 
 function plain(element: PPTElement | undefined): string {
-  if (!element) return '';
-  const record = element as unknown as { content?: string; text?: { content?: string } };
-  return (record.content ?? record.text?.content ?? '').replace(/<br\s*\/?>|<\/p>/giu, '\n').replace(/<[^>]*>/gu, '')
-    .replace(/&nbsp;|&#160;/giu, ' ').replace(/&amp;/giu, '&').replace(/&lt;/giu, '<').replace(/&gt;/giu, '>');
+  return element ? extractVisibleElementText(element) : '';
+}
+
+function targetText(elements: readonly PPTElement[], target: VisualTarget): string {
+  if (!isValidSlideVisualTarget(elements, target)) return '';
+  const item = buildSlideTargetInventory(elements).find((element) => element.elementId === target.elementId);
+  if (!item) return '';
+  if (target.selector?.quote) return target.selector.quote;
+  if (target.selector && 'cellId' in target.selector) {
+    const cellId = target.selector.cellId;
+    return item.table?.rows.flatMap((row) => row.cells).find((cell) => cell.cellId === cellId)?.text ?? '';
+  }
+  if (target.selector && 'rowIndex' in target.selector) {
+    return item.table?.rows[target.selector.rowIndex]?.cells.map((cell) => cell.text).join('\n') ?? '';
+  }
+  return item.visibleText ?? '';
 }
 function compact(value: string): string { return value.replace(/[\s\p{P}\p{S}]+/gu, ''); }
 /** Contiguous source wording, with a unique winner, never first-keyword guessing. */
@@ -243,23 +257,59 @@ function remapActions(original: Scene, outline: SceneOutline, content: Generated
   actions: Action[]; content: GeneratedSlideContent; mappings: TargetMapping[];
 } {
   if (original.content.type !== 'slide') throw new Error('原页面不是 PPT');
+  const originalCanvas = original.content.canvas;
   const projection = content.presentationProjection as SlidePresentationProjection | undefined;
-  const old = new Map(original.content.canvas.elements.map((element) => [element.id, element]));
+  const old = new Map(originalCanvas.elements.map((element) => [element.id, element]));
   const elements = [...content.elements];
   const current = new Map(elements.map((element) => [element.id, element]));
   const mappings: TargetMapping[] = [];
   const groups = new Map<string, string>();
-  const target = (id: string, anchor: SpeechAnchor | undefined, actionId: string): string | undefined => {
-    if (current.has(id)) return id;
-    const oldText = compact(plain(old.get(id)));
-    const sourcePoints = points.filter((point) => oldText.includes(compact(point.text)));
+  const nativeTargets = (sourceId: string): VisualTarget[] => {
+    const displayIds = new Set(content.displayItems?.filter((item) => item.sourceContentIds.includes(sourceId)).map((item) => item.id));
+    const bindings = content.contentBindings?.filter((binding) => (displayIds.size
+      ? displayIds.has(binding.sourceContentId) : binding.sourceContentId === sourceId)
+      && isValidSlideVisualTarget(elements, binding)) ?? [];
+    return [...new Map(bindings.map(({ elementId, selector }) => {
+      const target = { elementId, ...(selector ? { selector } : {}) };
+      return [JSON.stringify(target), target] as const;
+    })).values()];
+  };
+  const mappedTarget = (id: string, chosen: VisualTarget, actionId: string, source?: string): VisualTarget => {
+    mappings.push({ actionId, from: id, to: chosen.elementId, ...(chosen.selector ? { selector: chosen.selector } : {}),
+      ...(source ? { sources: [source] } : {}) });
+    return chosen;
+  };
+  const target = (id: string, anchor: SpeechAnchor | undefined, actionId: string,
+    originalSelector?: VisualTargetSelector): VisualTarget | undefined => {
+    const unchangedTarget = { elementId: id, ...(originalSelector ? { selector: originalSelector } : {}) };
+    const currentTargetExists = isValidSlideVisualTarget(elements, unchangedTarget);
+    // Native component ids are positional. The same id can acquire another
+    // source after redraw, so resolve its source before considering id reuse.
+    if (!content.contentBindings && currentTargetExists) {
+      return { elementId: id, ...(originalSelector ? { selector: originalSelector } : {}) };
+    }
+    const oldText = compact(targetText(originalCanvas.elements, { elementId: id, selector: originalSelector }) || plain(old.get(id)));
+    const sourceIds = new Set((originalCanvas.contentBindings ?? []).filter((binding) => binding.elementId === id
+      && isValidSlideVisualTarget(originalCanvas.elements, binding)
+      && (!originalSelector || !binding.selector
+        || 'cellId' in originalSelector && 'cellId' in binding.selector && originalSelector.cellId === binding.selector.cellId
+        || 'rowIndex' in originalSelector && 'rowIndex' in binding.selector && originalSelector.rowIndex === binding.selector.rowIndex
+        || originalSelector.quote && originalSelector.quote === binding.selector.quote))
+      .flatMap((binding) => [binding.sourceContentId, ...(originalCanvas.displayItems?.find((item) =>
+        item.id === binding.sourceContentId)?.sourceContentIds ?? [])]));
+    const sourcePoints = points.filter((point) => sourceIds.has(point.id) || oldText.includes(compact(point.text)));
     const source = uniqueAnchored(sourcePoints, (point) => point.text, anchor);
+    if (content.contentBindings && source) {
+      const targets = nativeTargets(source.id);
+      const precise = uniqueAnchored(targets, (candidate) => targetText(elements, candidate), anchor);
+      if (precise) return mappedTarget(id, precise, actionId, source.id);
+    }
     if (projection && source) {
       const ids = [...new Set(projection.elementIdsBySource[source.id] ?? [])].filter((item) => current.has(item));
       const items = projection.items.filter((item) => ids.includes(item.id));
       const precise = uniqueAnchored(items, (item) => `${item.label ?? ''}${item.text}`, anchor);
-      if (precise) { mappings.push({ actionId, from: id, to: precise.id, sources: [source.id] }); return precise.id; }
-      if (ids.length === 1) { mappings.push({ actionId, from: id, to: ids[0], sources: [source.id] }); return ids[0]; }
+      if (precise) return mappedTarget(id, { elementId: precise.id }, actionId, source.id);
+      if (ids.length === 1) return mappedTarget(id, { elementId: ids[0] }, actionId, source.id);
       if (ids.length > 1) {
         let group = groups.get(source.id);
         if (!group) {
@@ -273,33 +323,53 @@ function remapActions(original: Scene, outline: SceneOutline, content: Generated
             rotate: 0, fill: 'transparent', fixedRatio: false, viewBox: [1, 1], path: 'M 0 0 L 1 0 L 1 1 L 0 1 Z' };
           elements.push(focus); current.set(group, focus); groups.set(source.id, group);
         }
-        mappings.push({ actionId, from: id, to: group, sources: [source.id] }); return group;
+        return mappedTarget(id, { elementId: group }, actionId, source.id);
       }
     }
     const nodes = outline.visualIntent?.diagram?.nodes.filter((node) => id.endsWith(`-node-${node.id}`)
       || compact(node.label) === oldText) ?? [];
     const node = nodes.length === 1 ? nodes[0] : undefined;
     if (node) {
+      const native = nativeTargets(`diagram-node:${node.id}`);
+      if (native.length === 1) return mappedTarget(id, native[0], actionId);
       const matches = elements.filter((element) => element.id.endsWith(`-node-${node.id}`)
         && compact(plain(element)) === compact(node.label));
       if (matches.length === 1) {
-        mappings.push({ actionId, from: id, to: matches[0].id }); return matches[0].id;
+        return mappedTarget(id, { elementId: matches[0].id }, actionId);
       }
+    }
+    if (currentTargetExists && !sourcePoints.length) {
+      const previous = old.get(id), next = current.get(id);
+      let stable = previous && next && previous.type === next.type
+        && JSON.stringify(previous) === JSON.stringify(next);
+      if (previous?.type === 'image' && next?.type === 'image') stable = previous.src === next.src;
+      else if (previous?.type === 'video' && next?.type === 'video') {
+        stable = previous.src === next.src && previous.mediaRef === next.mediaRef;
+      } else if (previous?.type === 'chart' && next?.type === 'chart') {
+        stable = previous.chartType === next.chartType && JSON.stringify(previous.data) === JSON.stringify(next.data);
+      } else if (previous?.type === 'latex' && next?.type === 'latex') stable = previous.latex === next.latex;
+      else if (previous && next && ['text', 'shape', 'table'].includes(previous.type)) {
+        const before = targetText(originalCanvas.elements, unchangedTarget);
+        stable = Boolean(before.trim()) && before === targetText(elements, unchangedTarget);
+      }
+      if (stable) return unchangedTarget;
     }
     mappings.push({ actionId, from: id, diagnostic: '无法用完整原要点与讲述锚点唯一定位新版视觉目标；保留原动作并报告未解析目标' });
     return undefined;
   };
-  const selector = (id: string, value?: VisualTargetSelector): VisualTargetSelector | undefined => {
-    if (!value || !('quote' in value) || !value.quote) return value;
-    return plain(current.get(id)).includes(value.quote) ? value : undefined;
+  const selector = (target: VisualTarget, original?: VisualTargetSelector): VisualTargetSelector | undefined => {
+    if (target.selector) return target.selector;
+    return original && isValidSlideVisualTarget(elements, { elementId: target.elementId, selector: original }) ? original : undefined;
   };
   const actions = (original.actions ?? []).map((action): Action => {
     if (action.type !== 'spotlight' && action.type !== 'laser') return structuredClone(action);
-    const id = target(action.elementId, action.speechAnchor, action.id) ?? action.elementId;
-    return { ...structuredClone(action), elementId: id, selector: selector(id, action.selector),
+    const mapped = target(action.elementId, action.speechAnchor, action.id, action.selector)
+      ?? { elementId: action.elementId, selector: action.selector };
+    return { ...structuredClone(action), elementId: mapped.elementId, selector: selector(mapped, action.selector),
       ...(action.type === 'laser' && action.waypoints ? { waypoints: action.waypoints.map((waypoint) => {
-        const mapped = target(waypoint.elementId, waypoint.speechAnchor, action.id) ?? waypoint.elementId;
-        return { ...structuredClone(waypoint), elementId: mapped, selector: selector(mapped, waypoint.selector) };
+        const mapped = target(waypoint.elementId, waypoint.speechAnchor, action.id, waypoint.selector)
+          ?? { elementId: waypoint.elementId, selector: waypoint.selector };
+        return { ...structuredClone(waypoint), elementId: mapped.elementId, selector: selector(mapped, waypoint.selector) };
       }) } : {}) };
   });
   return { actions, content: { ...content, elements }, mappings };
@@ -351,7 +421,7 @@ async function generate(directory: string, output: string, snapshot: Snapshot): 
     maxRetries: 1, streamResponse: true, responseFormat: 'json', requireResponsePersistence: true,
     onResponse: (response) => save(output, `model-responses/${String(++rawIndex).padStart(3, '0')}.json`, response),
   });
-  // Each projection/review/layout call owns a fresh execution context; all use
+  // The single native page request owns a fresh execution context and uses
   // the unchanged production model, thinking and slide-output budget policy.
   const trackedCall = (system: string, prompt: string, images?: Array<{ id: string; src: string }>) => withCourseGenerationAiCallContext(aiCall, {
     onStarted: (event) => { requestEvents.push(event); },
@@ -404,6 +474,7 @@ async function generate(directory: string, output: string, snapshot: Snapshot): 
       allOtherPagesPreserved: originalClassroom.scenes.every((scene, index) => scene.id === original.id || valueHash(scene) === valueHash(afterClassroom.scenes[index])),
       originalImages, afterImages, unresolvedVisualTargets: mapped.mappings.filter((item) => item.diagnostic),
       projectionVerified: generated.presentationProjection?.verified ?? false,
+      nativeContentBindings: generated.contentBindings?.length ?? 0,
       providerCalls: usage.length, narrationCalls: 0, audioCalls: 0, mediaCalls: 0, entireCourseQualityVerified: false,
       historicalRequestPolicyAvailable: false,
       budgetVerification: 'Same teacher-selected model and production scene-content thinking/output-budget policy; the original job did not persist historical numeric request policy.',

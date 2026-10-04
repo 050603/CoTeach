@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createPblTemplateCourse } from "@/lib/platform/pbl-template";
+import type { SceneOutline } from "@/lib/openmaic/types/generation";
 import type { Course, TeachingBlueprint } from "@/lib/session/types";
 import type { CourseTextbookFigureResource } from "@/lib/textbook/course-evidence-types";
 
@@ -38,6 +39,8 @@ vi.mock("@/lib/textbook/course-evidence", () => ({
 }));
 
 import { PATCH } from "./route";
+import { bindTeachingManuscript, teachingManuscripts } from "@/lib/course-design/teaching-manuscript";
+import { PPT_PAGE_PLANNING_VERSION } from "@/lib/course-design/ppt-page-planning-contract";
 
 function fixture(): Course {
   const course = createPblTemplateCourse("course-1", {
@@ -53,6 +56,26 @@ function fixture(): Course {
   course.content._openmaicClassroomId = "classroom-1";
   course.content.knowledgePoints = [{ id: "kp-1", name: "知识", description: "说明" }];
   return course;
+}
+
+function spokenBlueprint(): TeachingBlueprint {
+  return {
+    schemaVersion: 3, inputFingerprint: "accepted-source", assessmentMode: "adaptive", createdAt: "2026-10-03",
+    budget: { totalDurationSec: 600, teachingDurationSec: 480, learnerActivityDurationSec: 0, assessmentDurationSec: 120, teachingRatio: 0.8, assessmentRatio: 0.2 },
+    sections: [{ id: "section-1", contentMode: "spoken", title: "过程", order: 0, knowledgePointIds: ["kp-1"],
+      learningObjective: "解释过程", assessmentFocus: ["过程"],
+      sharedContext: { learningPurpose: "理解过程", caseId: "", caseFacts: [], stableTerms: [], fixedWording: [], conceptBoundaries: [] },
+      understandingCriteria: { goals: ["理解过程"], answerEssentials: ["说明关系"], misconceptions: [], supportingUnitIds: ["unit-1"] },
+      teachingDurationSec: 480, learnerActivityDurationSec: 0, assessmentDurationSec: 120,
+      units: [{ id: "unit-1", title: "过程", knowledgePointIds: ["kp-1"], learningOutcome: "理解过程",
+        explanation: "旧解释副本", mechanism: "旧推理副本", workedExample: "旧案例副本", conditions: [], misconceptions: [],
+        sourceKind: "course-source", evidenceQuotes: [], explanationNodes: [{ id: "node-1", kind: "concept", content: "原始讲稿。",
+          knowledgePointIds: ["kp-1"], prerequisiteNodeIds: [], provenance: "course-source", sourceBindings: [] }] }],
+      pages: [{ id: "page-1", title: "过程", type: "slide", unitIds: ["unit-1"], knowledgePointIds: ["kp-1"],
+        description: "说明过程", keyPoints: ["旧页面要点"], teachingObjective: "解释过程", introducesNodeIds: ["node-1"],
+        presentationItems: [{ text: "屏幕简述", nodeIds: ["node-1"], role: "key-point" }] }],
+    }],
+  };
 }
 
 describe("course design workspace route", () => {
@@ -110,6 +133,90 @@ describe("course design workspace route", () => {
     expect(response.status).toBe(200);
     if (missing) expect(course.content.teachingBlueprint?.qualityDiagnostics?.join('\n')).toContain("正文步骤戊");
     expect(course.content.teachingBlueprint?.sections[0]?.pages[0]?.keyPoints).toEqual(visible);
+  });
+
+  it.each([false, true])('round-trips native page duties without requiring or adopting a legacy projection (stale=%s)', async (staleProjection) => {
+    course.content.teachingBlueprint = spokenBlueprint();
+    course.content.teachingBlueprint.sections[0]!.pptPlanningVersion = PPT_PAGE_PLANNING_VERSION;
+    delete course.content.teachingBlueprint.sections[0]!.pages[0]!.presentationItems;
+    const nodes = structuredClone(course.content.teachingBlueprint.sections[0]!.units);
+    for (let round = 0; round < 2; round++) {
+      const edited = structuredClone(course.content.teachingBlueprint);
+      const page = edited.sections[0]!.pages[0]!;
+      page.description = `第${round + 1}次编辑：定义和案例共同说明过程`;
+      page.keyPoints = ['共同认识', '成立条件与观察依据'];
+      if (staleProjection) page.presentationItems = [{ text: '过时投影不能覆盖职责', role: 'key-point', nodeIds: ['node-1'] }];
+      const response = await PATCH(new Request('http://localhost/api/courses/course-1/design-workspace', {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'save', section: 'blueprint', expectedVersion: course.version, data: edited }),
+      }), { params: Promise.resolve({ courseId: 'course-1' }) });
+      expect(response.status).toBe(200);
+      const saved = course.content.teachingBlueprint.sections[0]!;
+      expect(saved.pptPlanningVersion).toBe(PPT_PAGE_PLANNING_VERSION);
+      expect(saved.pages[0]!).toMatchObject({ description: page.description, keyPoints: page.keyPoints });
+      expect(saved.pages[0]!.presentationItems).toBeUndefined();
+      expect(saved.units).toEqual(nodes);
+      expect(course.content._openmaicSceneOutlines?.[0]).toMatchObject({ description: page.description,
+        keyPoints: page.keyPoints, teachingBrief: { pptPlanningVersion: PPT_PAGE_PLANNING_VERSION } });
+      expect(bindTeachingManuscript(course.content._openmaicSceneOutlines![0]! as SceneOutline,
+        teachingManuscripts(course.content.teachingBlueprint)).segments[0]?.text).toBe('原始讲稿。');
+    }
+  });
+
+  it.each(['remove', 'change', 'upgrade'] as const)('rejects a client-side native planning contract %s', async (change) => {
+    course.content.teachingBlueprint = spokenBlueprint();
+    if (change !== 'upgrade') course.content.teachingBlueprint.sections[0]!.pptPlanningVersion = PPT_PAGE_PLANNING_VERSION;
+    const original = structuredClone(course.content.teachingBlueprint);
+    const edited = structuredClone(original);
+    if (change === 'remove') delete edited.sections[0]!.pptPlanningVersion;
+    else if (change === 'upgrade') edited.sections[0]!.pptPlanningVersion = PPT_PAGE_PLANNING_VERSION;
+    else Object.assign(edited.sections[0]!, { pptPlanningVersion: 'different-policy' });
+    const response = await PATCH(new Request('http://localhost/api/courses/course-1/design-workspace', {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'save', section: 'blueprint', expectedVersion: course.version, data: edited }),
+    }), { params: Promise.resolve({ courseId: 'course-1' }) });
+    expect(response.status).toBe(409);
+    expect(await response.json()).toMatchObject({ error: 'BLUEPRINT_SOURCE_CONFLICT' });
+    expect(course.content.teachingBlueprint).toEqual(original);
+  });
+
+  it("saves the teacher's canonical lecture and independently derives display points", async () => {
+    course.content.teachingBlueprint = spokenBlueprint();
+    const edited = structuredClone(course.content.teachingBlueprint);
+    edited.sections[0]!.units[0]!.explanationNodes![0]!.content = "教师说明：在这些条件下，先观察，再比较结果。";
+    edited.sections[0]!.pages[0]!.presentationItems![0]!.text = "先观察，再比较";
+    const response = await PATCH(new Request("http://localhost/api/courses/course-1/design-workspace", {
+      method: "PATCH", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "save", section: "blueprint", expectedVersion: 10, data: edited }),
+    }), { params: Promise.resolve({ courseId: "course-1" }) });
+    expect(response.status).toBe(200);
+    expect(course.content.teachingBlueprint?.sections[0]?.units[0]?.explanationNodes?.[0]?.content)
+      .toBe("教师说明：在这些条件下，先观察，再比较结果。");
+    expect(course.content.teachingBlueprint?.sections[0]?.pages[0]?.keyPoints).toEqual(["先观察，再比较"]);
+    expect(course.content._openmaicSceneOutlines?.[0]?.keyPoints).toEqual(["先观察，再比较"]);
+    expect(course.content._openmaicSceneOutlines?.[0]?.teachingBrief?.manuscript).toMatchObject({ segmentIds: ["node-1"] });
+    expect(bindTeachingManuscript(course.content._openmaicSceneOutlines![0]! as SceneOutline, teachingManuscripts(course.content.teachingBlueprint)).segments[0]?.text)
+      .toBe("教师说明：在这些条件下，先观察，再比较结果。");
+    expect(course.aiLearningClassroomId).toBe("classroom-1");
+  });
+
+  it.each(["source", "mode", "identity", "empty", "unassigned", "duplicate"] as const)("rejects invalid spoken edits (%s) without replacing the saved lecture", async (change) => {
+    course.content.teachingBlueprint = spokenBlueprint();
+    const edited = structuredClone(course.content.teachingBlueprint);
+    const section = edited.sections[0]!;
+    const node = section.units[0]!.explanationNodes![0]!;
+    if (change === "source") node.provenance = "constructed";
+    if (change === "mode") delete section.contentMode;
+    if (change === "identity") node.id = "forged-node";
+    if (change === "empty") node.content = " ";
+    if (change === "unassigned") section.pages[0]!.introducesNodeIds = [];
+    if (change === "duplicate") section.pages[0]!.introducesNodeIds = [node.id, node.id];
+    const response = await PATCH(new Request("http://localhost/api/courses/course-1/design-workspace", {
+      method: "PATCH", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "save", section: "blueprint", expectedVersion: 10, data: edited }),
+    }), { params: Promise.resolve({ courseId: "course-1" }) });
+    expect(response.status).toBe(change === "source" || change === "mode" ? 409 : 400);
+    expect(course.content.teachingBlueprint).toEqual(spokenBlueprint());
   });
 
   it("saves teacher edits as a draft while preserving generated classroom data", async () => {

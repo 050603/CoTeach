@@ -420,6 +420,8 @@ import type { QuizQuestion } from './stage';
  * AI-generated slide content
  */
 export interface GeneratedSlideContent {
+  displayItems?: import('@openmaic/dsl').SlidePresentationItem[];
+  contentBindings?: import('@openmaic/dsl').SlideContentBinding[];
   presentationProjection?: SlidePresentationProjection;
   /** Teacher-private quality findings; usable slide elements remain renderable. */
   qualityDiagnostics?: string[];

@@ -30,6 +30,24 @@ describe('addStudentActivityPause', () => {
     ]);
   });
 
+  it('keeps all canonical interactive paragraphs before learner work after persistence normalization', () => {
+    const outline = { type: 'interactive', timingPlan: { studentActivitySec: 60, transitionSec: 3 },
+      teachingBrief: { manuscript: { sectionId: 'section', segmentIds: ['intro', 'conditions', 'instructions'] } },
+    } as SceneOutline;
+    const spoken = [
+      { id: 'intro', type: 'speech', text: '先观察结果。' },
+      { id: 'conditions', type: 'speech', text: '比较时保持其余条件不变。' },
+      { id: 'instructions', type: 'speech', text: '现在调整参数并记录变化。' },
+    ] as Action[];
+    const result = addPageTimingPauses(outline, spoken);
+    const restored = normalizeStudentActivityPause(JSON.parse(JSON.stringify(result)));
+    expect(restored.map((action) => action.id)).toEqual([
+      'intro', 'conditions', 'instructions', expect.stringMatching(/^activity_pause_/), expect.stringMatching(/^page_transition_/),
+    ]);
+    expect(restored.filter((action) => action.type === 'speech' && action.text.trim())).toEqual(spoken);
+    expect(restored[3]).toMatchObject({ activityPausePurpose: 'interaction', activityPauseSec: 60, activityPausePosition: 'after-narration' });
+  });
+
   it('adds a closing feedback line when the generated script only has an introduction', () => {
     const outline = {
       type: 'quiz',

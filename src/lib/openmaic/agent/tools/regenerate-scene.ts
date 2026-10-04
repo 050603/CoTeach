@@ -1,16 +1,17 @@
 /**
  * `regenerate_scene` agent tool
  *
- * Regenerates a whole SLIDE — its content (elements/layout/text) AND its
- * playback actions (narration/cues) — to match a natural-language instruction.
- * Mirrors `generateSingleScene`'s two steps directly:
- *   generateSceneContent (EDIT MODE) → generateSceneActions
- * (NOT `generateFullScenes`, which writes into a StageStore).
+ * Regenerates a slide's native visual composition. Knowledge-teaching slides
+ * keep saved narration/audio and rebind only visual addresses; other slides
+ * retain the existing content-and-actions behavior.
+ * Content generation stays isolated from StageStore writes. Knowledge-teaching
+ * redraw uses the restored native adapter; legacy slide types retain the two
+ * content/actions steps.
  *
  * Trust boundary (carries the v0 rule): the model supplies only `sceneId` +
  * `instruction`. The slide's current content/outline come from the trusted
  * client-injected `SceneContext` (`getSceneContext`) and are fed as the edit
- * baseline — the model never authors content.
+ * baseline — the agent model cannot supply a replacement scene payload.
  *
  * slide-only this release: non-slide scenes get a typed refusal and nothing is
  * generated.
@@ -28,6 +29,11 @@ import type { GeneratedSlideContent, PdfImage, ImageMapping } from '@openmaic/li
 import type { SceneContent } from '@openmaic/lib/types/stage';
 import type { RegenerateActionsDeps, SceneContext } from './regenerate-scene-actions';
 import { withTeachingEnhancement } from '@openmaic/lib/generation/teaching-enhancement';
+import { generateOpenMaicBaselineContent } from '@openmaic/lib/generation/openmaic-baseline';
+import { usesRestoredSlideAuthoring } from '@openmaic/lib/generation/restored-slide-authoring';
+import { measureAuthoredSlideText } from '@openmaic/lib/generation/slide-spatial-measurement';
+import { rebindSlideVisualActions } from './rebind-slide-visual-actions';
+import type { SlideVisualPatch } from './slide-visual-patch';
 import {
   canUseIndependentTeachingNarration,
   compileTeachingNarrationActions,
@@ -44,6 +50,11 @@ function slideBaseline(content: SceneContent): GeneratedSlideContent | undefined
   return {
     elements: content.canvas.elements ?? [],
     background: content.canvas.background,
+    theme: content.canvas.theme,
+    displayItems: content.canvas.displayItems,
+    contentBindings: content.canvas.contentBindings,
+    presentationProjection: content.canvas.presentationProjection,
+    qualityDiagnostics: (content.canvas as { qualityDiagnostics?: string[] }).qualityDiagnostics,
   } satisfies GeneratedSlideContent;
 }
 
@@ -60,7 +71,7 @@ function slideBaseline(content: SceneContent): GeneratedSlideContent | undefined
 /** True when a src is a real image payload (data: URL or http(s) URL). */
 function isRealImageSrc(src: unknown): src is string {
   if (typeof src !== 'string') return false;
-  return src.startsWith('data:') || src.startsWith('http://') || src.startsWith('https://');
+  return src.startsWith('data:') || src.startsWith('http://') || src.startsWith('https://') || src.startsWith('/');
 }
 
 /**
@@ -80,21 +91,36 @@ export function buildImageResources(baseline: GeneratedSlideContent): {
 } {
   const assignedImages: PdfImage[] = [];
   const imageMapping: ImageMapping = {};
+  const reservedIds = new Set(baseline.contentBindings?.filter((binding) => binding.sourceContentId.startsWith('image:'))
+    .map((binding) => binding.sourceContentId.slice('image:'.length)));
   let n = 0;
 
   const elements = baseline.elements.map((el) => {
     if (!el || el.type !== 'image') return el;
     const src = (el as { src?: unknown }).src;
     if (isRealImageSrc(src)) {
-      const imgId = `img_${++n}`;
+      // Preserve saved evidence identity when present; coordinates/element IDs
+      // are not a source identity. The alias is only a transport resource key.
+      const sources = [...new Set(baseline.contentBindings?.filter((binding) => binding.elementId === el.id
+        && binding.sourceContentId.startsWith('image:') && !binding.sourceContentId.endsWith(':caption'))
+        .map((binding) => binding.sourceContentId.slice('image:'.length)))];
+      let imgId = sources.length === 1 ? sources[0] : undefined;
+      if (!imgId) {
+        do { imgId = `img_${++n}`; } while (reservedIds.has(imgId));
+      }
+      if (imageMapping[imgId] && imageMapping[imgId] !== src) {
+        throw new Error(`Conflicting saved image identity ${imgId}`);
+      }
+      const existing = imageMapping[imgId];
       imageMapping[imgId] = src;
-      assignedImages.push({
+      if (!existing) assignedImages.push({
         id: imgId,
         src,
         pageNumber: 0,
         width: (el as { width?: number }).width,
         height: (el as { height?: number }).height,
         description: 'Existing slide image',
+        required: true,
       });
       return { ...el, src: imgId };
     }
@@ -144,6 +170,7 @@ export interface RegenerateSceneDetails {
   sceneId: string;
   content: GeneratedSlideContent | null;
   actions: Action[];
+  visualPatch?: SlideVisualPatch;
 }
 
 // ── Factory ──────────────────────────────────────────────────────────────────
@@ -155,7 +182,8 @@ export function makeRegenerateSceneTool(
     name: 'regenerate_scene',
     label: 'Regenerate slide',
     description:
-      'Regenerates a whole slide — its content AND its narration — to match the user instruction. ' +
+      'Regenerates slide text/layout/images to match the user instruction. Knowledge-teaching slides preserve all saved narration, audio, whiteboards and other actions, rebinding only visual targets. ' +
+      'Use regenerate_scene_actions separately when the teacher explicitly requests narration changes. Other slides retain content-and-narration regeneration. ' +
       'Only works on slide scenes. Supply the sceneId and a natural-language instruction; ' +
       'the current slide is loaded automatically as the editing baseline.',
     parameters: RegenerateSceneParams,
@@ -207,7 +235,8 @@ export function makeRegenerateSceneTool(
       const slideElements = content.canvas.elements ?? [];
       const hasVideoElement = slideElements.some((el) => el?.type === 'video');
       const hasImageBackground = isImageBackground(content.canvas.background);
-      if (hasVideoElement || hasImageBackground) {
+      const visualOnly = usesRestoredSlideAuthoring(outline);
+      if (!visualOnly && (hasVideoElement || hasImageBackground)) {
         return {
           content: [
             {
@@ -228,8 +257,8 @@ export function makeRegenerateSceneTool(
       const contentAiCall = (
         systemPrompt: string,
         userPrompt: string,
-        _images?: Array<{ id: string; src: string }>,
-      ): Promise<string> => deps.aiCall('scene-content:slide', systemPrompt, userPrompt, signal);
+        images?: Array<{ id: string; src: string }>,
+      ): Promise<string> => deps.aiCall('scene-content:slide', systemPrompt, userPrompt, signal, images);
       const actionsAiCall = (
         systemPrompt: string,
         userPrompt: string,
@@ -246,6 +275,81 @@ export function makeRegenerateSceneTool(
         assignedImages,
         imageMapping,
       } = buildImageResources(slideBase);
+
+      if (visualOnly) {
+        const visualPatch: SlideVisualPatch = {
+          beforeContent: structuredClone(content), beforeActions: structuredClone(ctxData.actions ?? []),
+        };
+        const manuscriptRefs = outline.teachingBrief?.manuscript;
+        const manuscript = ctxData.teachingManuscripts?.find((item) => item.sectionId === manuscriptRefs?.sectionId);
+        const savedSpeech = visualPatch.beforeActions.filter((action) => action.type === 'speech')
+          .map((action) => ({ id: action.id, text: action.text }));
+        const generated = await generateOpenMaicBaselineContent(outline, (system, prompt, images) => contentAiCall(
+          `${system}\n\nPPT-only redraw: preserve the current teaching responsibilities, original facts, all existing media identities and complete diagram relationships. Saved speech is context, not a display obligation. Do not author narration, questions, audio or media.`,
+          `${prompt}\n\n## Saved narration context (unchanged)\n${JSON.stringify({
+            currentSpeech: savedSpeech, sectionNarrations: ctxData.sectionNarrations,
+            manuscript: manuscript ? { sectionId: manuscript.sectionId, segments: manuscript.segments.filter((segment) =>
+              manuscriptRefs?.segmentIds.includes(segment.id)) } : undefined,
+          })}`, images), {
+          componentAuthoring: true, slideAuthoring: 'native', textMeasure: measureAuthoredSlideText,
+          agents, languageDirective, editDirective: instruction, baselineContent: editBaseline,
+          visualBaseline: slideBase, assignedImages, imageMapping, visionEnabled: true,
+          sourceEvidence: ctxData.sourceEvidence, sourceKnowledgePoints: ctxData.sourceKnowledgePoints,
+          teachingAuthoringKnowledge: ctxData.teachingAuthoringKnowledge,
+          sourceSequenceContracts: ctxData.sourceSequenceContracts,
+          websiteReferenceContext: { slideTitles: allOutlines.filter((page) => page.type === 'slide').map((page) => page.title) },
+        });
+        if (!generated || !('elements' in generated)) return {
+          content: [{ type: 'text', text: `Slide content generation failed for "${outline.title}". The saved slide and narration have not been changed.` }],
+          details: { sceneId, content: null, actions: [] }, isError: true,
+        };
+        if (deps.assertCurrentSources && !await deps.assertCurrentSources()) return {
+          content: [{ type: 'text', text: 'The adopted course sources or manuscript changed during this PPT request. The saved slide and narration have not been changed; redraw using the current confirmed sources.' }],
+          details: { sceneId, content: null, actions: [] }, isError: true,
+        };
+        // play_video is a saved synchronous action. Keep its address by giving
+        // the same unique media object its saved ID, without changing the action
+        // or the author's new geometry. Ambiguity retains the original draft.
+        const videoAddressDiagnostics: string[] = [];
+        let generatedSlide: GeneratedSlideContent = generated;
+        let retainedDraft = generated.elements === slideBase.elements;
+        for (const action of visualPatch.beforeActions) {
+          if (action.type !== 'play_video') continue;
+          const original = slideBase.elements.find((element) => element.id === action.elementId);
+          if (original?.type !== 'video') continue;
+          const matches = generatedSlide.elements.filter((element) => element.type === 'video'
+            && element.src === original.src && element.mediaRef === original.mediaRef);
+          if (matches.length !== 1 || generatedSlide.elements.some((element) => element.id === original.id && element !== matches[0])) {
+            videoAddressDiagnostics.push(`PPT redraw video ${original.id}: no unique saved playback media target; retained the saved usable draft.`);
+            continue;
+          }
+          const previousId = matches[0].id;
+          generatedSlide = { ...generatedSlide, elements: generatedSlide.elements.map((element) => element === matches[0]
+            ? { ...element, id: original.id } : element), contentBindings: generatedSlide.contentBindings?.map((binding) =>
+              binding.elementId === previousId ? { ...binding, elementId: original.id } : binding) };
+        }
+        const missingMedia = slideBase.elements.filter((element) => element.type === 'image' || element.type === 'video')
+          .filter((element) => !generatedSlide.elements.some((next) => (next.type === 'image' || next.type === 'video') && next.type === element.type
+            && next.src === element.src && (element.type !== 'video' || next.type === 'video' && next.mediaRef === element.mediaRef)));
+        const mediaDiagnostics = missingMedia.map((element) => `PPT redraw omitted saved media ${element.id}; retained the saved usable draft.`);
+        retainedDraft ||= Boolean(missingMedia.length || videoAddressDiagnostics.length);
+        let next: GeneratedSlideContent = missingMedia.length || videoAddressDiagnostics.length ? { ...slideBase,
+          qualityDiagnostics: [...new Set([...(generatedSlide.qualityDiagnostics ?? []), ...mediaDiagnostics, ...videoAddressDiagnostics])] } : generatedSlide;
+        // A source image used as the canvas background remains the same media.
+        if (hasImageBackground) next = { ...next, background: slideBase.background };
+        const rebound = rebindSlideVisualActions({ outline, before: slideBase, after: next, actions: visualPatch.beforeActions });
+        const actions = rebound.essentialUnresolved ? visualPatch.beforeActions : rebound.actions;
+        retainedDraft ||= rebound.essentialUnresolved;
+        if (rebound.essentialUnresolved) next = { ...slideBase,
+          qualityDiagnostics: [...new Set([...(next.qualityDiagnostics ?? []), ...rebound.diagnostics])] };
+        else next = { ...next, qualityDiagnostics: [...new Set([...(next.qualityDiagnostics ?? []), ...rebound.diagnostics])] };
+        const diagnoses = next.qualityDiagnostics?.length
+          ? ` Quality diagnostics: ${next.qualityDiagnostics.join('; ')}` : '';
+        return {
+          content: [{ type: 'text', text: `${retainedDraft ? 'Retained the saved usable PPT after a redraw diagnosis' : 'Regenerated the PPT'} (${next.elements.length} elements); saved narration, audio and other teaching actions are preserved.${diagnoses}` }],
+          details: { sceneId, content: next, actions, visualPatch },
+        };
+      }
 
       let rawSlideResponse = '';
       const teachingContentCall = withTeachingSlideGuidance(

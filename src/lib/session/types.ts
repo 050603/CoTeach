@@ -899,6 +899,29 @@ export type KnowledgeLectureSection = {
 
 export type TeachingBlueprintSourceKind = "course-source" | "general-knowledge";
 
+/** Source/case addresses for one opening or inference, without another conclusion body. */
+export type TeachingFactBasis = {
+  claimRefs?: import("@/lib/course-design/knowledge-authoring").AuthoringClaimRef[];
+  exampleRefs?: import("@/lib/course-design/knowledge-authoring").AuthoringExampleRef[];
+  prerequisiteNodeIds?: string[];
+};
+
+export type TeachingCaseElementRef = {
+  field: "objectAndTask" | "assumptions" | "actions" | "outcome" | "facts";
+  index?: number;
+};
+
+/** A candidate case or a concrete example authored in an actual teaching node. */
+export type TeachingContentCaseRef = import("@/lib/course-design/knowledge-authoring").AuthoringExampleRef | { nodeId: string };
+
+export type TeachingContentContribution =
+  | { kind: "source-statement"; claimRef: import("@/lib/course-design/knowledge-authoring").AuthoringClaimRef }
+  | { kind: "clarify-term"; claimRef: import("@/lib/course-design/knowledge-authoring").AuthoringClaimRef; claimPhrase: string }
+  | { kind: "reasoning"; claimRefs: import("@/lib/course-design/knowledge-authoring").AuthoringClaimRef[]; prerequisiteNodeIds?: string[] }
+  | { kind: "case-facts"; caseRef: TeachingContentCaseRef; elementRefs?: TeachingCaseElementRef[] }
+  | { kind: "case-analysis"; caseRef: TeachingContentCaseRef;
+      claimRefs: import("@/lib/course-design/knowledge-authoring").AuthoringClaimRef[]; elementRefs?: TeachingCaseElementRef[] };
+
 export type TeachingExplanationNode = {
   id: string;
   kind: "term" | "concept" | "relation" | "mechanism" | "example" | "condition" | "misconception";
@@ -907,6 +930,25 @@ export type TeachingExplanationNode = {
   knowledgePointIds?: string[];
   prerequisiteNodeIds: string[];
   provenance: "course-source" | "derived" | "general-knowledge" | "constructed" | "unverified";
+  /** Exact evidence belongs to this node, never inherited from its unit. */
+  sourceBindings?: import("@/lib/course-design/knowledge-authoring").AuthoringSourceBinding[];
+  /** Selected statement identities used by this explanation, scoped by knowledge point. */
+  claimRefs?: import("@/lib/course-design/knowledge-authoring").AuthoringClaimRef[];
+  /** Exact definitions/conditions taught here once; ordinary source explanations need no verbatim duty. */
+  quoteDuties?: Array<{ source: import("@/lib/course-design/knowledge-authoring").AuthoringSourceBinding;
+    claimRef?: import("@/lib/course-design/knowledge-authoring").AuthoringClaimRef }>;
+  /** Adopted candidate identities; the actual analysis lives in content. */
+  exampleIds?: string[];
+  /** Ref-only duties point into this node's single content string; saved old nodes omit the field. */
+  contentContributions?: Array<{ partId: string; start: number; end: number; contribution: TeachingContentContribution }>;
+};
+
+export type TeachingExamplePlan = {
+  knowledgePointId: string;
+  mode: "textbook" | "constructed" | "none" | "source-gap";
+  selectedExampleIds: string[];
+  form?: "everyday" | "domain" | "analogy";
+  rationale: string;
 };
 
 export type TeachingBlueprintUnit = {
@@ -923,6 +965,8 @@ export type TeachingBlueprintUnit = {
   evidenceQuotes: string[];
   /** Small, addressable explanation responsibilities used for page ownership. */
   explanationNodes?: TeachingExplanationNode[];
+  /** Chosen in the same blueprint call; not a second case-selection stage. */
+  examplePlan?: TeachingExamplePlan[];
   /** Relative effort estimated by the planner; normalized against the real input budget. */
   estimatedTeachingWeight?: number;
   requirementIds?: string[];
@@ -975,6 +1019,8 @@ export type TeachingBlueprintPage = {
     kind: "familiar-experience" | "concrete-observation" | "problem" | "direct-explanation" | "continuation";
     object: string;
     bridge: string;
+    /** Optional on saved contracts; new openings bind their factual premises here. */
+    basis?: TeachingFactBasis;
   };
   /** Independent first-draft decision about whether the page's concrete case needs visual observation. */
   caseObservation?: {
@@ -995,6 +1041,12 @@ export type TeachingBlueprintPage = {
 };
 
 export type TeachingBlueprintSection = {
+  /** Versioned page semantics, independent of saved spoken paragraph identities. */
+  pptPlanningVersion?: string;
+  /** Deterministic source-reference normalization findings, retained on replay. */
+  qualityDiagnostics?: string[];
+  /** Spoken nodes are the final lecture; downstream stages may only bind them. */
+  contentMode?: "spoken";
   id: string;
   title: string;
   order: number;
@@ -1018,6 +1070,8 @@ export type TeachingBlueprintSection = {
 export type TeachingBlueprint = {
   /** Nonblocking review findings; never substitute for actual teaching content. */
   qualityDiagnostics?: string[];
+  /** Frozen authoring inputs, never a replacement for executable page content. */
+  knowledgeAuthoring?: Record<string, import("@/lib/course-design/knowledge-authoring").KnowledgeAuthoring>;
   /** Older versions remain readable; only the current version is generated. */
   schemaVersion: 1 | 2 | 3;
   inputFingerprint: string;
@@ -1853,6 +1907,8 @@ export type KnowledgePoint = {
   sourceKnowledgePointNames?: string[];
   /** Textbook evidence selected for this lesson node; details live in CourseContent.courseEvidence. */
   evidenceItemIds?: string[];
+  /** Original claims and case candidates kept separate from generated summaries. */
+  authoring?: import("@/lib/course-design/knowledge-authoring").KnowledgeAuthoring;
   /** Immutable source-list identities, not proof that the lists were taught. */
   sourceSequenceReferences?: import("@/lib/textbook/course-evidence-types").KnowledgeSourceSequenceReference[];
   teachingDepth?: "detailed" | "brief" | "extension";

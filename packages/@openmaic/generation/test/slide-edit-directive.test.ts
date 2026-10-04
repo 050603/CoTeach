@@ -57,6 +57,16 @@ const BASELINE: GeneratedSlideContent = {
 };
 
 describe('slide content edit-mode directive', () => {
+  it('preserves authored native IDs during restored editing so source and visual targets remain addressable', async () => {
+    const { aiCall } = makeCapturingAiCall(JSON.stringify(BASELINE));
+    const content = await generateSceneContent(slideOutline(), aiCall, {
+      componentAuthoring: true, baselineContent: BASELINE, editDirective: INSTRUCTION,
+      nativeDesignBaseline: '4615a98d', preserveNativeComposition: true,
+    });
+    expect(content && 'elements' in content ? content.elements.map((element) => element.id) : [])
+      .toEqual(['text_baseline']);
+  });
+
   it.each([undefined, INSTRUCTION])('keeps native baseline editing compatible when new generation requires flow (%s)', async (editDirective) => {
     const { aiCall, lastUser } = makeCapturingAiCall(JSON.stringify(BASELINE));
     const content = await generateSceneContent(slideOutline(), aiCall, {

@@ -25,7 +25,7 @@ import { resolveDurableCourseSceneOutlines } from "@/lib/course-generation/cours
 import { resolveCourseTextbookFigures, hydrateCourseEvidenceFigureReferences } from "@/lib/textbook/course-evidence";
 import { resolveCourseSourceSequenceContracts } from "@/lib/textbook/course-evidence-types";
 import { scopeCourseTextbookFigures, type FigureUsePage } from "@/lib/textbook/figure-use";
-import { scopeSourceSequenceContracts, usesSourceSequence } from "@/lib/textbook/source-sequence-use";
+import { hasExplicitNativeSourceSequenceUse, scopeSourceSequenceContracts, usesSourceSequence } from "@/lib/textbook/source-sequence-use";
 import { findBlueprintFigureSequenceIssues, findKnowledgeSourceSequenceIssues,
   inspectFigureSequence, type FigureSequenceContract } from "@/lib/textbook/course-visual-binding";
 import { sourceSequenceSlideContent } from "./source-content-acceptance";
@@ -271,7 +271,17 @@ async function auditClassroomFiles(
 type ResourceAuditOutline = NonNullable<Course["content"]["_openmaicSceneOutlines"]>[number];
 type SequenceContentGroup = NonNullable<Parameters<typeof inspectFigureSequence>[0]["contentGroups"]>[number];
 
-function outlineSequenceContent(outline: ResourceAuditOutline): SequenceContentGroup[] {
+function outlineSequenceContent(outline: ResourceAuditOutline,
+  scenes: readonly PersistedClassroomData["scenes"][number][] = []): SequenceContentGroup[] {
+  if (outline.teachingBrief?.manuscript) {
+    const actual = scenes.filter((scene) => sceneMatchesOutlineIds(scene, new Set([outline.id])));
+    if (actual.length) return actual.map((scene) => sceneSequenceContent(scene, true));
+    const plan = outline.teachingBrief.teachingPlan;
+    return [{ statements: [...(plan?.presentationItems?.map((item) => item.text)
+      ?? plan?.presentationContent ?? outline.keyPoints ?? []),
+      ...(outline.visualIntent?.diagram?.annotation ? [outline.visualIntent.diagram.annotation] : [])],
+    diagramLabels: outline.visualIntent?.diagram?.nodes.map((node) => node.label) }];
+  }
   return [{
     statements: [outline.description, outline.teachingObjective, ...(outline.keyPoints ?? []),
       outline.visualIntent?.observationGoal, outline.visualIntent?.rationale,
@@ -462,9 +472,10 @@ async function auditRequiredTextbookImages(
       && outline.knowledgePointIds?.some((id) => resource.knowledgePointIds.includes(id)));
     if (!target) continue;
     const relatedSequences = sequenceContracts.filter((contract) => contract.required
-      && target.knowledgePointIds?.some((id) => contract.knowledgePointIds.includes(id)));
+      && (target.knowledgePointIds?.some((id) => contract.knowledgePointIds.includes(id))
+        || hasExplicitNativeSourceSequenceUse(target, contract)));
     const outlineProblems = inspectFigureSequence({ orderedSteps: resource.orderedSteps!,
-      statements: [], contentGroups: outlineSequenceContent(target),
+      statements: [], contentGroups: outlineSequenceContent(target, classroom.scenes),
       relatedSequences, requireCompleteText: true });
     if (outlineProblems.length) sequenceIssues.push({
       id: `content:source-sequence:${target.id}:${resource.id}:outline`,
@@ -493,12 +504,14 @@ async function auditRequiredTextbookImages(
     const targets = outlines.filter((outline) => outline.type === "slide"
       && outline.generationPurpose === "knowledge-teaching"
       && usesSourceSequence(outline, contract)
-      && outline.knowledgePointIds?.some((id) => contract.knowledgePointIds.includes(id)));
+      && (outline.knowledgePointIds?.some((id) => contract.knowledgePointIds.includes(id))
+        || hasExplicitNativeSourceSequenceUse(outline, contract)));
     if (!targets.length) continue;
     const relatedSequences = sequenceContracts.filter((related) => related.required
-      && targets.some((target) => target.knowledgePointIds?.some((id) => related.knowledgePointIds.includes(id))));
+      && targets.some((target) => target.knowledgePointIds?.some((id) => related.knowledgePointIds.includes(id))
+        || hasExplicitNativeSourceSequenceUse(target, related)));
     const outlineProblems = inspectFigureSequence({ orderedSteps,
-      statements: [], contentGroups: targets.flatMap(outlineSequenceContent), relatedSequences,
+      statements: [], contentGroups: targets.flatMap((target) => outlineSequenceContent(target, classroom.scenes)), relatedSequences,
       sequenceSemantics: contract.sequenceSemantics, requireCompleteText: true,
       requiredStepLabels: contract.requiredStepLabels });
     if (outlineProblems.length) sequenceIssues.push({

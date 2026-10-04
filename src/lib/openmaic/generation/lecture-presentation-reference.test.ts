@@ -57,8 +57,8 @@ describe('approved lecture presentation references', () => {
     expect(prompt).toContain('完整资料事实由完整教学正文与实际讲稿落实，不等于全部上屏');
     expect(prompt).toContain('不表示该节点每句话都必须上屏');
     expect(prompt).toContain('不要求每个节点各摘一段');
-    expect(prompt).toContain('heading 写分组小标题，key-point 写核心结论');
-    expect(prompt).toContain('comparison 写共同维度下的对应事实');
+    expect(prompt).toContain('heading 写分组、比较对象或维度小标题，key-point 写一个核心认识或一个要素的名称与作用');
+    expect(prompt).toContain('comparison 写共同维度下一个对象的对应事实');
     expect(prompt).toContain('process-label 写实际步骤标签');
     expect(prompt).toContain('case-observation 写学生需要观察的事实或问题提示');
     expect(prompt).toContain('角色不是分段讲稿');
@@ -112,9 +112,9 @@ describe('approved lecture presentation references', () => {
     });
     expect(prompt.system).toContain('authoringContract 固定为 blueprint-v5');
     expect(prompt.system).toContain(formatLecturePresentationReference({ audience: 'blueprint' }));
-    expect(prompt.system).toContain('comparison 写共同维度下的对应事实');
+    expect(prompt.system).toContain('comparison 写共同维度下一个对象的对应事实');
     expect(prompt.system).toContain('不以逐段读定义代替构图理由');
-    expect(prompt.system).toContain('核心含义可形成文字层级，共同维度可并排对齐');
+    expect(prompt.system).toContain('核心含义可形成文字层级，共同维度用原生表格对齐');
     expect(prompt.system).toContain('preferredForm 是教学表达偏好，不是强制模板');
   });
 
@@ -184,7 +184,7 @@ describe('core display with saved statement metadata', () => {
     expect(page.teachingBrief!.teachingPlan!.visualRelationship).toEqual(originalRelationship);
   });
 
-  it('supplies the priority rule to actual native authoring and compiles independent core text from a single mocked response', async () => {
+  it('legacy replay supplies the priority rule to measured native authoring and compiles independent core text from a single mocked response', async () => {
     const page = outline();
     const points = adoptedPageAuthoringContent(page);
     let calls = 0;
@@ -202,7 +202,7 @@ describe('core display with saved statement metadata', () => {
         { kind: 'textBox', id: 'group', role: 'body', paragraphRefs: points.map((point) => point.id),
           left: 50, top: 140, width: 900, fontSize: 18 },
       ] });
-    }, { componentAuthoring: true, slideAuthoring: 'native', textMeasure: measure });
+    }, { visualProjection: false, componentAuthoring: true, slideAuthoring: 'native', textMeasure: measure });
     expect(calls).toBe(1);
     expect(content).not.toBeNull();
     if (!content || !('elements' in content)) throw new Error('Expected native core display');

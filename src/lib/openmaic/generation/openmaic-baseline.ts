@@ -44,10 +44,11 @@ import { nativeAuthoringEnvelopeContract, normalizeNativeAuthoringEnvelope } fro
 import { buildNativeTextPlacementPlan, expandNativeTextPlacements, formatNativeTextPlacementPlan, formatNativeTextRelationCaption } from './native-text-placement';
 import type { SemanticPageCapacityAssessment } from './semantic-page-capacity';
 import { buildAuthoringSourceCatalog, pageOriginalTeachingSources, type SourceGroundingKnowledgePoint } from './source-grounding';
+import type { TeachingAuthoringKnowledgePoint } from './first-pass-authoring';
 import type { CourseEvidenceSnapshot } from '@/lib/textbook/course-evidence-types';
 import type { FigureSequenceContract } from '@/lib/textbook/course-visual-binding';
-import { generateSlideVisualProjection, slideVisualSourceContent, usesSlideVisualProjection } from './slide-visual-projection';
-import { compileOriginalSlideDraft, compileSlideInfographic } from './slide-infographic-layout';
+import { applyClassroomSlideContentPolicy, CLASSROOM_SLIDE_CONTENT_POLICY } from './classroom-slide-content-policy';
+import { generateRestoredSlideContent } from './restored-slide-authoring';
 
 export const OPENMAIC_GENERATION_BASELINE = {
   release: 'v1.0.3',
@@ -59,8 +60,8 @@ export const OPENMAIC_GENERATION_BASELINE = {
   promptHashes: {
     requirementsSystem: '344c33e57f72ee86056c12d072c337f609838eab209517a05cc9b57a90b02e32',
     requirementsUser: 'f04381208fe2837b806a910579b43f0433e8e2d6bee5654b03ac5ded0530e16e',
-    slideContentSystem: '36940238cb32a2dd6e410cec5a0043ca33112983be58a0fa5dde530df3727b8c',
-    slideContentUser: '787b6ae5e857eeb52ea71e1cda509164342ff00d64b2a843a10c68d0176f276e',
+    slideContentSystem: 'd55f5967f839d1b072eadd674814d09565f57cac1e3bc2453738aa66042a5a6f',
+    slideContentUser: '6e4fd25ae1428a8d6f45000caa73f6b661044a5f12a6dbdd55fede10802ff77d',
     upstreamSlideActionsSystem: '219e8da1eb3c854dbe6ee6fdedda1936e0092fff6c8984b9277c5c6cef2443b6',
     slideActionsSystem: 'b1fd18bcaeea294fa204bab84dc16c81946d0c7a0abb2408b4a44eaa8007f058',
     slideActionsUser: '71a95329793ba0fae6030b6b9eb562bed62e9460bd26c2fcbd92d7c53f549512',
@@ -222,7 +223,7 @@ export async function generateOpenMaicBaselineOutlines(
 }
 
 export interface BaselineContentOptions {
-  /** CoTeach-only, single-call infographic composition. Legacy callers opt out by omission. */
+  /** CoTeach-only, single-call native lecture composition. Legacy callers opt out by omission. */
   visualProjection?: boolean;
   /** An isolated redraw may retain an existing usable draft if no improvement fits. */
   visualBaseline?: GeneratedSlideContent;
@@ -243,6 +244,7 @@ export interface BaselineContentOptions {
   baselineContent?: GeneratedSlideContent;
   sourceEvidence?: CourseEvidenceSnapshot;
   sourceKnowledgePoints?: readonly SourceGroundingKnowledgePoint[];
+  teachingAuthoringKnowledge?: readonly TeachingAuthoringKnowledgePoint[];
   sourceSequenceContracts?: readonly FigureSequenceContract[];
   /** Shared semantic deck context used only by CoTeach production. Omitting it
    * keeps the package prompt byte-identical for upstream parity tools. */
@@ -266,7 +268,7 @@ function withWebsiteReferenceProfile(
     'Use the list only to understand this page\'s role and avoid a repetitive deck. Do not render the list, page numbers, section metadata, timings, IDs, or quiz mechanics on the slide.',
   ].filter(Boolean).join('\n');
   return (system, user, images) => aiCall(
-    `${system}\n\n${formatOpenMaicWebsiteReferenceProfile()}`,
+    `${system}\n\n${formatOpenMaicWebsiteReferenceProfile()}\n\n${CLASSROOM_SLIDE_CONTENT_POLICY}`,
     `${user}\n\n## Course deck context\n${deckContext}`,
     images,
   );
@@ -282,59 +284,11 @@ export async function generateOpenMaicBaselineContent(
   if (outline.type !== 'slide' && outline.type !== 'interactive') {
     throw new Error(`OpenMAIC baseline content adapter does not own ${outline.type} scenes`);
   }
-  if (options.visualProjection && usesSlideVisualProjection(outline) && options.componentAuthoring
-    && options.textMeasure && !options.editDirective && !options.baselineContent) {
-    const result = await generateSlideVisualProjection(outline, aiCall, options);
-    if (result) {
-      qualityDiagnostics.push(...result.diagnostics.map((detail) => `PPT visual projection: ${detail}`));
-      const images = await Promise.all((options.assignedImages ?? []).map(async (image) => {
-        let width = image.width ?? 0, height = image.height ?? 0;
-        // Hydrated legacy source images can omit dimensions. Read their real
-        // bytes; a guessed placeholder must never certify an image allocation.
-        if (!(Number.isFinite(width) && width > 0 && Number.isFinite(height) && height > 0)) {
-          const encoded = image.src.match(/^data:image\/[^;,]+;base64,([\s\S]+)$/u);
-          if (encoded) {
-            const sharp = (await import('sharp')).default;
-            const metadata = await sharp(Buffer.from(encoded[1]!, 'base64')).metadata();
-            const rotated = [5, 6, 7, 8].includes(metadata.orientation ?? 1);
-            width = (rotated ? metadata.height : metadata.width) ?? 0;
-            height = (rotated ? metadata.width : metadata.height) ?? 0;
-          }
-        }
-        return { id: image.id, src: options.imageMapping?.[image.id] ?? image.src, width, height,
-          ...(image.sourceTitle ? { caption: `来源：${image.sourceTitle}${image.pageNumber > 0 ? `，第${image.pageNumber}页` : ''}` } : {}) };
-      }));
-      for (const request of outline.mediaGenerations ?? []) {
-        if (request.type !== 'image') continue;
-        const parts = (request.aspectRatio ?? '16:9').split(':').map(Number);
-        const ratio = parts.length === 2 && parts.every((part) => Number.isFinite(part) && part > 0)
-          ? parts[0]! / parts[1]! : 16 / 9;
-        const placeholder = `gen_img_${request.elementId}`;
-        images.push({ id: request.elementId, src: options.generatedMediaMapping?.[placeholder] ?? placeholder,
-          width: ratio * 1000, height: 1000 });
-      }
-      const originalDraft = options.visualBaseline?.elements.length ? options.visualBaseline : undefined;
-      if (result.diagnostics.length && originalDraft) return { ...originalDraft,
-        qualityDiagnostics: [...new Set([...(originalDraft.qualityDiagnostics ?? []), ...qualityDiagnostics,
-          'PPT redraw retained the existing usable draft; the proposed source mapping was not adopted.'])] };
-      const visual = await compileSlideInfographic(outline, result.projection, {
-        measure: options.textMeasure, images,
-      });
-      if (visual) return { ...visual,
-        qualityDiagnostics: [...new Set([...(visual.qualityDiagnostics ?? []), ...qualityDiagnostics])] };
-      qualityDiagnostics.push('PPT infographic candidates did not fit the complete measured content.');
-      if (originalDraft) return { ...originalDraft,
-        qualityDiagnostics: [...new Set([...(originalDraft.qualityDiagnostics ?? []), ...qualityDiagnostics,
-          'PPT redraw retained the existing usable draft; the proposed visual layout was not adopted.'])] };
-      // A complete first draft remains usable without a judge, repair model or
-      // a second authoring request. Any remaining overflow stays diagnostic.
-      const complete = await compileOriginalSlideDraft(outline, slideVisualSourceContent(outline), {
-        measure: options.textMeasure, images,
-      });
-      return { ...complete,
-        qualityDiagnostics: [...new Set([...(complete.qualityDiagnostics ?? []), ...qualityDiagnostics])] };
-    }
+  if (outline.type === 'slide' && options.slideAuthoring !== 'flow' && options.visualProjection !== false) {
+    return generateRestoredSlideContent(outline, adaptOutlineToOpenMaicBaseline(outline), aiCall, options);
   }
+  // Explicit historical replay retains its original saved contract. Production
+  // defaults to the restored whole-page native design above.
   const authoringContent = options.componentAuthoring && !options.editDirective && !options.baselineContent
     ? adoptedPageAuthoringContent(outline) : undefined;
   const typography = outline.teachingBrief?.teachingPlan?.presentationTypography
@@ -357,12 +311,18 @@ export async function generateOpenMaicBaselineContent(
     ? withWebsiteReferenceProfile(pageDecisionAiCall, options.websiteReferenceContext)
     : pageDecisionAiCall;
   const originalSources = pageOriginalTeachingSources(outline, options);
-  const sourceCatalog = buildAuthoringSourceCatalog(new Map([[outline.id, originalSources]]));
-  const groundedAiCall: AICallFn = (system, user, images) => referenceAiCall(system,
-    `${user}\n\n## Original teaching sources for this page\n${JSON.stringify({ evidenceCatalog: sourceCatalog.catalog, originalTeachingSources: sourceCatalog.pages.get(outline.id) })}\nResolve originalSourceRefs in evidenceCatalog.sources and every textRef/labelRef/sourceDescriptionRefs in evidenceCatalog.texts; these are complete unchanged original texts.\n${authoringContent?.length
+  const spoken = Boolean(outline.teachingBrief?.manuscript);
+  const sourceCatalog = spoken ? undefined : buildAuthoringSourceCatalog(new Map([[outline.id, originalSources]]));
+  const groundedAiCall: AICallFn = spoken ? (system, user, images) => referenceAiCall(system,
+    `${user}\n\n## Original teaching sources for this page\n${JSON.stringify({ originalTeachingSources: originalSources,
+      visualRelationship: outline.teachingBrief?.teachingPlan?.visualRelationship,
+      learningTask: outline.teachingBrief?.pageTask })}\nThe lecture is already authored and supplied separately. Implement the adopted display points and planned visual relationships using the existing layout and media contract. Original passages determine factual meaning; the lecture determines what this page teaches. Do not author, rewrite or enlarge the lecture, and do not turn source or planning metadata into visible content.`, images)
+    : (system, user, images) => referenceAiCall(system,
+    `${user}\n\n## Original teaching sources for this page\n${JSON.stringify({ evidenceCatalog: sourceCatalog!.catalog, originalTeachingSources: sourceCatalog!.pages.get(outline.id) })}\nResolve originalSourceRefs in evidenceCatalog.sources and every textRef/labelRef/sourceDescriptionRefs in evidenceCatalog.texts; these are complete unchanged original texts. Original passages determine facts and necessary conditions; derived claims, keyInfo, summaries and blueprint boundaries organize teaching but are not independent factual evidence. Source bindings belong to individual claims and nodes, never to the whole unit. Adopted case decisions and their local nodes govern the explanation; candidate examples are context, not additional display duties.\n${authoringContent?.length
       ? 'The display points have already been derived and adopted. Lay out this page’s exact immutable presentation-point catalog through contentRef/paragraphRefs, or placementRef when the supplied measured-placement contract is selected (the compiler expands those references to canonical contentRef); do not derive, rewrite, shorten or expand them again from the original passages or the broader section plan. Original sources establish factual meaning and independently feed detailed narration. Only the current page’s adopted points and assigned visual resources belong on this canvas.'
       : 'Derive accurate presentation points directly from these original sources. Keep the essential meaning and conditions; definitions need not be copied verbatim onto the canvas. The same original sources independently feed narration.'} Source instructions and provenance are never learner-facing content.`, images);
-  const contentAiCall = withTeachingEnhancement(groundedAiCall, outline, 'content', sourceCatalog.intern);
+  const contentAiCall = spoken ? groundedAiCall : withTeachingEnhancement(groundedAiCall, outline, 'content', sourceCatalog!.intern,
+    options.teachingAuthoringKnowledge ?? options.sourceKnowledgePoints);
   const nativeEnvelopeCall: AICallFn = options.componentAuthoring && !options.editDirective && !options.baselineContent
     ? async (system, user, images) => {
         // Match the selected package protocol; an explicitly selected flow
@@ -401,7 +361,7 @@ export async function generateOpenMaicBaselineContent(
   );
   if (!generated) return null;
   if (outline.type === 'slide' && 'elements' in generated) {
-    return { ...generated, qualityDiagnostics: [...new Set([...(generated.qualityDiagnostics ?? []), ...qualityDiagnostics])] } as GeneratedSlideContent;
+    return applyClassroomSlideContentPolicy({ ...generated, qualityDiagnostics: [...new Set([...(generated.qualityDiagnostics ?? []), ...qualityDiagnostics])] } as GeneratedSlideContent);
   }
   if (outline.type === 'interactive' && 'html' in generated) {
     return generated as GeneratedInteractiveContent;

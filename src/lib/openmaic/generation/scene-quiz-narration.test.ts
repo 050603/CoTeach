@@ -35,8 +35,10 @@ describe('three-phase quiz narration', () => {
     expect(ai.mock.calls[0][0]).toContain('review-guidance');
     expect(ai.mock.calls[0][1]).toContain('随机抽取让总体成员获得入样机会');
     expect(ai.mock.calls[0][1]).toContain('实验设计首先要控制其他因素');
-    expect(ai.mock.calls[0][1]).toContain('答题前约 40');
-    expect(ai.mock.calls[0][1]).toContain('确认理解后约 120');
+    expect(ai.mock.calls[0][1]).toContain('三段口播共用约 200');
+    expect(ai.mock.calls[0][1]).toContain('不设段落比例或句数配额');
+    expect(ai.mock.calls[0][1]).not.toContain('答题前约 40');
+    expect(ai.mock.calls[0][1]).not.toContain('确认理解后约 120');
     expect(actions.map((action) => action.type === 'speech' ? action.quizNarrationPhase : undefined))
       .toEqual(['intro', 'review-guidance', 'handoff']);
     expect(timed.flatMap((action) => action.type === 'speech' && 'activityPausePurpose' in action

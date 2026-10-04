@@ -32,7 +32,7 @@ function response(candidate: NativeTextPlacementCandidate) {
 }
 afterAll(() => closeSpatialMeasurementBrowser());
 
-describe('first-response native text placement', () => {
+describe('legacy replay: first-response native text placement', () => {
   it('advertises a measured paragraph composition when separate placement boxes cannot hold the same claims', async () => {
     const catalog = Array.from({ length: 10 }, (_, index) => ({ id: `point-${index}`,
       text: `试验${index + 1}：只有温度与培养时间相同，甲组与乙组的颜色才可比较。` }));
@@ -124,7 +124,7 @@ describe('first-response native text placement', () => {
       return draft;
     });
     const result = await generateOpenMaicBaselineContent(page, call, {
-      componentAuthoring: true, slideAuthoring: 'native', textMeasure: measureAuthoredSlideText,
+      visualProjection: false, componentAuthoring: true, slideAuthoring: 'native', textMeasure: measureAuthoredSlideText,
     });
     expect(call).toHaveBeenCalledOnce();
     const elements = result && 'elements' in result ? result.elements : [];
@@ -246,7 +246,7 @@ describe('first-response native text placement', () => {
     });
     const onFailure = vi.fn();
     const result = await generateOpenMaicBaselineContent(outline, call, {
-      componentAuthoring: true, slideAuthoring: 'native', textMeasure: measureAuthoredSlideText, onFailure,
+      visualProjection: false, componentAuthoring: true, slideAuthoring: 'native', textMeasure: measureAuthoredSlideText, onFailure,
     });
     expect(call).toHaveBeenCalledOnce();
     expect(onFailure).not.toHaveBeenCalled();
@@ -273,7 +273,7 @@ describe('first-response native text placement', () => {
     });
     const onFailure = vi.fn();
     const result = await generateOpenMaicBaselineContent(comparison, ai, {
-      componentAuthoring: true, slideAuthoring: 'native', textMeasure: measureAuthoredSlideText, onFailure,
+      visualProjection: false, componentAuthoring: true, slideAuthoring: 'native', textMeasure: measureAuthoredSlideText, onFailure,
     });
     expect(ai).toHaveBeenCalledOnce();
     expect(onFailure).not.toHaveBeenCalled();
@@ -292,7 +292,7 @@ import { withTeachingSlideGuidance } from './teaching-narration';
 import { nativeTextRelationCaption } from './native-text-placement';
 const conflictOutline = conflict.outline as unknown as SceneOutline;
 
-describe('saved text-relationship first-input conflict', () => {
+describe('legacy replay: saved text-relationship first-input conflict', () => {
   it('recognizes only the complete adopted relation caption and preserves the failed original response', async () => {
     const adopted = adoptedPageAuthoringContent(conflictOutline);
     const plan = await buildNativeTextPlacementPlan(conflictOutline, adopted, { measure: measureAuthoredSlideText });
@@ -319,7 +319,7 @@ describe('saved text-relationship first-input conflict', () => {
       return conflict.response;
     });
     const generated = await generateOpenMaicBaselineContent(conflictOutline, withTeachingSlideGuidance(call, conflictOutline), {
-      componentAuthoring: true, slideAuthoring: 'native', textMeasure: measureAuthoredSlideText,
+      visualProjection: false, componentAuthoring: true, slideAuthoring: 'native', textMeasure: measureAuthoredSlideText,
       websiteReferenceContext: { courseTitle: '中小学人工智能教育', slideTitles: [conflictOutline.title] },
     });
     expect(generated).toMatchObject({ qualityDiagnostics: expect.arrayContaining([expect.stringContaining(conflict.expectedFailure)]) });
@@ -368,7 +368,7 @@ describe('saved text-relationship first-input conflict', () => {
 });
 
 import defaultPlacementFixture from './__fixtures__/native-text-default-placement.json';
-describe('host-selected default native placement', () => {
+describe('legacy replay: host-selected default native placement', () => {
   it('fixes the largest offered readable layout before authoring and losslessly expands the real bare-reference response', async () => {
     const page = defaultPlacementFixture.outline as unknown as SceneOutline;
     const adopted = adoptedPageAuthoringContent(page);
@@ -392,7 +392,7 @@ describe('host-selected default native placement', () => {
     });
     const onFailure = vi.fn();
     const result = await generateOpenMaicBaselineContent(page, withTeachingSlideGuidance(call, page), {
-      componentAuthoring: true, slideAuthoring: 'native', textMeasure: measureAuthoredSlideText, onFailure,
+      visualProjection: false, componentAuthoring: true, slideAuthoring: 'native', textMeasure: measureAuthoredSlideText, onFailure,
     });
     expect(call).toHaveBeenCalledOnce(); // Local fixture only; no provider.
     expect(onFailure).not.toHaveBeenCalled();

@@ -3,6 +3,32 @@ import { bindKnowledgeSourceSequenceReferences, formatCourseEvidenceContext, res
   sourceSequenceSemantics, type CourseEvidenceItem, type CourseEvidenceSnapshot } from "./course-evidence-types";
 
 describe("knowledge structure evidence context", () => {
+  it('shares complete original paragraphs across retrieved items while retaining each adoption and real location', () => {
+    const story = '青蛙向小鱼描述牛，小鱼据已有形象想象了长腿长角的鱼。';
+    const source = { textbookId: 'book', textbookTitle: '学习理论', revisionId: 'revision', revisionVersion: 1,
+      sectionId: 'story', sectionPath: ['学习理论', '建构主义', '小鱼的故事'],
+      sourceBlockId: 'fish', sourceBlockPosition: 17, quote: story };
+    const snapshot: CourseEvidenceSnapshot = { schemaVersion: 2, version: 1,
+      fingerprint: 'shared-case', createdAt: '2026-10-02', retrievalMode: 'hybrid', warnings: [], selections: [],
+      items: ['first', 'second'].map((id) => ({ id, kind: 'concept', title: '建构主义', content: '概念检索摘要',
+        source, completeSourceBlocks: [{ sourceBlockId: 'fish', content: story, source }] })),
+      mappings: ['first', 'second'].map((id) => ({ sourceKnowledgePointId: id, sourceKnowledgePointName: id,
+        status: 'direct', evidenceItemIds: [id], rationale: '相关原文' })),
+    };
+    const compact = formatCourseEvidenceContext(snapshot, { deduplicateItems: true });
+    expect(compact.split(story)).toHaveLength(2);
+    const payload = JSON.parse(compact.split('\n\n')[1]) as {
+      sourceBlocks: Array<{ content: string; source: typeof source }>;
+      evidenceItems: Array<{ id: string; completeSourceBlocks: Array<{ sourceBlockId: string; source: typeof source }> }>;
+    };
+    expect(payload.sourceBlocks).toHaveLength(1);
+    expect(payload.sourceBlocks[0]?.source.sourceBlockPosition).toBe(17);
+    expect(payload.evidenceItems.map((item) => item.id)).toEqual(['first', 'second']);
+    expect(payload.evidenceItems.every((item) => item.completeSourceBlocks[0]?.sourceBlockId === 'fish')).toBe(true);
+    expect(payload.evidenceItems.every((item) => item.completeSourceBlocks[0]?.source.sectionId === 'story')).toBe(true);
+    expect(snapshot.items[0]?.source.quote).toBe(story);
+  });
+
   it("lists shared textbook evidence once while preserving each source mapping", () => {
     const snapshot: CourseEvidenceSnapshot = {
       schemaVersion: 2, version: 1, fingerprint: "context-test", createdAt: "2026-01-01T00:00:00.000Z", warnings: [],

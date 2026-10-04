@@ -13,8 +13,9 @@ import type {
 } from '@/lib/session/types';
 import type { TeachingResourceNeed } from '@/lib/course-quality-review/types';
 import { projectTeachingPageContent } from '@/lib/course-design/teaching-page-content';
-import { pageSourceSequenceUses, scopeSourceSequenceContracts, usesSourceSequence } from './source-sequence-use';
+import { hasExplicitNativeSourceSequenceUse, pageSourceSequenceUses, scopeSourceSequenceContracts, usesSourceSequence } from './source-sequence-use';
 import { hasExplicitFigureScope, selectedFigureIds, type FigureUsePage } from './figure-use';
+import { PPT_PAGE_PLANNING_VERSION } from '@/lib/course-design/ppt-page-planning-contract';
 import { compactSourceSequenceText as compact, findSourceSequenceLabelPosition,
   hasSourceSequenceLabel, sourceSequenceLabelKey } from './source-sequence-label';
 export { hasSourceSequenceLabel, sourceSequenceLabelKey } from './source-sequence-label';
@@ -483,7 +484,8 @@ export function findBlueprintFigureSequenceIssues(
     const candidates = blueprint.sections.flatMap((section, sectionIndex) =>
       section.pages.flatMap((page, pageIndex) => page.type === 'slide'
         && usesSourceSequence(page, contract)
-        && page.knowledgePointIds.some((id) => contract.knowledgePointIds.includes(id))
+        && (page.knowledgePointIds.some((id) => contract.knowledgePointIds.includes(id))
+          || hasExplicitNativeSourceSequenceUse(page, contract, section.pptPlanningVersion))
         ? [{ section, sectionIndex, page, pageIndex }] : []));
     if (!candidates.length) return [{ resourceId: contract.resourceId, pageId: '',
       sectionIndex: -1, pageIndex: -1, detail: contract.scope === 'knowledge-point'
@@ -505,7 +507,8 @@ export function findBlueprintFigureSequenceIssues(
     return inspectFigureSequence({ orderedSteps: contract.orderedSteps, statements: [], contentGroups,
       sequenceSemantics: contract.sequenceSemantics,
       relatedSequences: scoped.filter((related) => related.required
-        && matches.some(({ page }) => page.knowledgePointIds.some((id) => related.knowledgePointIds.includes(id)))),
+        && matches.some(({ page, section }) => page.knowledgePointIds.some((id) => related.knowledgePointIds.includes(id))
+          || hasExplicitNativeSourceSequenceUse(page, related, section.pptPlanningVersion))),
       requireCompleteText: true, requiredStepLabels: contract.requiredStepLabels }).map((detail) => ({
       resourceId: contract.resourceId, pageId: target.page.outlineId ?? target.page.id,
       sectionIndex: target.sectionIndex, pageIndex: target.pageIndex, detail,
@@ -602,13 +605,15 @@ export function assertSourceSequencesInOutlines(
     const pages = outlines.filter((page) => page.type === 'slide'
       && usesSourceSequence(page, contract)
       && page.generationPurpose === 'knowledge-teaching'
-      && page.knowledgePointIds?.some((id) => contract.knowledgePointIds.includes(id)));
+      && (page.knowledgePointIds?.some((id) => contract.knowledgePointIds.includes(id))
+        || hasExplicitNativeSourceSequenceUse(page, contract)));
     if (!pages.length) throw new Error(`教材完整步骤 ${contract.resourceId} 缺少知识讲解页`);
     const contentGroups = pages.flatMap(outlineSequenceContent);
     const problems = inspectFigureSequence({ orderedSteps: contract.orderedSteps!, statements: [], contentGroups,
       sequenceSemantics: contract.sequenceSemantics,
       relatedSequences: [...scoped.filter((related) => related.required
-        && pages.some((page) => page.knowledgePointIds?.some((id) => related.knowledgePointIds.includes(id)))),
+        && pages.some((page) => page.knowledgePointIds?.some((id) => related.knowledgePointIds.includes(id))
+          || hasExplicitNativeSourceSequenceUse(page, related))),
       ...relatedSequences], requireCompleteText: true, requiredStepLabels: contract.requiredStepLabels });
     if (problems.length) throw new Error(`教材完整步骤 ${contract.resourceId} 与课程大纲不一致：${problems.join('；')}`);
   }
@@ -731,6 +736,7 @@ function bindResource(
   outline: SceneOutline,
   resource: CourseTextbookFigureResource,
 ): SceneOutline {
+  const native = outline.teachingBrief?.pptPlanningVersion === PPT_PAGE_PLANNING_VERSION;
   const existingRefs = outline.visualIntent?.resourceRefs ?? [];
   const isThisSource = (candidate: VisualResourceReference) => candidate.kind === 'source-image'
     && (candidate.resourceId === resource.id || candidate.resourceId === resource.assetId);
@@ -738,7 +744,7 @@ function bindResource(
   const reference: VisualResourceReference = {
     kind: 'source-image',
     reason: resource.description ?? `Use the original figure from ${resource.sourceTitle}.`,
-    observationGoal: resource.description,
+    ...(!native ? { observationGoal: resource.description } : {}),
     ...prior,
     resourceId: resource.id,
     required: true,
@@ -760,8 +766,13 @@ function bindResource(
         ...existingRefs.filter((candidate) => !isThisSource(candidate)),
         reference,
       ],
-      rationale: outline.visualIntent?.rationale
-        || 'The textbook directly associates this original figure with the knowledge point introduced here.',
+      // Native pages already own the reason and observation contract. The
+      // legacy default is not authored meaning and cannot be injected here
+      // only to disappear on an otherwise unchanged teacher confirmation.
+      ...(outline.visualIntent?.rationale ? { rationale: outline.visualIntent.rationale }
+        : !native
+          ? { rationale: 'The textbook directly associates this original figure with the knowledge point introduced here.' }
+          : {}),
     },
   };
 }

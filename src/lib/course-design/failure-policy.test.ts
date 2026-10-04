@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { invalidGeneratedOutput } from '@/lib/openmaic/generation/generated-output-retry';
 import {
   classifyCourseDesignFailure,
   createManagedRecoveryRequest,
@@ -8,6 +9,16 @@ import {
 } from "./failure-policy";
 
 describe("course design failure policy", () => {
+  it('reports a spoken source identity conflict as a concrete compilation failure', () => {
+    const error = invalidGeneratedOutput(new Error('口播段落引用未知原文：missing-block'), '第4节：小节口播无法编译');
+    const message = formatFatalCourseDesignError(error);
+    expect(message).toContain('第4节');
+    expect(message).toContain('missing-block');
+    expect(message).toContain('无法编译为可执行页面');
+    expect(message).not.toContain('系统错误');
+    expect(message).not.toContain('质量验收');
+    expect(formatFatalCourseDesignError(new Error(message))).toBe(message);
+  });
   it("does not turn model structure or quality failures into a whole-course rewrite", () => {
     const error = new Error("主课脚本代理无法生成结构完整的数据：缺少知识点覆盖");
     expect(classifyCourseDesignFailure(error)).toBe("recoverable-generation");

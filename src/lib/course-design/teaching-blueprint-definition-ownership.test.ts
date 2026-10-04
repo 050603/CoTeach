@@ -3,6 +3,34 @@ import fixture from './__fixtures__/blueprint-definition-ownership-first-draft.j
 import { buildSourceConceptStatements, buildTeachingBlueprintPrompt, buildTeachingBlueprintRepairPrompt, generateTeachingBlueprint, revalidateStoredTeachingBlueprint,
   teachingBlueprintToOutlines, validateTeachingBlueprintDraft, type TeachingBlueprintInput } from './teaching-blueprint';
 import type { CourseEvidenceSnapshot } from '@/lib/textbook/course-evidence-types';
+import type { AICallFn } from '@/lib/openmaic/generation/pipeline-types';
+
+async function expectDiagnosedDraft(input: TeachingBlueprintInput, response: unknown,
+  ai: AICallFn, issue: string) {
+  const before = structuredClone(response);
+  const strict = validateTeachingBlueprintDraft(response, input);
+  expect(strict.blueprint).toBeUndefined();
+  expect(strict.issues.join('；')).toContain(issue);
+  const generated = await generateTeachingBlueprint(input, ai);
+  expect(generated.qualityDiagnostics?.join('；')).toContain(issue);
+  // Structural normalization may rename IDs; it must not rewrite the actual
+  // faulty first draft or manufacture the missing evidence to clear a warning.
+  type RawNode = { content?: string; contentParts?: Array<{ text: string }> };
+  const raw = response as { sections: Array<{ units: Array<{ explanationNodes?: RawNode[] }>;
+    pages: Array<{ title: string; explanationNodes?: RawNode[] }> }> };
+  const bodies = raw.sections.flatMap((section) => [
+    ...section.units.flatMap((unit) => unit.explanationNodes ?? []),
+    ...section.pages.flatMap((page) => page.explanationNodes ?? []),
+  ]).map((node) => node.contentParts?.map((part) => part.text).join(' ') ?? node.content);
+  expect(generated.sections.flatMap((section) => section.units.flatMap((unit) => unit.explanationNodes ?? []))
+    .map((node) => node.content)).toEqual(bodies);
+  expect(generated.sections.flatMap((section) => section.pages.map((page) => page.title)))
+    .toEqual(raw.sections.flatMap((section) => section.pages.map((page) => page.title)));
+  expect(response).toEqual(before);
+  // The unchanged authored response continues to fail strict acceptance.
+  expect(validateTeachingBlueprintDraft(response, input).issues.join('；')).toContain(issue);
+  return generated;
+}
 
 function sample(kind: 'concept' | 'orphan') {
   const { point, unit, page } = structuredClone(fixture[kind]);
@@ -197,7 +225,7 @@ describe('source-faithful definition and unique unit ownership from saved first 
     expect(reused.blueprint?.budget).toEqual(blueprint.budget);
   });
 
-  it('stops a first page relying on a later actual explanation without borrowing, moving or rewriting that body', async () => {
+  it('diagnoses a first page relying on a later actual explanation without borrowing, moving or rewriting that body', async () => {
     const { input, candidate } = teachingAspectSample();
     const section = candidate.sections[0]!;
     const { explanationNodes: body, ...unit } = section.units[0]!;
@@ -213,7 +241,7 @@ describe('source-faithful definition and unique unit ownership from saved first 
     ] }] };
     const before = structuredClone(response);
     const ai = vi.fn().mockResolvedValue(JSON.stringify(response));
-    await expect(generateTeachingBlueprint(input, ai)).rejects.toThrow('本页更早正文');
+    await expectDiagnosedDraft(input, response, ai, '本页更早正文');
     expect(ai).toHaveBeenCalledOnce();
     expect(response).toEqual(before);
   });
@@ -263,7 +291,7 @@ describe('source-faithful definition and unique unit ownership from saved first 
     expect(reused.blueprint?.budget.totalDurationSec).toBe(blueprint.budget.totalDurationSec);
   });
 
-  it('rejects a nonexistent factual part without another authoring call or borrowing free text', async () => {
+  it('diagnoses a nonexistent factual part without another authoring call or borrowing free text', async () => {
     const { input, candidate } = teachingAspectSample();
     const section = candidate.sections[0]!;
     const response = { ...candidate, authoringContract: 'blueprint-v3', sections: [{ ...section,
@@ -275,7 +303,7 @@ describe('source-faithful definition and unique unit ownership from saved first 
       }] }],
     }] };
     const ai = vi.fn().mockResolvedValue(JSON.stringify(response));
-    await expect(generateTeachingBlueprint(input, ai)).rejects.toThrow('contentParts.id');
+    await expectDiagnosedDraft(input, response, ai, 'contentParts.id');
     expect(ai).toHaveBeenCalledOnce();
   });
 
@@ -298,7 +326,7 @@ describe('source-faithful definition and unique unit ownership from saved first 
     expect(revalidateStoredTeachingBlueprint(blueprint, input).issues).toEqual([]);
   });
 
-  it('rejects a separately paraphrased first display point without another model repair call or falling back to keyPoints', async () => {
+  it('diagnoses a separately paraphrased first display point without another model repair call or falling back to keyPoints', async () => {
     const content = '缓存一致性是同一数据存在多个副本时，使各副本遵守既定更新和读取规则的机制。副本不要求立即更新，但必须符合系统采用的一致性规则。';
     const { input, candidate } = teachingAspectSample('缓存一致性的定义与机制', ['缓存一致性'], content);
     const response = { ...candidate, authoringContract: 'blueprint-v2', sections: [{ ...candidate.sections[0],
@@ -307,7 +335,7 @@ describe('source-faithful definition and unique unit ownership from saved first 
           quote: '副本不要求更新。' }] }],
     }] };
     const ai = vi.fn().mockResolvedValue(JSON.stringify(response));
-    await expect(generateTeachingBlueprint(input, ai)).rejects.toThrow('keyPointRefs');
+    await expectDiagnosedDraft(input, response, ai, 'keyPointRefs');
     expect(ai).toHaveBeenCalledOnce();
   });
 
@@ -340,7 +368,7 @@ describe('source-faithful definition and unique unit ownership from saved first 
         keyPointRefs: [{ nodeId: condition!.id, quote: condition!.content }] },
     ] }] };
     const ai = vi.fn().mockResolvedValue(JSON.stringify(response));
-    await expect(generateTeachingBlueprint(input, ai)).rejects.toThrow('尚未实际讲授');
+    await expectDiagnosedDraft(input, response, ai, '尚未实际讲授');
     expect(ai).toHaveBeenCalledOnce();
   });
 
@@ -421,7 +449,7 @@ describe('source-faithful definition and unique unit ownership from saved first 
     point.sourceKnowledgePointNames![0] = '程序的控制结构';
     candidate.sections[0]!.units[0]!.explanationNodes[0]!.content = `程序包括顺序、选择与循环三类。${definitions}`;
     const ai = vi.fn().mockResolvedValue(JSON.stringify(candidate));
-    await expect(generateTeachingBlueprint(input, ai)).rejects.toThrow('核心概念');
+    await expectDiagnosedDraft(input, candidate, ai, '核心概念');
     expect(ai).toHaveBeenCalledOnce();
   });
 
@@ -455,12 +483,12 @@ describe('source-faithful definition and unique unit ownership from saved first 
     });
 
   it.each(['顺序、选择与循环四类', '顺序、选择与循环、异常处理四类', '顺序、顺序与循环三类'])
-    ('rejects a changed count or unconfirmed/repeated category in %s', async (members) => {
+    ('diagnoses a changed count or unconfirmed/repeated category in %s', async (members) => {
       const { input, candidate, definitions } = combinedConceptSample();
       input.knowledgePoints[0]!.name = '程序控制结构：顺序、选择与循环';
       candidate.sections[0]!.units[0]!.explanationNodes[0]!.content = `程序控制结构包括${members}。${definitions}`;
       const ai = vi.fn().mockResolvedValue(JSON.stringify(candidate));
-      await expect(generateTeachingBlueprint(input, ai)).rejects.toThrow('核心概念');
+      await expectDiagnosedDraft(input, candidate, ai, '核心概念');
       expect(ai).toHaveBeenCalledOnce();
     });
 
@@ -478,7 +506,7 @@ describe('source-faithful definition and unique unit ownership from saved first 
       candidate.sections[0]!.units[0]!.explanationNodes[0]!.content = statement;
       input.sourceContext = statement;
       const ai = vi.fn().mockResolvedValue(JSON.stringify(candidate));
-      await expect(generateTeachingBlueprint(input, ai)).rejects.toThrow('核心概念');
+      await expectDiagnosedDraft(input, candidate, ai, '核心概念');
       expect(ai).toHaveBeenCalledOnce();
     });
 
@@ -584,7 +612,7 @@ describe('source-faithful definition and unique unit ownership from saved first 
     const { input, candidate } = teachingAspectSample('分层缓存策略的定义与机制',
       ['分层缓存策略', '分层缓存策略的机制'], definition);
     const ai = vi.fn().mockResolvedValue(JSON.stringify(candidate));
-    await expect(generateTeachingBlueprint(input, ai)).rejects.toThrow('核心概念');
+    await expectDiagnosedDraft(input, candidate, ai, '核心概念');
     expect(ai).toHaveBeenCalledOnce();
   });
 
@@ -827,9 +855,9 @@ describe('source-faithful definition and unique unit ownership from saved first 
     expect(ai).toHaveBeenCalledOnce();
     expect(ai.mock.calls[0]![1]).toContain('"requiredDefinitionNames":["顺序结构","选择结构","循环结构"]');
     expect(ai.mock.calls[0]![1]).toContain('"requiredCoreNodeKinds":["term","concept","relation"]');
-    expect(ai.mock.calls[0]![0]).toContain('每个单元必须至少有一个 term、concept 或 relation 节点');
+    expect(ai.mock.calls[0]![0]).toContain('每个单元至少有一个 term、concept 或 relation 节点建立自身新增认识');
     expect(ai.mock.calls[0]![0]).toContain('explanationNode.knowledgePointIds 只能包含当前 unit.knowledgePointIds');
-    expect(ai.mock.calls[0]![0]).toContain('跨单元承接使用 prerequisiteNodeIds');
+    expect(ai.mock.calls[0]![0]).toContain('已讲概念由 prerequisiteNodeIds 引用');
     expect(ai.mock.calls[0]![1]).toContain('"fieldVariants":[{"preferredForms":["text","table","chart","illustration"]');
     expect(ai.mock.calls[0]![0]).toContain('text/table/chart/illustration 必须省略 diagram');
     expect(ai.mock.calls[0]![0]).toContain('观察对象、并排对比和阅读次序不是 sequence 节点');

@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Course } from "@/lib/session/types";
 import type { PersistedClassroomData } from "@/lib/openmaic/server/classroom-storage";
 import { SOURCE_SEQUENCE_POLICY_VERSION } from "@/lib/textbook/figure-sequence";
+import { PPT_PAGE_PLANNING_VERSION } from "@/lib/course-design/ppt-page-planning-contract";
 
 const getCourse = vi.fn();
 const readClassroom = vi.fn();
@@ -685,6 +686,46 @@ describe("final course resource audit", () => {
       ]));
   });
 
+  it('audits the selected source fact on a native page with different knowledge ownership', async () => {
+    const fixture = sequenceAuditFixture([{ id: 'cross-kp', labels: ['确定问题', '收集证据', '形成结论'] }]);
+    const outline = fixture.course.content._openmaicSceneOutlines![0]!;
+    const use = { resourceId: 'source-sequence:anchor-cross-kp', coverage: 'selected' as const,
+      sourceStepIds: ['block-cross-kp-0'] };
+    outline.knowledgePointIds = ['application-point'];
+    outline.description = '选讲第一步：确定问题';
+    outline.keyPoints = ['确定问题'];
+    outline.visualIntent = undefined;
+    outline.teachingBrief = { schemaVersion: 1, pptPlanningVersion: PPT_PAGE_PLANNING_VERSION,
+      explanation: '确定问题', examples: [], conditions: [], evidence: [], assessmentFocus: '',
+      teachingPlan: { purpose: '', priorKnowledge: '', learnerQuestion: '', takeaway: '',
+        newContent: '确定问题', visibleContent: ['确定问题'], reasoningSteps: [], narrationFocus: [],
+        sourceSequenceUses: [use] } };
+    // Blueprint coverage is checked independently; exercise the executed page's
+    // actual canvas and speech, not a false success from an empty target set.
+    fixture.course.content.teachingBlueprint!.sections[0]!.pages[0]!.sourceSequenceUses = [use];
+    const scene = fixture.classroom.scenes[0]!;
+    scene.actions = [];
+    if (scene.content.type === 'slide') scene.content.canvas.elements = [{
+      id: 'actual', type: 'text', content: '<p>确定问题</p>',
+    }] as typeof scene.content.canvas.elements;
+    const { auditCourseGeneratedResources } = await import('./resource-audit-server');
+    const actualIssues = async () => (await auditCourseGeneratedResources(fixture.course.id, fixture)).issues
+      .filter((issue) => /:(outline|classroom)$/.test(issue.id));
+    expect(await actualIssues()).toEqual([]);
+    if (scene.content.type === 'slide' && scene.content.canvas.elements[0]?.type === 'text') {
+      scene.content.canvas.elements[0].content = '<p>活动介绍</p>';
+    }
+    expect(await actualIssues()).toContainEqual(expect.objectContaining({
+      id: 'content:source-sequence:page-cross-kp:source-sequence:anchor-cross-kp:classroom',
+      detail: expect.stringContaining('遗漏教材步骤：确定问题'),
+    }));
+    delete outline.teachingBrief.pptPlanningVersion;
+    expect(await actualIssues()).toEqual([]);
+    outline.teachingBrief.pptPlanningVersion = PPT_PAGE_PLANNING_VERSION;
+    outline.teachingBrief.teachingPlan!.sourceSequenceUses = [{ ...use, sourceStepIds: ['unknown-block'] }];
+    expect(await actualIssues()).toEqual([]);
+  });
+
   it('skips all source-content inspection during automatic resource checks but retains it for an explicit review', async () => {
     const fixture = sequenceAuditFixture([{ id: 'source', labels: ['确定问题', '收集证据', '形成结论'] }]);
     const speech = fixture.classroom.scenes[0]!.actions?.[0];
@@ -836,6 +877,21 @@ describe("final course resource audit", () => {
       id: 'content:source-sequence:page-seven:source-sequence:anchor-four:outline',
       type: 'source-consistency', detail: expect.stringContaining('未保留教材的 4 个步骤顺序'),
     }));
+  });
+
+  it('audits spoken outlines from executed speech without the stale compatibility explanation', async () => {
+    const labels = ['确定问题', '收集证据', '形成结论'];
+    const fixture = sequenceAuditFixture([{ id: 'spoken', labels }]);
+    delete fixture.course.content.teachingBlueprint;
+    const outline = fixture.course.content._openmaicSceneOutlines![0]!;
+    outline.keyPoints = ['问题探究'];
+    outline.description = '问题探究';
+    outline.visualIntent = undefined;
+    outline.teachingBrief = { schemaVersion: 1, manuscript: { sectionId: 'section', segmentIds: ['body'] },
+      explanation: '过时副本错误地说教学流程有4个步骤。', examples: [], conditions: [], evidence: [], assessmentFocus: '' };
+    const { auditCourseGeneratedResources } = await import('./resource-audit-server');
+    const audit = await auditCourseGeneratedResources(fixture.course.id, fixture);
+    expect(audit.issues.filter((issue) => issue.type === 'source-consistency')).toEqual([]);
   });
 
   it('keeps a complete source process across continuation pages and still rejects an omitted final step', async () => {

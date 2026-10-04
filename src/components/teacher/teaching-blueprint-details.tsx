@@ -1,6 +1,7 @@
 "use client";
 
 import type { TeachingBlueprint } from "@/lib/session/types";
+import { PPT_PAGE_PLANNING_VERSION } from "@/lib/course-design/ppt-page-planning-contract";
 
 function DetailText({ label, value }: { label: string; value?: string }) {
   if (!value?.trim()) return null;
@@ -47,12 +48,14 @@ export function TeachingBlueprintDetails({ blueprint }: { blueprint: TeachingBlu
                 <summary className="cursor-pointer text-sm font-semibold text-stone-900">{unit.title}</summary>
                 <dl className="mt-4 space-y-4">
                   <DetailText label="学习成果" value={unit.learningOutcome} />
+                  {section.contentMode !== "spoken" && <>
                   <DetailText label="核心解释" value={unit.explanation} />
                   <DetailText label="机制与推理" value={unit.mechanism} />
                   <DetailText label="示例" value={unit.workedExample} />
                   <DetailList label="适用条件与边界" items={unit.conditions} />
                   <DetailList label="常见误解" items={unit.misconceptions} />
-                  <DetailList label="具体讲授内容" items={unit.explanationNodes?.map((node) => node.content)} />
+                  </>}
+                  <DetailList label={section.contentMode === "spoken" ? "讲稿正文" : "具体讲授内容"} items={unit.explanationNodes?.map((node) => node.content)} />
                   <DetailList label="资料依据" items={unit.evidenceQuotes} />
                 </dl>
               </details>
@@ -66,7 +69,7 @@ export function TeachingBlueprintDetails({ blueprint }: { blueprint: TeachingBlu
                 <dl className="mt-3 space-y-3">
                   <DetailText label="页面说明" value={page.description} />
                   <DetailText label="教学目标" value={page.teachingObjective} />
-                  <DetailList label="页面要点" items={page.keyPoints} />
+                  <DetailList label="页面要点" items={section.contentMode === "spoken" && section.pptPlanningVersion !== PPT_PAGE_PLANNING_VERSION ? page.presentationItems?.map((item) => item.text) : page.keyPoints} />
                   <DetailList label="承担的讲授单元" items={section.units.filter((unit) => page.unitIds.includes(unit.id)).map((unit) => unit.title)} />
                 </dl>
               </li>

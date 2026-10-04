@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { PPTShapeElement, PPTTextElement } from '@openmaic/dsl';
+import type { PPTElement, PPTShapeElement, PPTTextElement } from '@openmaic/dsl';
 import {
   compileTextComponents,
   compileNativeTextLayout,
@@ -316,6 +316,144 @@ describe('native slide typography preservation', () => {
     expect(compiled[0]).toBe(card);
     await expect(compileNativeTextLayout([card, body, { ...neighbor, top: 323 }], browserBounds))
       .rejects.toThrow(/text_steps needs 146px but would overlap next_item/);
+  });
+
+  it('uses actual measured glyph ink for growth collisions while retaining genuine text overlap and unknown-area checks', async () => {
+    const body = { ...native('<p style="font-size:18px">完整说明</p>', 400, 40), id: 'body', left: 60, top: 180 };
+    const neighbor = { ...native('<p style="font-size:18px">后续说明</p>', 400, 30), id: 'next', left: 60, top: 222 };
+    const inkMeasure = (neighborInkTop: number, unknown = false): TextMeasure => ({ text }) => text === '完整说明'
+      ? { height: 48, inkBottom: 48, naturalWidth: 100, inkRight: 110, lines: [text],
+        inkRects: [{ left: 10, top: 10, width: 100, height: 38 }] }
+      : { height: 30, inkBottom: 30, naturalWidth: 100, inkRight: 110, lines: [text],
+        ...(unknown ? {} : { inkRects: [{ left: 10, top: neighborInkTop, width: 100, height: 14 }] }) };
+    const clear = await compileNativeTextLayout([body, neighbor], inkMeasure(14));
+    expect(clear[0]).toMatchObject({ id: 'body', height: 48, content: body.content });
+    await expect(compileNativeTextLayout([body, neighbor], inkMeasure(3)))
+      .rejects.toThrow(/body needs 48px but would overlap next/);
+    await expect(compileNativeTextLayout([body, neighbor], inkMeasure(14, true)))
+      .rejects.toThrow(/body needs 48px but would overlap next/);
+  });
+
+  it('does not mistake background paint behind a neighboring source caption for a foreground collision', async () => {
+    const panel = { id: 'diagram-background', type: 'shape', left: 54, top: 124, width: 252, height: 332,
+      rotate: 0, fill: '#EFF6FF' } as unknown as PPTShapeElement;
+    const caption = { ...native('<p style="font-size:16px">完整来源图注</p>', 880, 24), id: 'source', left: 60, top: 96 };
+    const measured: TextMeasure = ({ text }) => ({ height: 29, inkBottom: 29, inkRight: 200,
+      naturalWidth: 180, lines: [text], inkRects: [{ left: 10, top: 10, width: 180, height: 19 }] });
+    expect(await compileNativeTextLayout([panel, caption], measured)).toMatchObject([panel, { ...caption, height: 29 }]);
+    await expect(compileNativeTextLayout([caption, panel], measured)).rejects.toThrow(/would overlap diagram-background/);
+    const peer = { ...caption, id: 'other-words', left: 60, top: 120, height: 30 };
+    const colliding: TextMeasure = (input) => input.text === '完整来源图注' && input.width === 880
+      ? measured(input) : { height: 20, inkBottom: 20, inkRight: 150, naturalWidth: 130, lines: [input.text],
+        inkRects: [{ left: 10, top: 0, width: 130, height: 20 }] };
+    peer.content = '<p style="font-size:16px">真实邻近正文</p>';
+    await expect(compileNativeTextLayout([panel, caption, peer], colliding)).rejects.toThrow(/would overlap other-words/);
+  });
+
+  it('recognizes a preceding background by its original glyph ownership without ignoring ink that spills out', async () => {
+    const card = { id: 'header-background', type: 'shape', left: 50, top: 170, width: 420, height: 52,
+      rotate: 0, fill: '#1E3A8A' } as unknown as PPTShapeElement;
+    const body = { ...native('<p style="font-size:18px">蓝色表头</p>', 400, 40), id: 'header', left: 60, top: 180 };
+    const withinBackground: TextMeasure = ({ text }) => ({ height: 48, inkBottom: 48, inkRight: 120,
+      naturalWidth: 100, lines: [text], inkRects: [{ left: 10, top: 10, width: 100, height: 27 }] });
+    expect(await compileNativeTextLayout([card, body], withinBackground))
+      .toMatchObject([card, { ...body, height: 48 }]);
+    const outsideBackground: TextMeasure = ({ text }) => ({ height: 48, inkBottom: 48, inkRight: 120,
+      naturalWidth: 100, lines: [text], inkRects: [{ left: 10, top: 10, width: 100, height: 38 }] });
+    await expect(compileNativeTextLayout([card, body], outsideBackground))
+      .rejects.toThrow(/header needs 48px but would overlap header-background/);
+  });
+
+  const panelColumn = (id: string, left: number, text: string): PPTElement[] => [
+    { id: `${id}-panel`, type: 'shape', left, top: 224, width: 204, height: 142,
+      rotate: 0, fill: '#FFFFFF' } as PPTShapeElement,
+    { ...native('<p style="font-size:18px;color:#1E3A8A;font-weight:700;line-height:1.5">材料特点</p>', 180, 46),
+      id: `${id}-head`, left: left + 12, top: 228 },
+    { ...native(`<p style="font-size:16px;color:#334155;line-height:1.5">${text}</p>`, 180, 82),
+      id: `${id}-body`, left: left + 12, top: 274 },
+  ];
+  const panelInkMeasure: TextMeasure = (input) => {
+    const count = input.fontSize === 18 ? 1 : input.text.includes('较长') ? input.width < 204 ? 4 : 3 : 2;
+    const inkRects = Array.from({ length: count }, (_, index) => ({ left: 10, top: 17 + index * 24,
+      width: Math.min(140, input.width - 20), height: input.fontSize === 18 ? 16 : 14 }));
+    return { naturalWidth: 400, height: 20 + count * 24, inkBottom: 17 + (count - 1) * 24 + inkRects[0]!.height,
+      inkRight: 150, inkRects, lines: Array.from({ length: count }, () => '实际内容') };
+  };
+
+  it('uses the existing text-only owning panel width before overflow, aligning safe same-row peers without changing fonts or facts', async () => {
+    const first = panelColumn('one', 100, '较长材料说明保留全部事实。');
+    const second = panelColumn('two', 316, '另一材料的完整说明。');
+    const outer = { id: 'group', type: 'shape', left: 80, top: 174, width: 660, height: 204,
+      rotate: 0, fill: '#EFF6FF' } as PPTShapeElement;
+    const source = [outer, first[0]!, second[0]!, ...first.slice(1), ...second.slice(1)];
+    const unchanged = structuredClone(source);
+    const diagnostics: string[] = [];
+    const compiled = await compileNativeTextLayout(source, panelInkMeasure, {
+      preserveNativeComposition: true, onDiagnostic: (detail) => diagnostics.push(detail),
+    });
+    expect(diagnostics).toEqual([]);
+    expect(compiled.slice(0, 3)).toEqual(source.slice(0, 3));
+    for (const element of compiled.filter((element): element is PPTTextElement => element.type === 'text')) {
+      const original = source.find((item) => item.id === element.id)!;
+      expect(element).toEqual({ ...original, left: element.id.startsWith('one') ? 100 : 316, width: 204 });
+    }
+    expect(source).toEqual(unchanged);
+  });
+
+  it('leaves fitting panels and legacy native compilation unchanged', async () => {
+    const fitting = panelColumn('fitting', 100, '完整简短说明。');
+    expect(await compileNativeTextLayout(fitting, panelInkMeasure, { preserveNativeComposition: true })).toEqual(fitting);
+    const overflowing = panelColumn('legacy', 100, '较长说明。');
+    const diagnostics: string[] = [];
+    const compiled = await compileNativeTextLayout(overflowing, panelInkMeasure, { onDiagnostic: (detail) => diagnostics.push(detail) });
+    expect(compiled.find((element) => element.id === 'legacy-body')).toMatchObject({ left: 112, width: 180 });
+    expect(diagnostics.some((detail) => detail.includes('exceeds its authored'))).toBe(true);
+  });
+
+  it.each(['still-overflows', 'unknown-ink', 'mixed-column', 'media', 'connector', 'hidden-panel', 'hidden-text', 'outside-safe-area'] as const)(
+    'keeps genuine diagnostics and the original geometry when the panel-width candidate is unsafe: %s', async (condition) => {
+      const source = panelColumn('conservative', condition === 'outside-safe-area' ? 40 : 100, '较长完整说明。');
+      let measured = panelInkMeasure;
+      if (condition === 'mixed-column') source[1] = { ...source[1]!, left: source[1]!.left + 4 };
+      if (condition === 'media') source.splice(1, 0, { id: 'retained-media', type: 'image', left: 270, top: 250,
+        width: 20, height: 20, rotate: 0, src: 'source-image' } as PPTElement);
+      if (condition === 'connector') source.splice(1, 0, { id: 'real-connector', type: 'line', left: 100, top: 295, width: 1,
+        start: [0, 0], end: [200, 0], style: 'solid', color: '#334155', points: ['', 'arrow'] });
+      if (condition === 'hidden-panel') source[0] = { ...source[0] as PPTShapeElement, opacity: 0 };
+      if (condition === 'hidden-text') source[2] = { ...source[2] as PPTTextElement, opacity: 0 };
+      if (condition === 'still-overflows') measured = (input) => panelInkMeasure({ ...input, width: 180 });
+      if (condition === 'unknown-ink') measured = async (input) => {
+        const { inkRects: _unknown, ...result } = await panelInkMeasure(input);
+        return result;
+      };
+      const diagnostics: string[] = [];
+      const compiled = await compileNativeTextLayout(source, measured, {
+        preserveNativeComposition: true, onDiagnostic: (detail) => diagnostics.push(detail),
+      });
+      const originalBody = source.find((element) => element.id === 'conservative-body')!;
+      expect(compiled.find((element) => element.id === 'conservative-body')).toMatchObject({
+        left: originalBody.left, width: originalBody.width, content: (originalBody as PPTTextElement).content,
+      });
+      expect(diagnostics.length).toBeGreaterThan(0);
+      expect(compiled.filter((element) => element.type !== 'text')).toEqual(source.filter((element) => element.type !== 'text'));
+    },
+  );
+
+  it('rejects widened glyphs that would overlap another foreground even when their original frame did not own that foreground', async () => {
+    const source = panelColumn('collision', 100, '较长完整说明。');
+    const neighbor = { ...native('<p style="font-size:16px">旁注</p>', 30, 30), id: 'side-note', left: 90, top: 290 };
+    source.push(neighbor);
+    const measured: TextMeasure = (input) => input.text === '旁注'
+      ? { naturalWidth: 10, height: 20, inkBottom: 15, inkRight: 25, lines: ['旁注'],
+        inkRects: [{ left: 15, top: 0, width: 10, height: 15 }] }
+      : panelInkMeasure(input);
+    const diagnostics: string[] = [];
+    const compiled = await compileNativeTextLayout(source, measured, {
+      preserveNativeComposition: true, onDiagnostic: (detail) => diagnostics.push(detail),
+    });
+    expect(compiled.find((element) => element.id === 'collision-body')).toMatchObject({ left: 112, width: 180 });
+    expect(compiled.find((element) => element.id === 'side-note')).toEqual(neighbor);
+    expect(diagnostics.some((detail) => detail.includes('panel-width candidate was not safe'))).toBe(true);
   });
 
   it('measures native table cells with authored widths, cell padding and font sizes', async () => {

@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { assertAuthoringContentCoverage, resolveAuthoringContent, type AuthoringContentItem } from '../src/authoring-content.js';
 import { compileNativeTextLayout, compileTextComponents, type TextMeasure } from '../src/text-layout-compiler.js';
+import { NativeContentBindings } from '../src/native-content-bindings.js';
 
 const catalog: readonly AuthoringContentItem[] = Object.freeze([
   Object.freeze({ id: 'condition', text: '条件满足后，再选择方法。', sequence: { id: 'method', index: 0 } }),
@@ -74,6 +75,100 @@ describe('immutable adopted presentation content', () => {
     expect(resolved.components[0].rows[0].cells).toEqual([`${catalog[0].text}\n\n${catalog[1].text}`]);
     expect(source.elements[0]).toHaveProperty('contentRef', 'condition');
     expect(() => assertAuthoringContentCoverage(resolved.elements, catalog)).not.toThrow();
+  });
+
+  it('fills matching paragraph templates without giving the explanation its label typography or extra blank lines', () => {
+    const items = [{ id: 'label', text: '同化' }, { id: 'body', text: '新信息进入原有结构，但不改变结构本身。' }];
+    const template = '<p style="font-size:18px;font-weight:700;color:#1E3A8A;line-height:1.5;"></p>'
+      + '<p style="font-size:18px;font-weight:400;color:#334155;line-height:1.5;"></p>';
+    const source = { elements: [
+      { type: 'text', content: template, paragraphRefs: ['label', 'body'], emphasis: [{ text: '不改变', color: '#C2410C' }] },
+      { type: 'shape', text: { content: template, paragraphRefs: ['label', 'body'] } },
+    ] };
+    const resolved = resolveAuthoringContent(source, items, { bodyFontSize: 18 });
+    expect(resolved.elements[0].content).toBe('<p style="font-size:18px;font-weight:700;color:#1E3A8A;line-height:1.5;">同化</p>'
+      + '<p style="font-size:18px;font-weight:400;color:#334155;line-height:1.5;">新信息进入原有结构，但<span style="color:#C2410C;font-weight:700">不改变</span>结构本身。</p>');
+    expect(resolved.elements[1].text?.content).toBe(template.replace('</p>', '同化</p>').replace(/<\/p>$/, `${items[1]!.text}</p>`));
+    expect(source.elements[0].content).toBe(template);
+    expect(() => assertAuthoringContentCoverage(resolved.elements, items)).not.toThrow();
+  });
+
+  it('uses real paragraph spacing for multiple references in a single shell without growing the authored box or losing bindings', async () => {
+    const items = [
+      { id: 'observe', text: '① 观察材料的外观', sequence: { id: 'inspection', index: 0 } },
+      { id: 'compare', text: '② 比较不同材料的用途', sequence: { id: 'inspection', index: 1 } },
+      { id: 'record', text: '③ 根据结果记录差异', sequence: { id: 'inspection', index: 2 } },
+    ];
+    const shell = '<p style="font-size:16px;color:#334155;line-height:1.5;"></p>';
+    const source = { elements: [{ id: 'inspection', type: 'text' as const, left: 636, top: 246, width: 288, height: 104, rotate: 0,
+      defaultFontName: '', defaultColor: '#334155', content: shell, paragraphRefs: items.map((item) => item.id),
+      emphasis: [{ text: '不同材料', color: '#1E3A8A', bold: true }] }] };
+    const bindings = new NativeContentBindings(items);
+    bindings.capture(source, 'inspection-page');
+    const resolved = resolveAuthoringContent(source, items, { bodyFontSize: 18 });
+    // This host metric distinguishes DOM paragraphs from actual blank lines;
+    // it models three 24px lines, two 5px gaps, and the renderer's 20px padding.
+    const measure: TextMeasure = vi.fn(({ html, padding, fontSize, lineHeight, paragraphSpace }) => {
+      const paragraphs = [...html.matchAll(/<p\b[^>]*>([\s\S]*?)<\/p>/g)];
+      const lines = paragraphs.map((paragraph) => paragraph[1]!.replace(/<[^>]*>/g, ''));
+      const lineCount = paragraphs.reduce((count, paragraph) => count + 1 + (paragraph[1]!.match(/<br\s*\/?\s*>/g)?.length ?? 0), 0);
+      return { naturalWidth: 240, height: padding * 2 + lineCount * fontSize * lineHeight + (paragraphs.length - 1) * paragraphSpace, lines };
+    });
+    const diagnostics: string[] = [];
+    const elements = await compileNativeTextLayout(resolved.elements, measure, { onDiagnostic: (detail) => diagnostics.push(detail) });
+    expect(elements[0]).toMatchObject({ left: 636, top: 246, width: 288, height: 104 });
+    expect(elements[0]!.type === 'text' && elements[0].content.match(/<p\b/g)).toHaveLength(3);
+    expect(elements[0]!.type === 'text' && elements[0].content).not.toContain('<br>');
+    expect(elements[0]!.type === 'text' && elements[0].content).toContain('<span style="color:#1E3A8A;font-weight:700">不同材料</span>');
+    expect(measure).toHaveBeenCalledWith(expect.objectContaining({ fontSize: 16, paragraphSpace: 5, preserveRichText: true }));
+    expect(diagnostics).toEqual([]);
+    expect(bindings.resolve(elements, new Map())).toEqual(items.map((item) => ({ sourceContentId: item.id, elementId: 'inspection' })));
+    expect(() => assertAuthoringContentCoverage(elements, items)).not.toThrow();
+    expect(source.elements[0]).toMatchObject({ content: shell, paragraphRefs: items.map((item) => item.id) });
+  });
+
+  it('extends the final body template when reference counts differ, preserving labels, inline styles and within-paragraph newlines', () => {
+    const items = [{ id: 'label', text: '材料检查' }, { id: 'body', text: '观察外观\n再记录结果。' }, { id: 'note', text: '随后比较不同材料。' }];
+    const template = '<div style="color:#334155">'
+      + '<p style="font-size:18px;color:#1E3A8A;font-weight:700"><strong>label</strong></p>'
+      + '<p style="font-size:16px;font-weight:400"><em>body</em></p></div>';
+    const resolved = resolveAuthoringContent({ elements: [{ type: 'text', content: template, paragraphRefs: items.map((item) => item.id) }] }, items);
+    expect(resolved.elements[0].content).toBe('<div style="color:#334155">'
+      + '<p style="font-size:18px;color:#1E3A8A;font-weight:700"><strong>材料检查</strong></p>'
+      + '<p style="font-size:16px;font-weight:400"><em>观察外观<br>再记录结果。</em></p>'
+      + '<p style="font-size:16px;font-weight:400"><em>随后比较不同材料。</em></p></div>');
+    expect(() => assertAuthoringContentCoverage(resolved.elements, items)).not.toThrow();
+    const excess = resolveAuthoringContent({ elements: [{ type: 'text', content: template + '<p>unused</p>', paragraphRefs: ['label', 'body'] }] }, items);
+    expect(excess.elements[0].content).not.toContain('unused');
+    expect(excess.elements[0].content.match(/<p\b/g)).toHaveLength(2);
+  });
+
+  it('uses independent paragraphs in native shape and table slots, retaining inherited cell typography', () => {
+    const items = [{ id: 'first', text: '先观察。' }, { id: 'second', text: '再比较。' }];
+    const refs = items.map((item) => item.id);
+    const resolved = resolveAuthoringContent({ elements: [
+      { type: 'shape', text: { content: '<p style="font-size:16px"><strong></strong></p>', paragraphRefs: refs } },
+      { type: 'table', data: [[{ text: '', paragraphRefs: refs, style: { fontsize: 16 } }]] },
+      { type: 'text', content: '<div style="font-size:16px"><em></em></div>', paragraphRefs: refs },
+      { type: 'text', paragraphRefs: refs },
+    ] }, items, { bodyFontSize: 18 });
+    expect(resolved.elements[0].text?.content).toBe('<p style="font-size:16px"><strong>先观察。</strong></p><p style="font-size:16px"><strong>再比较。</strong></p>');
+    expect(resolved.elements[1].data?.[0]?.[0]).toMatchObject({ text: '<p>先观察。</p><p>再比较。</p>', style: { fontsize: 16 } });
+    expect(resolved.elements[2].content).toBe('<div style="font-size:16px"><p><em>先观察。</em></p><p><em>再比较。</em></p></div>');
+    expect(resolved.elements[3].content).toBe('<p style="font-size:18px">先观察。</p><p style="font-size:18px">再比较。</p>');
+    expect(() => assertAuthoringContentCoverage(resolved.elements, items)).not.toThrow();
+  });
+
+  it('keeps emphasized measured component paragraphs as separate rich paragraphs when migrating an open shell', () => {
+    const items = [{ id: 'one', text: '观察条件。' }, { id: 'two', text: '比较结果。' }];
+    const resolved = resolveAuthoringContent({ components: [{ kind: 'textBox', id: 'rich-list', left: 60, top: 140, width: 400,
+      height: 80, fontSize: 18, paragraphRefs: items.map((item) => item.id), emphasis: ['条件', '结果'] }] }, items);
+    expect(resolved.components).toEqual([]);
+    const migrated = (resolved as unknown as { elements: Array<Record<string, unknown>> }).elements[0]!;
+    expect(migrated).toMatchObject({ id: 'rich-list', lineHeight: 1.5, paragraphSpace: 5, height: 80 });
+    expect(migrated.content).toBe('<p style="font-size:18px;color:#334155;font-weight:400;text-align:left">观察<strong>条件</strong>。</p>'
+      + '<p style="font-size:18px;color:#334155;font-weight:400;text-align:left">比较<strong>结果</strong>。</p>');
+    expect(() => assertAuthoringContentCoverage([migrated], items)).not.toThrow();
   });
 
   it('escapes point text rather than interpreting it as native markup', () => {

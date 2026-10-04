@@ -4,7 +4,7 @@ import type { Scene } from '@/lib/openmaic/types/stage';
 import { inspectFigureSequence, hasSourceSequenceLabel, firstSourceSequenceTeachingOutline, type FigureSequenceContract } from '@/lib/textbook/course-visual-binding';
 import { fingerprintGenerationValue } from './page-checkpoints';
 import { getOutlineSourcePageIds } from './generation-scope';
-import { scopeSourceSequenceContracts, usesSourceSequence } from '@/lib/textbook/source-sequence-use';
+import { hasExplicitNativeSourceSequenceUse, scopeSourceSequenceContracts, usesSourceSequence } from '@/lib/textbook/source-sequence-use';
 
 export type SourceSequenceContentGroup = { statements: string[]; diagramLabels?: string[] };
 
@@ -54,7 +54,7 @@ export function sourceTeachingSectionId(outline: SceneOutline): string {
 export function canonicalSourceClausesForOutline(outline: SceneOutline, visibleOnly = false): string[] {
   const plan = outline.teachingBrief?.teachingPlan;
   const display = plan?.presentationContent ?? outline.keyPoints;
-  return (visibleOnly ? [...display,
+  return (visibleOnly || outline.teachingBrief?.manuscript ? [...display,
     ...(outline.visualIntent?.diagram?.nodes.map((node) => node.label) ?? [])] : [
     outline.description, ...display, ...(plan?.visibleContent ?? []),
     plan?.newContent, ...(plan?.reasoningSteps ?? []), ...(plan?.narrationFocus ?? []),
@@ -77,7 +77,8 @@ export function sourceSequenceTeachingResponsibilities(outlines: readonly SceneO
   const allTargets = outlines.filter((outline) => outline.type === 'slide'
     && usesSourceSequence(outline, contract)
     && outline.generationPurpose === 'knowledge-teaching'
-    && outline.knowledgePointIds?.some((id) => contract.knowledgePointIds.includes(id)));
+    && (outline.knowledgePointIds?.some((id) => contract.knowledgePointIds.includes(id))
+      || hasExplicitNativeSourceSequenceUse(outline, contract)));
   const first = contract.scope === 'single-page'
     ? firstSourceSequenceTeachingOutline(allTargets, contract.orderedSteps, contract.resourceId) : allTargets[0];
   if (!first) return { targets: [], owners: [] };
@@ -108,7 +109,8 @@ export function findSourceContentIssues(pages: readonly SourceContentPage[],
     const candidates = pages.filter(({ outline }) => outline.type === 'slide'
       && usesSourceSequence(outline, contract)
       && outline.generationPurpose === 'knowledge-teaching'
-      && outline.knowledgePointIds?.some((id) => contract.knowledgePointIds.includes(id)));
+      && (outline.knowledgePointIds?.some((id) => contract.knowledgePointIds.includes(id))
+        || hasExplicitNativeSourceSequenceUse(outline, contract)));
     const first = contract.scope === 'single-page'
       ? firstSourceSequenceTeachingOutline(candidates.map(({ outline }) => outline), contract.orderedSteps, contract.resourceId) : candidates[0]?.outline;
     const firstParent = first?.spatialParentId ?? first?.id;
@@ -119,7 +121,8 @@ export function findSourceContentIssues(pages: readonly SourceContentPage[],
     const groups = targets.flatMap(({ content, speech }) => [...slideContentGroups(content, contract.sequenceSemantics !== 'enumerated-items'),
       ...(!options.visibleOnly && speech?.length ? [{ statements: [...speech] }] : [])]);
     const related = scoped.filter((other) => other.required
-      && targets.some(({ outline }) => outline.knowledgePointIds?.some((id) => other.knowledgePointIds.includes(id))));
+      && targets.some(({ outline }) => outline.knowledgePointIds?.some((id) => other.knowledgePointIds.includes(id))
+        || hasExplicitNativeSourceSequenceUse(outline, other)));
     const problems = inspectFigureSequence({ orderedSteps: contract.orderedSteps, statements: [], contentGroups: groups,
       relatedSequences: related, sequenceSemantics: contract.sequenceSemantics, requireCompleteText: !options.visibleOnly,
       ...(!options.visibleOnly ? { requiredStepLabels: contract.requiredStepLabels } : {}),
@@ -201,7 +204,8 @@ export function findSectionSourceContentIssues(outlines: readonly SceneOutline[]
     const missing = owners.filter(({ owner, label }) => sections.has(sourceTeachingSectionId(owner))
       && !hasSourceSequenceLabel(text, label));
     const related = scoped.filter((other) => other.required && actual.some(({ outline }) =>
-      outline.knowledgePointIds?.some((id) => other.knowledgePointIds.includes(id))));
+      outline.knowledgePointIds?.some((id) => other.knowledgePointIds.includes(id))
+      || hasExplicitNativeSourceSequenceUse(outline, other)));
     const problems = inspectFigureSequence({ orderedSteps: contract.orderedSteps, statements: [], contentGroups: groups,
       sequenceSemantics: contract.sequenceSemantics, relatedSequences: related,
       allowPartialDiagram: Boolean(contract.requiredStepLabels) });

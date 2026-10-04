@@ -112,14 +112,23 @@ describe('blueprint presentation through outline confirmation', () => {
     return { saved, input, source, sourceCase };
   }
 
-  it.each(sourceCases)('rejects the same missing $name at generation and teacher-final checkpoint validation', async (sourceCase) => {
+  it.each(sourceCases)('retains the draft and diagnoses the same missing $name that strict checkpoint validation rejects', async (sourceCase) => {
     const { saved, input, source } = sourceFixture(sourceCase);
     const before = structuredClone(saved);
     const result = revalidateStoredTeachingBlueprint(saved, input);
     expect(result.blueprint).toBeUndefined();
     sourceCase.selected.forEach((index) => expect(result.issues.join('；')).toContain(source.orderedSteps[index]!.label));
     const ai = vi.fn().mockResolvedValue(JSON.stringify(saved));
-    await expect(generateTeachingBlueprint(input, ai)).rejects.toThrow(source.orderedSteps[sourceCase.selected[0]!]!.label);
+    const generated = await generateTeachingBlueprint(input, ai);
+    sourceCase.selected.forEach((index) => expect(generated.qualityDiagnostics?.join('；'))
+      .toContain(source.orderedSteps[index]!.label));
+    expect(generated.sections[0]!.pages.map((page) => page.keyPoints))
+      .toEqual(saved.sections[0]!.pages.map((page) => page.keyPoints));
+    expect(generated.sections[0]!.units[0]!.explanationNodes?.map((node) => node.content))
+      .toEqual(saved.sections[0]!.units[0]!.explanationNodes?.map((node) => node.content));
+    const strictGenerated = revalidateStoredTeachingBlueprint(generated, input);
+    expect(strictGenerated.blueprint).toBeUndefined();
+    sourceCase.selected.forEach((index) => expect(strictGenerated.issues.join('；')).toContain(source.orderedSteps[index]!.label));
     expect(ai).toHaveBeenCalledOnce();
     expect(saved).toEqual(before);
   });
@@ -150,8 +159,17 @@ describe('blueprint presentation through outline confirmation', () => {
     page.sourceSequenceUses = [];
     saved.sections[0]!.units[0]!.explanationNodes![0]!.content += ` ${source.orderedSteps.map((step) => step.label).join('→')}。`;
     expect(revalidateStoredTeachingBlueprint(saved, input).issues.join('；')).toContain('须声明 sourceSequenceUses');
-    const rejected = vi.fn().mockResolvedValue(JSON.stringify(saved));
-    await expect(generateTeachingBlueprint(input, rejected)).rejects.toThrow('须声明 sourceSequenceUses');
+    const before = structuredClone(saved);
+    const diagnosed = vi.fn().mockResolvedValue(JSON.stringify(saved));
+    const generated = await generateTeachingBlueprint(input, diagnosed);
+    expect(generated.qualityDiagnostics?.join('；')).toContain('须声明 sourceSequenceUses');
+    expect(generated.sections[0]!.pages.map((page) => page.keyPoints))
+      .toEqual(saved.sections[0]!.pages.map((page) => page.keyPoints));
+    expect(generated.sections[0]!.units[0]!.explanationNodes?.map((node) => node.content))
+      .toEqual(saved.sections[0]!.units[0]!.explanationNodes?.map((node) => node.content));
+    expect(revalidateStoredTeachingBlueprint(generated, input).issues.join('；')).toContain('须声明 sourceSequenceUses');
+    expect(diagnosed).toHaveBeenCalledOnce();
+    expect(saved).toEqual(before);
     page.sourceSequenceUses = [{ resourceId: source.resourceId, coverage: 'complete' }];
     expect(revalidateStoredTeachingBlueprint(saved, input).issues).toEqual([]);
     const accepted = vi.fn().mockResolvedValue(JSON.stringify(saved));

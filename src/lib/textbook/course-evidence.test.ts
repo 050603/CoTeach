@@ -15,7 +15,7 @@ vi.mock("@/lib/db/client", () => ({ prisma: {
   $transaction: mocks.transaction,
 } }));
 
-import { hydrateCourseEvidenceFigureReferences, resolveCourseEvidenceSnapshot, resolveCourseTextbookFigures } from "./course-evidence";
+import { COURSE_SOURCE_CONTEXT_POLICY_VERSION, hydrateCourseEvidenceFigureReferences, resolveCourseEvidenceSnapshot, resolveCourseTextbookFigures } from "./course-evidence";
 import { formatCourseEvidenceContext, type CourseEvidenceItem } from './course-evidence-types';
 import { SOURCE_SEQUENCE_POLICY_VERSION } from './figure-sequence';
 import { bindRequiredTextbookFiguresToOutlines } from "./course-visual-binding";
@@ -237,6 +237,73 @@ describe("course textbook evidence", () => {
         sourceBlockIds: ['long-block'] } };
     const [hydrated] = await hydrateCourseEvidenceFigureReferences([item]);
     expect(hydrated?.completeSourceBlocks).toEqual([{ sourceBlockId: 'long-block', content: full }]);
+  });
+
+  it('makes every unmarked and cross-paragraph case available in the first topical authoring view', async () => {
+    const definition = '学习者结合已有经验主动建构理解。';
+    const blocks = [
+      { id: 'definition', sectionId: 'topic', position: 11, content: definition },
+      { id: 'fish-start', sectionId: 'story', position: 13, content: '青蛙向小鱼描述牛，牛有腿和角。' },
+      { id: 'fish-end', sectionId: 'story', position: 14, content: '小鱼想象了一条长腿、长角的鱼。' },
+      { id: 'second-case', sectionId: 'topic', position: 15, content: '一个孩子初次见到鲸鱼时，把它认成了熟悉的大鱼。' },
+      { id: 'unrelated', sectionId: 'another-topic', position: 20, content: '不相关主题的故事不能混入本知识点。' },
+      { id: 'foreign', sectionId: 'topic', position: 16, content: '不能混入其他教材版本。', revisionId: 'revision-2' },
+    ].map((block) => ({ revisionId: 'revision-1', blockType: 'PARAGRAPH', ...block, figures: [] }));
+    const item: CourseEvidenceItem = { id: 'concept', kind: 'concept', title: '建构主义', content: definition,
+      source: { textbookId: 'book', textbookTitle: '学习理论', revisionId: 'revision-1', revisionVersion: 1,
+        sectionId: 'topic', sectionPath: ['学习理论', '建构主义'], sourceBlockId: 'definition',
+        sourceBlockIds: ['definition'], quote: definition },
+      sourceSequencesResolved: true, sourceSequencePolicyVersion: SOURCE_SEQUENCE_POLICY_VERSION,
+      figureSequencesResolved: true };
+    mocks.sections.mockResolvedValue([
+      { id: 'chapter', revisionId: 'revision-1', parentId: null, title: '学习理论', path: '学习理论', kind: 'CHAPTER', level: 1, position: 0 },
+      { id: 'topic', revisionId: 'revision-1', parentId: 'chapter', title: '建构主义', path: '学习理论/建构主义', kind: 'SECTION', level: 2, position: 10 },
+      { id: 'story', revisionId: 'revision-1', parentId: 'topic', title: '小鱼的认识', path: '学习理论/建构主义/小鱼的认识', kind: 'SUBSECTION', level: 3, position: 12 },
+      { id: 'another-topic', revisionId: 'revision-1', parentId: 'chapter', title: '其他理论', path: '学习理论/其他理论', kind: 'SECTION', level: 2, position: 19 },
+    ]);
+    mocks.sourceBlocks.mockImplementation(async ({ where }: { where: { id?: unknown } }) =>
+      where.id ? [blocks[0]] : blocks);
+
+    const [hydrated] = await hydrateCourseEvidenceFigureReferences([item], { includeSectionContext: true });
+
+    expect(hydrated?.sourceContext).toEqual({ policyVersion: COURSE_SOURCE_CONTEXT_POLICY_VERSION,
+      status: 'complete', sectionId: 'topic', sourceBlockIds: ['definition', 'fish-start', 'fish-end', 'second-case'] });
+    expect(hydrated?.completeSourceBlocks?.map((block) => block.content)).toEqual(blocks.slice(0, 4).map((block) => block.content));
+    expect(hydrated?.completeSourceBlocks?.[1]?.source?.sectionId).toBe('story');
+    expect(hydrated?.source).toEqual(item.source);
+    expect(hydrated?.content).toBe(item.content);
+    expect(JSON.stringify(hydrated)).not.toContain('不能混入');
+    expect(mocks.sourceBlocks).toHaveBeenCalledWith(expect.objectContaining({
+      where: { OR: [{ revisionId: 'revision-1', sectionId: { in: ['topic', 'story'] } }] },
+    }));
+    expect(mocks.transaction).not.toHaveBeenCalled();
+    const context = formatCourseEvidenceContext({ schemaVersion: 2, version: 1, fingerprint: 'f',
+      createdAt: '2026-10-02', retrievalMode: 'hybrid', selections: [], warnings: [], items: [hydrated!],
+      mappings: [{ sourceKnowledgePointId: 'kp', sourceKnowledgePointName: '建构主义',
+        status: 'direct', evidenceItemIds: ['concept'], rationale: '正文' }] }, { deduplicateItems: true });
+    expect(context).toContain('小鱼想象了一条长腿、长角的鱼');
+    expect(context).toContain('"sourceContext":{"policyVersion":1,"status":"complete"');
+
+    mocks.sourceBlocks.mockClear();
+    mocks.sections.mockClear();
+    const [cached] = await hydrateCourseEvidenceFigureReferences([hydrated!], { includeSectionContext: true });
+    expect(cached).toEqual(hydrated);
+    expect(mocks.sourceBlocks).toHaveBeenCalledTimes(1);
+    expect(mocks.sections).not.toHaveBeenCalled();
+  });
+
+  it('records a source gap instead of interpreting an unavailable section as having no examples', async () => {
+    const { item, adopted, sections } = parentIntroductionFixture();
+    mocks.sections.mockResolvedValue(sections);
+    mocks.sourceBlocks.mockImplementation(async ({ where }: { where: { id?: unknown } }) =>
+      where.id ? [adopted] : []);
+
+    const [hydrated] = await hydrateCourseEvidenceFigureReferences([item], { includeSectionContext: true });
+
+    expect(hydrated?.sourceContext).toEqual({ policyVersion: COURSE_SOURCE_CONTEXT_POLICY_VERSION,
+      status: 'partial', sectionId: 'properties', sourceBlockIds: [] });
+    expect(hydrated?.content).toBe(item.content);
+    expect(hydrated?.source).toEqual(item.source);
   });
 
   it('closes an adopted child excerpt with its real parent introduction in the first authoring context', async () => {

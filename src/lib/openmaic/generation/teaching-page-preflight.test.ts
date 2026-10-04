@@ -13,12 +13,54 @@ beforeEach(() => {
   mocks.replan.mockResolvedValue({ status: 'infeasible' });
 });
 describe('shared pre-confirmation and production capacity preflight', () => {
+  const jointPage = (): SceneOutline => ({ ...page, teachingBrief: {
+    schemaVersion: 1, pptPlanningVersion: 'joint-native-pages-4615-v1',
+    explanation: '', examples: [], conditions: [], evidence: [], assessmentFocus: '',
+  } });
+  it.each(['page-overflow', 'section-overload', 'measurement-unavailable'])('records joint-plan %s without redistributing its pages', async (decision) => {
+    const source = jointPage(), saved = structuredClone(source);
+    mocks.measure.mockResolvedValue(assessment(source.id, decision));
+    const result = await prepareTeachingPageCapacity([source]);
+    expect(result).toMatchObject({ outlines: [saved], changed: false,
+      assessments: [assessment(source.id, decision)], diagnostics: [expect.stringContaining(decision)] });
+    expect(result.outlines[0]).toBe(source);
+    expect(mocks.measure).toHaveBeenCalledOnce();
+    expect(mocks.replan).not.toHaveBeenCalled();
+  });
+  it('does not let a legacy neighbour redistribute a joint page during recovery', async () => {
+    const adopted = jointPage(), legacy = { ...page, id: 'legacy', order: 1 };
+    mocks.measure.mockImplementation(async (outline: SceneOutline) => assessment(outline.id, outline.id === 'legacy' ? 'page-overflow' : 'fits'));
+    const result = await prepareTeachingPageCapacity([adopted, legacy]);
+    expect(result.outlines).toEqual([adopted, legacy]);
+    expect(result.changed).toBe(false);
+    expect(result.diagnostics).toEqual([expect.stringContaining('legacy')]);
+    expect(mocks.replan).not.toHaveBeenCalled();
+  });
+  it('keeps completed joint pages exempt from remeasurement', async () => {
+    const source = jointPage();
+    expect(await prepareTeachingPageCapacity([source], { completedOutlineIds: [source.id] }))
+      .toEqual({ outlines: [source], assessments: [], changed: false, diagnostics: [] });
+    expect(mocks.measure).not.toHaveBeenCalled();
+    expect(mocks.replan).not.toHaveBeenCalled();
+  });
   it('measures and verifies a deterministic split before returning the reviewable plan', async () => {
     mocks.measure.mockResolvedValueOnce(assessment('p', 'page-overflow'));
-    const next = [{ ...page, id: 'p-a' }, { ...page, id: 'p-b', order: 1 }];
+    const source: SceneOutline = { ...page, targetDurationSec: 60, knowledgePointIds: ['concept'],
+      visualIntent: { representation: 'source-image', observationGoal: '观察教材案例',
+        resourceRefs: [{ kind: 'source-image', resourceId: 'figure', required: true, reason: '解释概念' }] },
+      teachingBrief: { schemaVersion: 1, explanation: '定义和条件。', examples: [], conditions: [], evidence: [], assessmentFocus: '',
+        manuscript: { sectionId: 's', segmentIds: ['definition', 'condition'] },
+        teachingPlan: { purpose: '', priorKnowledge: '', newContent: '', learnerQuestion: '', reasoningSteps: [],
+          takeaway: '', visibleContent: [], narrationFocus: [], introduces: ['definition', 'condition'], deepens: [] } } };
+    const next = ['definition', 'condition'].map((segmentId, index): SceneOutline => ({
+      ...structuredClone(source), id: index ? 'p-b' : 'p', order: index, sourcePageIds: ['p'],
+      sectionPlanVersion: 'measured-plan', targetDurationSec: 30,
+      teachingBrief: { ...structuredClone(source.teachingBrief!), manuscript: { sectionId: 's', segmentIds: [segmentId] },
+        teachingPlan: { ...structuredClone(source.teachingBrief!.teachingPlan!), introduces: [segmentId] } },
+    }));
     mocks.replan.mockResolvedValue({ status: 'replanned', outlines: next });
     const dimensions = { figure: { width: 1200, height: 900 } };
-    const result = await prepareTeachingPageCapacity([page], { resourceDimensions: dimensions });
+    const result = await prepareTeachingPageCapacity([source], { resourceDimensions: dimensions });
     expect(result).toMatchObject({ outlines: next, changed: true });
     expect(mocks.measure).toHaveBeenCalledTimes(3);
     expect(mocks.measure.mock.calls.every((call) => call[1].resourceDimensions === dimensions)).toBe(true);

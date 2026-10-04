@@ -47,7 +47,15 @@ describe('teaching stage timing', () => {
       expect(row.teachingStageTiming).toMatchObject({ targetDurationSec: 200, minDurationSec: 180, maxDurationSec: 220, narrationTargetDurationSec: 160, reservedDurationSec: 40, acceptance: 'stage-total-only' });
       expect(row.timingPlan).toMatchObject({ videoSec: 10, transitionSec: 3, studentActivitySec: 7 });
       expect(row.timingPlan!.paragraphBudgets!.reduce((sum, part) => sum + part.targetDurationSec, 0)).toBe(row.timingPlan!.targetDurationSec);
+      expect(row.timingPlan!.timingRationale).toContain('按教学内容量分配讲稿；时长仅供参考，优先讲清必要内容，必要超时允许，不作为质量通过或失败的条件。');
+      expect(row.timingPlan!.timingRationale!.join()).not.toContain('±10% 验收');
     }
+  });
+
+  it('keeps a previously prepared outline and its saved rationale without rewriting or reallocating it', () => {
+    const prepared = allocateTeachingStageTiming([page('saved', '保存的完整解释')])[0]!;
+    prepared.timingPlan!.timingRationale = ['旧保存的讲授分配说明'];
+    expect(allocateTeachingStageTiming([prepared])).toEqual([prepared]);
   });
 
   it('counts student activities without narration but never borrows time from teacher resources or other stages', () => {

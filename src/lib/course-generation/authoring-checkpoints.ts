@@ -1,7 +1,18 @@
 import type { SceneOutline } from '@/lib/openmaic/types/generation';
-import { fingerprintSceneOutline, type SceneGenerationCheckpointStage } from './page-checkpoints';
+import { fingerprintGenerationValue, fingerprintSceneOutline, type SceneGenerationCheckpointStage } from './page-checkpoints';
+import { COURSE_FIRST_PASS_CONTRACT_VERSION } from './first-pass-policy';
 
 export const AUTHORING_RESPONSE_PREFIX = 'authoring-response:';
+
+/** Raw-response identity also includes its output protocol. A compiled stage
+ * can have a different input hash after native slide pagination. */
+export function fingerprintStageAuthoringInput(outline: Pick<SceneOutline, 'type'>,
+  stage: SceneGenerationCheckpointStage, inputFingerprint: string): string {
+  return fingerprintGenerationValue({ inputFingerprint,
+    contract: COURSE_FIRST_PASS_CONTRACT_VERSION,
+    protocol: outline.type === 'quiz' && stage === 'content' ? 'questions-with-phase-narration-v1' : 'source-catalog-v1',
+  });
+}
 
 /** Raw drafts are deliberately separate from accepted, playable stage results. */
 export type AuthoringResponseCheckpoint = {

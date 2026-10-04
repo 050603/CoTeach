@@ -5,9 +5,9 @@ import type { TeachingExplanationNode, TeachingPresentationItem } from '@/lib/se
 import type { SceneOutline } from '@/lib/openmaic/types/generation';
 import { measureAuthoredSlideText, isSpatialMeasurementUnavailableError } from './slide-spatial-measurement';
 import { compactSourceSequenceText, sourceSequenceLabelKey } from '@/lib/textbook/source-sequence-label';
-import { hasReferenceLectureTypography, slideBodyFontSizes, slideTitleFontSizes } from './slide-presentation-typography';
+import { hasReferenceLectureTypography, REFERENCE_LECTURE_TYPOGRAPHY, slideBodyFontSizes, slideTitleFontSizes } from './slide-presentation-typography';
 
-export const SEMANTIC_PAGE_CAPACITY_VERSION = 'semantic-page-capacity-v2' as const;
+export const SEMANTIC_PAGE_CAPACITY_VERSION = 'semantic-page-capacity-v3' as const;
 const BODY = { width: 900, bottom: 512.5 } as const;
 const TITLE = { width: 900, top: 50, height: 128 } as const;
 const GAP = 12;
@@ -133,7 +133,7 @@ export type SemanticCapacityUnit = {
 
 export type SemanticPageCapacityAssessment = {
   schemaVersion: 1;
-  planningVersion: typeof SEMANTIC_PAGE_CAPACITY_VERSION | 'semantic-page-capacity-v1';
+  planningVersion: typeof SEMANTIC_PAGE_CAPACITY_VERSION | 'semantic-page-capacity-v1' | 'semantic-page-capacity-v2';
   outlineId: string;
   sourcePageId: string;
   decision: 'fits' | 'optimize-layout' | 'page-overflow' | 'section-overload' | 'measurement-unavailable';
@@ -144,9 +144,15 @@ export type SemanticPageCapacityAssessment = {
   units?: SemanticCapacityUnit[];
   layouts: SemanticCapacityLayout[];
   selectedLayout?: SemanticCapacityLayout;
+  /** Measurement decisions do not erase the corresponding protected sources. */
+  measurementNotes?: string[];
 };
 
 export type SemanticPageCapacityOptions = {
+  /** Runtime authoring typography affects measurement only, never saved outlines. */
+  useReferenceLectureTypography?: (outline: SceneOutline) => boolean;
+  /** Whole-page native authoring may select/condense a source annotation. */
+  useRestoredNativeDisplay?: (outline: SceneOutline) => boolean;
   measure?: TextMeasure;
   sourcePageId?: string;
   explanationNodes?: readonly TeachingExplanationNode[];
@@ -240,6 +246,41 @@ function authoredRegionConflict(outline: SceneOutline): boolean {
 function semanticGroups(outline: SceneOutline, sourcePageId: string, nodes: readonly TeachingExplanationNode[],
   resourceSequences?: SemanticPageCapacityOptions['resourceSequences']): SemanticCapacityGroup[] {
   const plan = outline.teachingBrief?.teachingPlan;
+  const manuscript = outline.teachingBrief?.manuscript;
+  if (manuscript) {
+    // Measure only the authored display. Speech is an immutable reference and
+    // must not be guessed from a matching sentence, caption or narration hint.
+    const groups = semanticGroups({ ...outline, teachingBrief: { ...outline.teachingBrief!,
+      manuscript: undefined, explanation: '', authoring: undefined,
+      teachingPlan: plan ? { ...plan, narrationFocus: [], introduces: [], deepens: [] } : undefined,
+    } }, sourcePageId, [], resourceSequences);
+    const nodeById = new Map(nodes.map((node) => [node.id, node]));
+    let previous = 0;
+    for (const id of new Set(manuscript.segmentIds)) {
+      const selected = groups.findIndex((group) => group.presentationItems?.some((item) => item.nodeIds.includes(id)));
+      const destination = Math.max(previous, selected);
+      const group = groups[destination];
+      if (!group) continue;
+      // Backward display bindings stay on one measured page; the manuscript's
+      // actual teaching order must never be inverted by a layout regrouping.
+      if (selected >= 0 && selected < previous) {
+        group.indivisibleWith.push(groups[selected]!.id);
+        groups[selected]!.indivisibleWith.push(group.id);
+      }
+      group.sourceNodeIds.push(id);
+      const node = nodeById.get(id);
+      if (node) {
+        group.knowledgePointIds = [...new Set([...group.knowledgePointIds, ...(node.knowledgePointIds ?? [])])];
+        group.prerequisiteNodeIds = [...new Set([...(group.prerequisiteNodeIds ?? []), ...node.prerequisiteNodeIds])];
+      }
+      previous = destination;
+    }
+    for (const group of groups) {
+      group.narrationExpansion = [];
+      group.referencedNodeIds = group.referencedNodeIds?.filter((id) => !group.sourceNodeIds.includes(id));
+    }
+    return groups;
+  }
   const hasPresentationProjection = Boolean(plan?.presentationItems?.length || plan?.presentationContent?.length);
   const required = plan?.presentationItems?.length
     ? [...new Set(plan.presentationItems.map((item) => item.text.trim()).filter(Boolean))]
@@ -897,10 +938,37 @@ export async function evaluateSemanticPageCapacity(
   outline: SceneOutline,
   options: SemanticPageCapacityOptions = {},
 ): Promise<SemanticPageCapacityAssessment> {
+  const measurementNotes: string[] = [];
+  const annotation = outline.visualIntent?.diagram?.annotation?.trim();
+  if (annotation && options.useRestoredNativeDisplay?.(outline)) {
+    const plan = outline.teachingBrief?.teachingPlan;
+    const selectedDisplay = plan?.presentationItems?.length ? plan.presentationItems.map((item) => item.text)
+      : plan?.presentationContent?.length ? plan.presentationContent : outline.keyPoints;
+    if (!selectedDisplay.some((text) => normalizedClaim(text) === normalizedClaim(annotation))) {
+      // Annotation metadata is source explanation, not an instruction to put
+      // the whole paragraph on the slide. Preserve all labels/edges/formulas,
+      // and measure the actual selected text beside the full visual instead.
+      outline = { ...outline, visualIntent: { ...outline.visualIntent!,
+        diagram: { ...outline.visualIntent!.diagram!, annotation: undefined } } };
+      measurementNotes.push('diagram.annotation 保留为来源解释；未被选为展示文字，因此不把整段原文计入必需上屏容量。节点、关系及实际展示文字仍完整计量。');
+    }
+  }
+  if (options.useReferenceLectureTypography?.(outline) && !hasReferenceLectureTypography(outline)) {
+    // Restored native authoring also accepts archived-style key points without
+    // a later display projection. The font profile belongs to this measurement
+    // copy only; do not add authoring duties or persist a layout on the source.
+    const brief: NonNullable<SceneOutline['teachingBrief']> = outline.teachingBrief ?? { schemaVersion: 1, explanation: '', examples: [], conditions: [],
+      evidence: [], assessmentFocus: '' };
+    const plan = brief.teachingPlan ?? { purpose: '', priorKnowledge: '', newContent: '', learnerQuestion: '',
+      reasoningSteps: [], takeaway: '', visibleContent: [], narrationFocus: [] };
+    outline = { ...outline, teachingBrief: { ...brief, teachingPlan: {
+      ...plan, presentationTypography: REFERENCE_LECTURE_TYPOGRAPHY,
+    } } };
+  }
   const sourcePageId = options.sourcePageId ?? outline.spatialParentId ?? outline.id;
   const groups = semanticGroups(outline, sourcePageId, options.explanationNodes ?? [], options.resourceSequences);
   const base = { schemaVersion: 1 as const, planningVersion: SEMANTIC_PAGE_CAPACITY_VERSION,
-    outlineId: outline.id, sourcePageId, groups };
+    outlineId: outline.id, sourcePageId, groups, ...(measurementNotes.length ? { measurementNotes } : {}) };
   const underlyingMeasure = options.measure ?? measureAuthoredSlideText;
   const measurementCache = new Map<string, Promise<Awaited<ReturnType<TextMeasure>>>>();
   const measure: TextMeasure = (input) => {
@@ -927,7 +995,7 @@ export async function evaluateSemanticPageCapacity(
       try {
         diagramAllocations = await measureDiagramAllocations(outline.visualIntent.diagram, measure, {
           top: BODY.bottom - availableHeight, maxWidth: BODY.width, maxHeight: availableHeight,
-        });
+        }, options.useReferenceLectureTypography?.(outline) ? { nodeFontSize: bodyFont } : {});
       } catch (error) {
         if (!(error instanceof Error) || !/planned diagram has no feasible|Invalid diagram component|Text layout:/i.test(error.message)) throw error;
       }

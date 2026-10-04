@@ -6,16 +6,17 @@ const mocks = vi.hoisted(() => ({
   findJob: vi.fn(),
   upsert: vi.fn(),
   deleteMany: vi.fn(),
+  findCheckpoints: vi.fn(),
 }));
 
 vi.mock("@/lib/db/client", () => ({
   prisma: {
     $transaction: mocks.transaction,
-    generationCheckpoint: { upsert: mocks.upsert, deleteMany: mocks.deleteMany },
+    generationCheckpoint: { upsert: mocks.upsert, deleteMany: mocks.deleteMany, findMany: mocks.findCheckpoints },
   },
 }));
 
-import { resetGenerationCheckpoints, saveGenerationCheckpoint, saveSourceNarrationBaselineCheckpoint } from "./checkpoint-storage";
+import { loadGenerationCheckpoints, resetGenerationCheckpoints, saveGenerationCheckpoint, saveSourceNarrationBaselineCheckpoint } from "./checkpoint-storage";
 import { SOURCE_NARRATION_BASELINE_STEP } from './source-content-acceptance';
 
 beforeEach(() => {
@@ -32,6 +33,28 @@ beforeEach(() => {
 });
 
 describe("generation checkpoint execution ownership", () => {
+  it('loads raw authoring acceptance separately from compiled stages for precise failed-stage recovery', async () => {
+    const receipt = { schemaVersion: 1, pageKey: 'page', stage: 'content', accepted: true, inputFingerprint: 'raw-input' };
+    const compiled = { schemaVersion: 1, pageKey: 'page', stage: 'content', inputFingerprint: 'compiled-input', payload: {} };
+    mocks.findCheckpoints.mockResolvedValue([
+      { step: 'authoring-acceptance:page:content', state: receipt },
+      { step: 'stage:page:content', state: compiled },
+      { step: 'authoring-history:v1:authoring-acceptance:old:content', state: { accepted: true } },
+    ]);
+    const saved = await loadGenerationCheckpoints('job-1');
+    expect(saved.authoringAcceptances).toEqual([receipt]);
+    expect(saved.stages).toEqual([compiled]);
+  });
+  it('loads spoken raw responses, attempts and compiled receipts for local recovery', async () => {
+    const spoken = [
+      { step: 'design-authoring:spoken-section:1', state: { rawResponse: 'first draft', complete: true } },
+      { step: 'course-design-attempt:spoken-section:1', state: { attemptsStarted: 1 } },
+      { step: 'course-design:spoken-section:1', state: { status: 'validated' } },
+    ];
+    mocks.findCheckpoints.mockResolvedValue([...spoken, { step: 'course-design:local-blueprint-replay:one', state: {} }]);
+    expect((await loadGenerationCheckpoints('job-1')).spokenSections).toEqual(spoken);
+    expect(mocks.findCheckpoints).toHaveBeenCalledWith({ where: { jobId: 'job-1' } });
+  });
   it.each([undefined, 'execution-current'])('saves synthesis and routed media origins atomically with finalization (%s)', async (executionId) => {
     await saveGenerationCheckpoint('job-1', 'course-finalization', {
       generated: { id: 'synthesis-classroom' },
@@ -82,7 +105,7 @@ describe("generation checkpoint execution ownership", () => {
     expect(mocks.deleteMany).toHaveBeenCalledWith({
       where: { jobId: 'job-1', NOT: [
         'classroom-media-origin:', 'model-usage:', 'authoring-history:', 'authoring-response:',
-        'aux-authoring:', 'stage-attempt:', 'course-design:', 'course-design-attempt:', 'design-authoring:', 'teaching-blueprint',
+        'aux-authoring:', 'stage-attempt:', 'native-render-repair:', 'course-design:', 'course-design-attempt:', 'design-authoring:', 'teaching-blueprint',
       ].map((prefix) => ({ step: { startsWith: prefix } })) },
     });
   });

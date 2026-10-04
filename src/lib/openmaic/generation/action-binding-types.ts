@@ -6,6 +6,8 @@ export type ActionSupport = "none" | "helpful" | "essential";
 export interface SlideElementBinding {
   semanticId: string;
   elementIds: string[];
+  /** Exact compiled targets, including cell identity after component expansion. */
+  elementTargets?: Array<{ elementId: string; selector?: VisualTargetSelector }>;
 }
 
 export interface SlideModuleOutput {

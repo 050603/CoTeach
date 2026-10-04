@@ -42,7 +42,7 @@ describe('first-draft blueprint compatibility from the real teaching-methods res
     const prompt = buildTeachingBlueprintPrompt(input);
     expect(prompt.system).toContain('禁止 widgetType=quiz');
     expect(prompt.user).toContain('"requiredDefinitionNames":["支架式教学法","抛锚式教学法"]');
-    expect(prompt.user).toContain('无需输出“小测”page');
+    expect(prompt.user).toContain('不输出“小测”page');
   });
 
   it.each(['nonempty widget', 'new teaching node', 'not terminal', 'authored question', 'malformed body'])

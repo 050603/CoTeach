@@ -3,6 +3,9 @@ import type { SceneOutline } from '@/lib/openmaic/types/generation';
 import type { CourseEvidenceSnapshot } from '@/lib/textbook/course-evidence-types';
 import { buildAuthoringSourceCatalog, pageOriginalTeachingSources } from './source-grounding';
 import { resolveNarrationSourceParts } from './source-narration-authoring';
+import { PPT_PAGE_PLANNING_VERSION } from '@/lib/course-design/ppt-page-planning-contract';
+import type { FigureSequenceContract } from '@/lib/textbook/course-visual-binding';
+import { quizOriginalTeachingSources } from './quiz-source-context';
 
 const definition = '只有各个个体具有明确的被抽取机会，随机抽样才能减少人为选择产生的偏差。';
 const sourceEvidence: CourseEvidenceSnapshot = {
@@ -26,6 +29,205 @@ const outline: SceneOutline = { id: 'sampling-page', type: 'slide', title: '随�
 };
 
 describe('direct original teaching source', () => {
+  it('keeps the complete native adopted unit readable by both drawing and quiz without assigning it to each atomic block', () => {
+    const item = structuredClone(sourceEvidence.items[0]!);
+    item.kind = 'source-block';
+    item.completeSourceBlocks = undefined;
+    item.source.sourceBlockIds = ['original-paragraph', 'second-paragraph'];
+    const complete = `${definition}\n第二段完整定义与必要边界，不能由讲稿反推。`;
+    item.content = complete;
+    const page = structuredClone(outline);
+    page.teachingBrief!.pptPlanningVersion = PPT_PAGE_PLANNING_VERSION;
+    page.teachingBrief!.sourceBindings = [{ evidenceItemId: item.id,
+      sourceBlockIds: [...item.source.sourceBlockIds], textbookId: item.source.textbookId, revisionId: item.source.revisionId,
+      quote: '第二段完整定义与必要边界，不能由讲稿反推。' }];
+    const input = { sourceEvidence: { ...sourceEvidence, items: [item] },
+      sourceKnowledgePoints: [{ id: 'lesson-sampling', evidenceItemIds: [item.id] }] };
+    const result = pageOriginalTeachingSources(page, input);
+    expect(result.originalSources[0]!.passages).toContainEqual({ sourceBlockId: 'original-paragraph', text: definition });
+    expect(result.originalSources[0]!.passages).toContainEqual({ text: complete, source: item.source });
+    expect(result.originalSources[0]!.passages.filter((passage) => passage.text === complete)
+      .every((passage) => passage.sourceBlockId === undefined)).toBe(true);
+    expect(result.originalQuotes).toContain('第二段完整定义与必要边界，不能由讲稿反推。');
+    expect(Object.values(quizOriginalTeachingSources({ ...page, type: 'quiz' }, input).catalog.texts)).toContain(complete);
+    const legacy = structuredClone(page);
+    delete legacy.teachingBrief!.pptPlanningVersion;
+    expect(pageOriginalTeachingSources(legacy, input).originalSources[0]!.passages.map((passage) => passage.text)).toEqual([definition]);
+    for (const kind of ['concept', 'example'] as const) {
+      item.kind = kind;
+      expect(pageOriginalTeachingSources(page, input).originalSources[0]!.passages.map((passage) => passage.text)).not.toContain(complete);
+    }
+    item.kind = 'source-block';
+    input.sourceKnowledgePoints[0]!.evidenceItemIds = [];
+    expect(pageOriginalTeachingSources(page, input).originalSources).toEqual([]);
+  });
+
+  it('reads a cross-knowledge adopted list excerpt by its original identity without needing the retrieval anchor binding', () => {
+    const item = structuredClone(sourceEvidence.items[0]!);
+    item.completeSourceBlocks = undefined;
+    const excerpt = '目标分析必须兼顾学生基础和真实任务。';
+    item.sourceSequences = [{ anchorSourceBlockId: 'stage-1', kind: 'ordered-steps', steps: [
+      { label: '目标分析', sourceBlockId: 'stage-1', excerptBlockId: 'stage-1-body', excerpt },
+      { label: '评价实施', sourceBlockId: 'stage-2', excerptBlockId: 'stage-2-body', excerpt: '评价须有实际证据。' },
+    ] }];
+    const contract: FigureSequenceContract = { resourceId: 'source-sequence:stage-1', required: true,
+      coveragePolicy: 'authored-scope', knowledgePointIds: ['source-owner'], requiredStepLabels: ['目标分析'],
+      orderedSteps: item.sourceSequences[0]!.steps };
+    const page = structuredClone(outline);
+    page.teachingBrief!.pptPlanningVersion = PPT_PAGE_PLANNING_VERSION;
+    page.teachingBrief!.sourceBindings = [{ evidenceItemId: item.id, sourceBlockIds: ['stage-1-body'],
+      textbookId: item.source.textbookId, revisionId: item.source.revisionId, quote: excerpt }];
+    page.teachingBrief!.teachingPlan = { purpose: '', priorKnowledge: '', learnerQuestion: '', takeaway: '',
+      newContent: '', visibleContent: [], reasoningSteps: [], narrationFocus: [],
+      sourceSequenceUses: [{ resourceId: contract.resourceId, coverage: 'selected', sourceStepIds: ['stage-1'] }] };
+    const input = { sourceEvidence: { ...sourceEvidence, items: [item, sourceEvidence.items[1]!] },
+      sourceSequenceContracts: [contract], sourceKnowledgePoints: [
+        { id: 'lesson-sampling', evidenceItemIds: [] }, { id: 'source-owner', evidenceItemIds: [item.id] },
+      ] };
+    const result = pageOriginalTeachingSources(page, input);
+    expect(result.originalSources.map((source) => source.evidenceId)).toEqual([item.id]);
+    expect(result.originalSources[0]!.passages).toContainEqual({ sourceBlockId: 'stage-1-body', text: excerpt });
+    expect(result.requiredSourceLists[0]!.steps).toEqual([{ label: '目标分析', sourceDescriptions: [excerpt] }]);
+    expect(Object.values(quizOriginalTeachingSources({ ...page, type: 'quiz' }, input).catalog.texts)).toContain(excerpt);
+    expect(page.knowledgePointIds).toEqual(['lesson-sampling']);
+    for (const field of ['textbookId', 'revisionId'] as const) {
+      const invalid = structuredClone(page);
+      invalid.teachingBrief!.sourceBindings![0]![field] = 'other-identity';
+      expect(() => pageOriginalTeachingSources(invalid, input)).toThrow('教材或版本身份不一致');
+    }
+    const unrelated = structuredClone(page);
+    unrelated.teachingBrief!.sourceBindings![0]!.sourceBlockIds = ['unadopted-excerpt'];
+    expect(pageOriginalTeachingSources(unrelated, input).originalSources).toEqual([]);
+  });
+
+  it('retains explicitly selected native source facts across knowledge ownership without importing other evidence', () => {
+    const item = sourceEvidence.items[0]!;
+    const contract: FigureSequenceContract = { resourceId: 'source-sequence:stages', required: true,
+      coveragePolicy: 'authored-scope', knowledgePointIds: ['source-owner'], requiredStepLabels: ['确定目标'],
+      orderedSteps: [{ label: '确定目标', sourceBlockId: 'original-paragraph' },
+        { label: '实施评价', sourceBlockId: 'stage-2' }] };
+    const evidence = { ...sourceEvidence, items: [{ ...item, sourceSequences: [{
+      anchorSourceBlockId: 'stages', kind: 'ordered-steps' as const,
+      steps: contract.orderedSteps!.map((step) => ({ ...step, sourceBlockId: step.sourceBlockId!, excerpt: definition })),
+    }] }, sourceEvidence.items[1]!] };
+    const page: SceneOutline = { ...outline, teachingBrief: { ...outline.teachingBrief!,
+      pptPlanningVersion: PPT_PAGE_PLANNING_VERSION,
+      teachingPlan: { purpose: '', priorKnowledge: '', learnerQuestion: '', takeaway: '',
+        newContent: '', visibleContent: [], reasoningSteps: [], narrationFocus: [],
+        sourceSequenceUses: [{ resourceId: contract.resourceId, coverage: 'selected', sourceStepIds: ['original-paragraph'] }] },
+      sourceBindings: [{ evidenceItemId: item.id, sourceBlockIds: ['original-paragraph'], quote: definition,
+        textbookId: item.source.textbookId, revisionId: item.source.revisionId }],
+    } };
+    const input = { sourceEvidence: evidence, sourceSequenceContracts: [contract], sourceKnowledgePoints: [
+      { id: 'source-owner', evidenceItemIds: [item.id, 'later-topic'] },
+      { id: 'lesson-sampling', evidenceItemIds: [] },
+    ] };
+    const sources = pageOriginalTeachingSources(page, input);
+    expect(sources.requiredSourceLists).toEqual([{ id: contract.resourceId, semantics: 'ordered-steps',
+      steps: [{ label: '确定目标', sourceDescriptions: [definition] }] }]);
+    expect(sources.originalSources.map((source) => source.evidenceId)).toEqual([item.id]);
+    expect(sources.originalQuotes).toEqual([definition]);
+    expect(page.knowledgePointIds).toEqual(['lesson-sampling']);
+
+    const legacy = structuredClone(page);
+    delete legacy.teachingBrief!.pptPlanningVersion;
+    expect(pageOriginalTeachingSources(legacy, input).requiredSourceLists).toEqual([]);
+    expect(pageOriginalTeachingSources(legacy, input).originalSources).toEqual([]);
+
+    const invalid = structuredClone(page);
+    invalid.teachingBrief!.teachingPlan!.sourceSequenceUses![0]!.sourceStepIds = ['invented-block'];
+    expect(pageOriginalTeachingSources(invalid, input).requiredSourceLists).toEqual([]);
+    expect(pageOriginalTeachingSources(invalid, input).originalSources).toEqual([]);
+
+    const inventedQuote = structuredClone(page);
+    inventedQuote.teachingBrief!.sourceBindings![0]!.quote = '并不存在的原文';
+    expect(pageOriginalTeachingSources(inventedQuote, input).originalSources).toEqual([]);
+    expect(pageOriginalTeachingSources(page, { ...input, sourceKnowledgePoints: [
+      { id: 'source-owner', evidenceItemIds: [] }, { id: 'lesson-sampling', evidenceItemIds: [] },
+    ] }).originalSources).toEqual([]);
+  });
+
+  it('keeps a verified multi-paragraph quote in source order even when stored blocks arrive out of order', () => {
+    const first = '测量结果具有误差。';
+    const second = '重复测量能够帮助估计随机误差。';
+    const quote = `${first}\n${second}`;
+    const originalItem = sourceEvidence.items[0]!;
+    const firstSource = { ...originalItem.source, sourceBlockId: 'measurement-1', sourceBlockPosition: 10, quote: first };
+    const secondSource = { ...originalItem.source, sourceBlockId: 'measurement-2', sourceBlockPosition: 11, quote: second };
+    const evidence = { ...sourceEvidence, items: [{ ...originalItem, source: firstSource,
+      completeSourceBlocks: [{ sourceBlockId: 'measurement-2', content: second, source: secondSource },
+        { sourceBlockId: 'measurement-1', content: first, source: firstSource }] }] };
+    const page: SceneOutline = { ...outline, teachingBrief: { ...outline.teachingBrief!, evidence: [], authoring: {
+      nodes: [{ id: 'measurement', kind: 'mechanism', content: '通过多次测量讨论误差。',
+        knowledgePointIds: ['lesson-sampling'], prerequisiteNodeIds: [], provenance: 'course-source',
+        quoteDuties: [{ source: { evidenceItemId: originalItem.id,
+          sourceBlockIds: ['measurement-1', 'measurement-2'], quote } }] }], examplePlans: [], knowledge: [],
+    } } };
+    const sources = pageOriginalTeachingSources(page, { sourceEvidence: evidence,
+      sourceKnowledgePoints: [{ id: 'lesson-sampling', evidenceItemIds: [originalItem.id] }] });
+    expect(sources.originalSources[0]!.passages.map((passage) => passage.text)).toEqual([first, second]);
+    expect(sources.originalQuotes).toEqual([quote]);
+    expect(sources.authoritativeAnchors).toContainEqual({ id: 'source-quote-1', text: quote });
+  });
+
+  it('resolves a compiled page’s precise node quote without treating a derived sibling as original evidence', () => {
+    const original = '随机抽样指的是总体中的个体具有明确被抽取机会的抽样方法。';
+    const item = sourceEvidence.items[0]!;
+    const binding = { evidenceItemId: item.id, sourceBlockIds: ['original-paragraph'], quote: original,
+      textbookId: 'wrong-model-book-label', revisionId: 'wrong-model-version' };
+    const page: SceneOutline = { ...outline, teachingBrief: { ...outline.teachingBrief!, evidence: [], authoring: {
+      nodes: [
+        { id: 'definition', kind: 'concept', content: original, knowledgePointIds: ['lesson-sampling'],
+          prerequisiteNodeIds: [], provenance: 'course-source', sourceBindings: [binding] },
+        { id: 'advice', kind: 'condition', content: '这种抽样只能用于全班活动。', knowledgePointIds: ['lesson-sampling'],
+          prerequisiteNodeIds: ['definition'], provenance: 'derived' },
+      ], examplePlans: [], knowledge: [],
+    } } };
+    const evidence = { ...sourceEvidence, items: [{ ...item, source: { ...item.source, quote: original },
+      completeSourceBlocks: [{ sourceBlockId: 'original-paragraph', content: original }] }] };
+    const sources = pageOriginalTeachingSources(page, { sourceEvidence: evidence,
+      sourceKnowledgePoints: [{ id: 'lesson-sampling', evidenceItemIds: [item.id] }] });
+    expect(sources.originalQuotes).toEqual([original]);
+    expect(sources.authoritativeAnchors.find((anchor) => anchor.sourceDefinitionKey)?.text).toBe(original);
+    expect(sources.originalSources[0]).toMatchObject({ textbookTitle: '统计教材', revisionId: 'book-v1' });
+    expect(JSON.stringify(sources)).not.toContain('这种抽样只能用于全班活动');
+    expect(JSON.stringify(sources)).not.toContain('wrong-model-version');
+  });
+
+  it('uses authoring bindings only as a compatibility fallback and preserves an explicit empty textbook adoption', () => {
+    const item = sourceEvidence.items[0]!;
+    const authoring = { claims: [{ id: 'claim', kind: 'textbook' as const, text: definition,
+      sources: [{ evidenceItemId: item.id, sourceBlockIds: ['original-paragraph'], quote: definition }] }],
+      examples: [], exampleCoverage: [] };
+    const page: SceneOutline = { ...outline, teachingBrief: { ...outline.teachingBrief!, authoring: {
+      nodes: [{ id: 'sampling', kind: 'condition', content: definition, knowledgePointIds: ['lesson-sampling'],
+        prerequisiteNodeIds: [], provenance: 'course-source', sourceBindings: authoring.claims[0].sources }],
+      examplePlans: [], knowledge: [{ knowledgePointId: 'lesson-sampling', authoring }],
+    } } };
+    const fallback = pageOriginalTeachingSources(page, { sourceEvidence,
+      sourceKnowledgePoints: [{ id: 'lesson-sampling', authoring }] });
+    expect(fallback.originalSources.map((source) => source.evidenceId)).toEqual([item.id]);
+    const declined = pageOriginalTeachingSources(page, { sourceEvidence,
+      sourceKnowledgePoints: [{ id: 'lesson-sampling', authoring, evidenceItemIds: [] }] });
+    expect(declined.originalSources).toEqual([]);
+    expect(declined.originalQuotes).toEqual([]);
+  });
+
+  it('does not turn a node’s invented quote or another knowledge point’s source into a source slot', () => {
+    const page: SceneOutline = { ...outline, teachingBrief: { ...outline.teachingBrief!, evidence: [], authoring: {
+      nodes: [{ id: 'sampling', kind: 'condition', content: '没有教材支持的结论。', knowledgePointIds: ['lesson-sampling'],
+        prerequisiteNodeIds: [], provenance: 'derived', sourceBindings: [
+          { evidenceItemId: 'sampling-original', sourceBlockIds: ['original-paragraph'], quote: '没有教材支持的结论。' },
+          { evidenceItemId: 'later-topic', sourceBlockIds: ['later-paragraph'], quote: '尚未分配给本页的下一节教材。' },
+        ] }], examplePlans: [], knowledge: [],
+    } } };
+    const sources = pageOriginalTeachingSources(page, { sourceEvidence,
+      sourceKnowledgePoints: [{ id: 'lesson-sampling', evidenceItemIds: ['sampling-original'] }] });
+    expect(sources.originalQuotes).toEqual([]);
+    expect(sources.authoritativeAnchors).toEqual([]);
+    expect(sources.originalSources.map((source) => source.evidenceId)).toEqual(['sampling-original']);
+  });
+
   it('keeps an adopted ancestor introduction at its actual source location in the first narration catalog', () => {
     const original = '分层缓存策略，又称多级缓存策略，它强调按不同缓存层的一致性和回退规则组织数据访问。';
     const item = sourceEvidence.items[0]!;
@@ -38,7 +240,8 @@ describe('direct original teaching source', () => {
     const page = { ...outline, teachingBrief: { ...outline.teachingBrief!, evidence: [{ sourceId: 'book', quote: original }] } };
     const sources = pageOriginalTeachingSources(page, { sourceEvidence: evidence,
       sourceKnowledgePoints: [{ id: 'lesson-sampling', evidenceItemIds: [item.id] }] });
-    expect(sources.originalSources[0]!.passages[0]).toEqual({ sourceBlockId: 'parent-intro', text: original, source: parentSource });
+    expect(sources.originalSources[0]!.passages.find((passage) => passage.sourceBlockId === 'parent-intro'))
+      .toEqual({ sourceBlockId: 'parent-intro', text: original, source: parentSource });
     expect(sources.originalSources[0]!.sectionPath).toEqual(item.source.sectionPath);
     expect(sources.authoritativeAnchors.find((anchor) => anchor.sourceDefinitionKey)?.text).toBe(original);
     const catalog = buildAuthoringSourceCatalog(new Map([[page.id, sources]]));
@@ -221,7 +424,7 @@ describe('verified original definition slots', () => {
   function verified(quote: string, revisionId = 'book-v1') {
     const item = sourceEvidence.items[0]!;
     const evidence: CourseEvidenceSnapshot = { ...sourceEvidence,
-      items: [{ ...item, source: { ...item.source, revisionId, quote },
+      items: [{ ...item, source: { ...item.source, revisionId, quote, sourceBlockId: 'definition-paragraph' },
         completeSourceBlocks: [{ sourceBlockId: 'definition-paragraph', content: quote }] }],
     };
     const page: SceneOutline = { ...outline, teachingBrief: { ...outline.teachingBrief!, evidence: [{ sourceId: 'book', quote }] } };

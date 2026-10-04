@@ -67,6 +67,14 @@ export type CourseEvidenceItem = {
   /** Whole immutable source blocks omitted or cut by the bounded retrieval excerpt.
    * Context from a parent introduction retains its own original location. */
   completeSourceBlocks?: Array<{ sourceBlockId: string; content: string; source?: CourseEvidenceSource }>;
+  /** First-authoring view of the whole adopted section, including unmarked
+   * and cross-paragraph cases. This is context, not an obligation to teach it all. */
+  sourceContext?: {
+    policyVersion: number;
+    status: 'complete' | 'partial';
+    sectionId?: string;
+    sourceBlockIds: string[];
+  };
   /** Relation-aware references used for visual planning. */
   figureRefs?: CourseEvidenceFigureReference[];
   /** Complete ordered source facts, including paragraphs beyond the retrieved chunk boundary. */
@@ -270,8 +278,17 @@ export function formatCourseEvidenceContext(
   const itemById = new Map(snapshot.items.map((item) => [item.id, item]));
   if (options.deduplicateItems) {
     const referencedIds = new Set(snapshot.mappings.flatMap((mapping) => mapping.evidenceItemIds));
+    const referencedItems = snapshot.items.filter((item) => referencedIds.has(item.id));
+    const sourceBlocks = new Map<string, { sourceBlockId: string; content: string; source: CourseEvidenceSource }>();
+    for (const item of referencedItems) for (const block of item.completeSourceBlocks ?? []) {
+      const source = block.source ?? { ...item.source, sourceBlockId: block.sourceBlockId,
+        sourceBlockPosition: undefined, sourceBlockIds: undefined };
+      sourceBlocks.set(`${source.revisionId}:${block.sourceBlockId}`, {
+        sourceBlockId: block.sourceBlockId, content: block.content, source: { ...source, quote: undefined },
+      });
+    }
     return [
-      "已选教材的本课证据。先按上游要求查看映射，再按 evidenceItemIds 查看证据正文；同一证据只列一次。检索相似度本身不代表支持。",
+      "已选教材的本课证据。先按上游要求查看映射，再按 evidenceItemIds 查看证据正文；同一证据只列一次。completeSourceBlocks 保留原文块引用与位置，完整正文和真实 source 在共享 sourceBlocks 中各列一次，按 revisionId、sourceBlockId 对应。检索相似度本身不代表支持。",
       JSON.stringify({
         primaryRevisionId: snapshot.selections?.find((selection) => selection.primary)?.revisionId,
         mappings: snapshot.mappings.map((mapping) => ({
@@ -282,13 +299,19 @@ export function formatCourseEvidenceContext(
           rationale: mapping.rationale,
           uncoveredRequirement: mapping.uncoveredRequirement,
         })),
-        evidenceItems: snapshot.items.filter((item) => referencedIds.has(item.id)).map((item) => ({
+        sourceBlocks: [...sourceBlocks.values()],
+        evidenceItems: referencedItems.map((item) => ({
           id: item.id,
           kind: item.kind,
           title: item.title,
           content: item.content,
-          completeSourceBlocks: item.completeSourceBlocks ?? [],
-          source: item.source,
+          completeSourceBlocks: (item.completeSourceBlocks ?? []).map((block) => {
+            const original = sourceBlocks.get(`${block.source?.revisionId ?? item.source.revisionId}:${block.sourceBlockId}`);
+            return { sourceBlockId: block.sourceBlockId, source: original?.source };
+          }),
+          sourceContext: item.sourceContext,
+          source: item.source.sourceBlockId && sourceBlocks.has(`${item.source.revisionId}:${item.source.sourceBlockId}`)
+            ? { ...item.source, quote: undefined } : item.source,
           figureRefs: item.figureRefs ?? [],
           figureSequences: item.figureSequences ?? [],
           sourceSequences: item.sourceSequences ?? [],
@@ -313,6 +336,7 @@ export function formatCourseEvidenceContext(
           title: item.title,
           content: item.content,
           completeSourceBlocks: item.completeSourceBlocks ?? [],
+          sourceContext: item.sourceContext,
           source: item.source,
           figureRefs: item.figureRefs ?? [],
           figureSequences: item.figureSequences ?? [],

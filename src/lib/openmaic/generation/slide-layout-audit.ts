@@ -1,13 +1,13 @@
-import { access } from 'node:fs/promises';
-import { chromium, type Browser, type Page } from 'playwright-core';
-import type { PPTElement, SlidePresentationItem } from '@openmaic/dsl';
+import type { Browser, Page } from 'playwright-core';
+import { launchSlideBrowser } from './slide-browser';
+import type { PPTElement, SlidePresentationItem, SlidePresentationProjection } from '@openmaic/dsl';
 import type { GeneratedSlideContent, SceneOutline } from '@openmaic/lib/types/generation';
 import type { RenderedElement, VisibleRect } from '@/lib/course-quality-review/render-measurements';
 import { auditGeneratedSlide } from './slide-quality';
 import { canonicalVisibleContent } from './semantic-page-capacity';
 import { adoptedPageAuthoringContent } from './adopted-page-content';
 import { nativeTextRelationCaption } from './native-text-placement';
-import { hasReferenceLectureTypography, slideBodyFontSizes } from './slide-presentation-typography';
+import { hasReferenceLectureTypography, slideBodyFontSizes, REFERENCE_LECTURE_TYPOGRAPHY } from './slide-presentation-typography';
 
 export type SlideLayoutAuditStatus = 'checked' | 'unavailable';
 
@@ -89,44 +89,9 @@ let page: Page | undefined;
 let queue: Promise<unknown> = Promise.resolve();
 let idleTimer: ReturnType<typeof setTimeout> | undefined;
 
-async function exists(file: string): Promise<boolean> {
-  try {
-    await access(file);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-async function launchBrowser(): Promise<Browser> {
-  const configured = process.env.OPENPBL_CHROMIUM_EXECUTABLE_PATH?.trim();
-  const systemCandidates = [
-    '/usr/bin/chromium',
-    '/usr/bin/chromium-browser',
-    '/usr/bin/google-chrome',
-  ];
-  const candidates: Array<string | undefined> = configured ? [configured] : [];
-  for (const candidate of systemCandidates) {
-    if (await exists(candidate)) candidates.push(candidate);
-  }
-  candidates.push(undefined);
-  let cause: unknown;
-  for (const executablePath of candidates) {
-    try {
-      return await chromium.launch({
-        headless: true,
-        ...(executablePath ? { executablePath } : {}),
-      });
-    } catch (error) {
-      cause = error;
-    }
-  }
-  throw cause ?? new Error('No Chromium executable is available');
-}
-
 async function getPage(): Promise<Page> {
   if (page && browser?.isConnected()) return page;
-  browser = await launchBrowser();
+  browser = await launchSlideBrowser();
   page = await browser.newPage({ viewport: { width: 1000, height: 563 } });
   const auditUrl = layoutAuditUrl();
   const allowedOrigin = new URL(auditUrl).origin;
@@ -359,10 +324,24 @@ function completeVisibleStatement(statement: string, elements: readonly PPTEleme
 
 /** A host-verified projection changes wording obligations only. Its source identities,
  * readable text and comparison associations must still exist on the canvas. */
+function pageDisplayProjection(content: GeneratedSlideContent): SlidePresentationProjection | undefined {
+  if (!content.displayItems?.length || !content.contentBindings) return content.presentationProjection;
+  const elementIdsBySource: Record<string, string[]> = {};
+  for (const binding of content.contentBindings) {
+    elementIdsBySource[binding.sourceContentId] = [...new Set([
+      ...(elementIdsBySource[binding.sourceContentId] ?? []), binding.elementId,
+    ])];
+  }
+  // This is only an input to the actual visible-element checks below, never a
+  // stored quality assertion or permission to count metadata as coverage.
+  return { schemaVersion: 1, layoutVersion: 'teaching-infographic-v2', verified: true,
+    items: content.displayItems, elementIdsBySource };
+}
+
 function verifiedVisibleProjectionSources(outline: SceneOutline, content: GeneratedSlideContent): Set<string> {
-  const projection = content.presentationProjection;
+  const projection = pageDisplayProjection(content);
   if (projection?.verified !== true || projection.schemaVersion !== 1
-    || projection.layoutVersion !== 'teaching-infographic-v1'
+    || !['teaching-infographic-v1', 'teaching-infographic-v2'].includes(projection.layoutVersion)
     || !Array.isArray(projection.items) || !projection.items.length) return new Set();
   const sources = requiredProjectionSources(outline);
   const knownSources = new Set(sources.map((source) => source.id));
@@ -372,7 +351,7 @@ function verifiedVisibleProjectionSources(outline: SceneOutline, content: Genera
       || item.sourceContentIds.some((id) => !knownSources.has(id))
       || [item.label, item.row, item.column].some((field) => field !== undefined
         && (typeof field !== 'string' || !field.trim())))) return new Set();
-  const minimumFont = slideBodyFontSizes(outline)[1];
+  const minimumFont = content.displayItems?.length ? REFERENCE_LECTURE_TYPOGRAPHY.minimumBodyFontSize : slideBodyFontSizes(outline)[1];
   const display = displayedContentElements(content.elements, minimumFont).filter((element) => {
     const readable = (html: string, inheritedFont?: string) => {
       if (/(?:display\s*:\s*none|visibility\s*:\s*hidden|(?:opacity|font-size)\s*:\s*0(?:px|[;"\s])|color\s*:\s*transparent)/iu.test(html)) return false;
@@ -865,19 +844,20 @@ export function auditSlideDensity(
     };
   }
   const visibleCharacters = visibleTextCharacters(content.elements);
-  const referenceLecture = hasReferenceLectureTypography(outline);
+  const referenceLecture = Boolean(content.displayItems?.length) || hasReferenceLectureTypography(outline);
   const verticalSpan = instructionalVerticalSpan(content.elements);
   const requiredVisibleStatements = slideRequiredVisibleStatements(outline);
   const hasAdoptedProjection = Boolean(outline.teachingBrief?.teachingPlan?.presentationItems?.some((item) => item.text.trim())
     || outline.teachingBrief?.teachingPlan?.presentationContent?.some((point) => point.trim()));
-  const displayElements = displayedContentElements(content.elements, referenceLecture ? slideBodyFontSizes(outline)[1] : undefined);
+  const displayElements = displayedContentElements(content.elements, content.displayItems?.length
+    ? REFERENCE_LECTURE_TYPOGRAPHY.minimumBodyFontSize : referenceLecture ? slideBodyFontSizes(outline)[1] : undefined);
   const visibleProjectionSources = verifiedVisibleProjectionSources(outline, content);
   const adoptedSources = requiredProjectionSources(outline);
   const completeVisibleProjection = adoptedSources.length > 0
     && adoptedSources.every((source) => visibleProjectionSources.has(source.id));
   const pointCoverage = (point: string) => {
     const source = adoptedSources.find((source) => source.text.trim() === point.trim());
-    if (source && content.presentationProjection) return Number(visibleProjectionSources.has(source.id));
+    if (source && pageDisplayProjection(content)) return Number(visibleProjectionSources.has(source.id));
     return hasAdoptedProjection ? Number(completeVisibleStatement(point, displayElements))
       : keyPointCoverage(point, content.elements);
   };
@@ -891,7 +871,7 @@ export function auditSlideDensity(
   const area = contentAreaMetrics(content.elements);
   const deepBlueTitle = titleUsesDeepBlue(outline, content.elements);
   const subtitle = hasIndependentSubtitle(outline, content.elements)
-    || completeVisibleProjection && content.presentationProjection!.items.some((item) =>
+    || completeVisibleProjection && pageDisplayProjection(content)!.items.some((item) =>
       Boolean(item.label || item.row || item.column));
   const requiredStructure = requiredSemanticKind(outline);
   const structures = semanticStructures(content.elements);

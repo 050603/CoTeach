@@ -6,7 +6,7 @@ Question Count: {{questionCount}}, Difficulty: {{difficulty}}, Question Types: {
 Internal authoring evidence contract: {{authoringEvidence}}
 Learner answer time budget: {{learnerAnswerTime}}
 Ordered Assessment Targets: {{assessmentTargets}}
-Confirmed assessment design (objectives, conditions, boundaries, and misconceptions): {{assessmentDesign}}
+Confirmed assessment design (ability goals, bound premises, and original evidence): {{assessmentDesign}}
 {{pblContext}}
 
 ## Language Directive
@@ -36,7 +36,7 @@ This request has one model-generation pass. For each item, first establish the t
 For each choice or true/false item, derive every distractor from the taught content; if there are not enough plausible misconceptions, redesign the decision or choose another allowed format. Keep options parallel in clause count, qualifiers, length, specificity, and information density. Do not make an option wrong only by adding an extreme word. Make `analysis` identify the evidence for every correct option and the precise misconception, missing condition, or scope error behind every distractor. For fill blank, provide a concrete concise reference answer and scoring rules accepting equivalent wording. Complete the answer-blind check before output.
 {{/if}}
 {{#if deepResponse}}
-For the one comprehensive written item, make the required conclusion and reasoning explicit in the task. Supply a worked reference answer and specific scoring criteria for each knowledge-point decision; accept equivalent reasoning. Check that the learner can complete the response within the supplied answer time.
+For the one comprehensive written item, make the required conclusion and reasoning explicit in the task. Supply a worked reference answer and specific scoring criteria for each knowledge-point decision; accept equivalent reasoning. Treat the supplied answer time as an effort reference; a complete, clear response may take longer.
 {{/if}}
 Output the final JSON once.
 

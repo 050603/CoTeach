@@ -5,7 +5,6 @@ import { afterAll, describe, expect, it, vi } from 'vitest';
 import { buildOutlinePrompt as buildUpstreamOutlinePrompt } from '@openmaic/generation';
 import type { SceneOutline } from '@openmaic/lib/types/generation';
 import { closeSpatialMeasurementBrowser, measureAuthoredSlideText } from './slide-spatial-measurement';
-import { adoptedPageAuthoringContent } from './adopted-page-content';
 import {
   adaptOutlineToOpenMaicBaseline,
   adaptOutlineToOpenMaicWorkbenchContent,
@@ -16,8 +15,8 @@ import {
 } from './openmaic-baseline';
 
 const PINNED_PROMPT_HASHES = {
-  'slide-content/system.md': '36940238cb32a2dd6e410cec5a0043ca33112983be58a0fa5dde530df3727b8c',
-  'slide-content/user.md': '787b6ae5e857eeb52ea71e1cda509164342ff00d64b2a843a10c68d0176f276e',
+  'slide-content/system.md': 'd55f5967f839d1b072eadd674814d09565f57cac1e3bc2453738aa66042a5a6f',
+  'slide-content/user.md': '6e4fd25ae1428a8d6f45000caa73f6b661044a5f12a6dbdd55fede10802ff77d',
   'slide-actions/user.md': '71a95329793ba0fae6030b6b9eb562bed62e9460bd26c2fcbd92d7c53f549512',
   'requirements-to-outlines/system.md': '344c33e57f72ee86056c12d072c337f609838eab209517a05cc9b57a90b02e32',
   'requirements-to-outlines/user.md': '209a80f3bf46d9463f3b639d227187d02e2d2536ce1b21de1cd202ba744ea156',
@@ -51,7 +50,7 @@ const outline: SceneOutline = {
 afterAll(async () => { await closeSpatialMeasurementBrowser(); });
 
 describe('pinned OpenMAIC generation baseline', () => {
-  it('pins the adaptive content prompts and records the in-place action-prompt improvement', async () => {
+  it('pins the restored 4615a98d content prompts and records the in-place action-prompt improvement', async () => {
     expect(OPENMAIC_GENERATION_BASELINE.release).toBe('v1.0.3');
     expect(OPENMAIC_GENERATION_BASELINE.releaseCommit).toBe(
       'e693e11a81644f84c258df73dbda378643520a62',
@@ -131,6 +130,28 @@ describe('pinned OpenMAIC generation baseline', () => {
     expect(ai.mock.calls[0]?.[0]).toContain('# Scene Outline Generator');
   });
 
+  it('projects a spoken page into display and layout inputs without legacy lecture copies', async () => {
+    const stale = '不可作为新创作任务的兼容正文';
+    const spoken: SceneOutline = { ...outline, teachingBrief: { ...outline.teachingBrief!,
+      manuscript: { sectionId: 'section', segmentIds: ['node'] }, explanation: stale, examples: [stale],
+      understandingCriteria: { goals: [stale], answerEssentials: [stale], misconceptions: [stale], supportingUnitIds: [] },
+      teachingPlan: { purpose: stale, priorKnowledge: stale, newContent: stale, learnerQuestion: stale,
+        reasoningSteps: [stale], takeaway: stale, visibleContent: ['减少选择偏差'], narrationFocus: [stale],
+        visualRelationship: { kind: 'comparison', description: '对照抽样结果', readingOrder: ['甲', '乙'], preferredForm: 'table' } },
+    } };
+    const ai = vi.fn().mockResolvedValue(JSON.stringify({ elements: [{ type: 'text', left: 60, top: 60,
+      width: 800, height: 80, content: '<p>随机抽样</p>' }] }));
+    await generateOpenMaicBaselineContent(spoken, ai);
+    const [system, user] = ai.mock.calls[0]!;
+    expect(user).not.toContain(stale);
+    expect(user).toContain('减少选择偏差');
+    expect(user).toContain('对照抽样结果');
+    expect(user).toContain('样本来自明确界定的目标总体。');
+    expect(system).not.toContain('CoTeach teaching enhancement adapter');
+    expect(user).not.toContain('teachingAuthoring');
+    expect(ai).toHaveBeenCalledOnce();
+  });
+
   it('keeps the official slide prompt and adds the shared teaching design only through the adapter', async () => {
     const ai = vi.fn().mockResolvedValue(JSON.stringify({ elements: [{
       type: 'text', left: 60, top: 60, width: 800, height: 80,
@@ -140,6 +161,15 @@ describe('pinned OpenMAIC generation baseline', () => {
       ...outline,
       teachingBrief: {
         ...outline.teachingBrief!,
+        authoring: {
+          nodes: [],
+          examplePlans: [{ knowledgePointId: 'kp-private-id', mode: 'none', selectedExampleIds: [], rationale: '术语已熟悉' }],
+          knowledge: [{ knowledgePointId: 'kp-private-id', authoring: {
+            claims: [{ id: 'suggestion', kind: 'derived', text: '可先比较两组样本的构成。', sources: [],
+              logicalConditions: ['两组比例对应同一类别'] }],
+            examples: [], exampleCoverage: [],
+          } }],
+        },
         teachingPlan: {
           purpose: '比较两种抽样结果', priorKnowledge: '会读百分比', newContent: '样本构成会影响估计结果',
           learnerQuestion: '两组比例差异怎样看得更清楚', reasoningSteps: ['对齐两组类别', '比较比例差异'],
@@ -158,20 +188,84 @@ describe('pinned OpenMAIC generation baseline', () => {
     expect(system).toContain('# Slide Content Generator');
     expect(system).toContain('Choose the representation from the teaching need');
     expect(system).toContain('There is no requirement to use a certain number of formats');
-    expect(system).toContain('CoTeach teaching enhancement adapter');
+    const sourceContext = JSON.parse(user.split('## Current adopted teaching sources and page responsibilities\n')[1]!.split('\n')[0]!);
+    expect(sourceContext).not.toHaveProperty('sourceAuthoring');
+    const sharedDesign = JSON.parse(user.split('\n').find((line: string) =>
+      line.startsWith('{') && line.includes('"teachingAuthoring"'))!);
+    expect(sharedDesign.teachingAuthoring.statements[0]).toMatchObject({
+      kind: 'derived', logicalConditions: ['两组比例对应同一类别'],
+    });
+    expect(sharedDesign.pageAuthoring.examplePlans[0].mode).toBe('none');
+    expect(system).toContain('Original passages establish facts');
+    expect(system).toContain('PPT_RESTORED_NATIVE_4615');
     expect(system).toContain('Instructional Slide Title Contract');
     expect(user).toContain('- **Title**: 随机抽样');
     expect(user).toContain('render `随机抽样` verbatim as the visible primary heading');
     expect(system).not.toContain('使用随机数表选择样本');
-    expect(user).toContain('使用随机数表选择样本');
+    expect(user).not.toContain('使用随机数表选择样本');
     expect(user).toContain('样本来自明确界定的目标总体');
     expect(user).toContain('"preferredForm":"chart"');
-    expect(user).toContain('preferredForm and rationale are pedagogical preferences');
-    expect(user).toContain('Do not invent values, media IDs, or extra claims to satisfy variety');
+    expect(system).toContain('pedagogical preference rather than a fixed template');
+    expect(system).toContain('invent values merely to produce a chart');
     expect(`${system}\n${user}`).not.toContain('Semantic page and narration budget');
     expect(`${system}\n${user}`).not.toContain('Course visual system');
     expect(`${system}\n${user}`).not.toContain('spatial budget');
-    expect(`${system}\n${user}`).not.toContain('kp-private-id');
+    expect(system).not.toContain('kp-private-id');
+    expect(sharedDesign.teachingAuthoring.statements[0].knowledgePointId).toBe('kp-private-id');
+    expect(JSON.stringify(result)).not.toContain('kp-private-id');
+  });
+
+  it('supplies a single modern body and case facts to the native slide branch', async () => {
+    const body = '先把两组同一类别的比例放到共同刻度上，再比较对应位置；这样高度差才表示比例差。';
+    const facts = '甲组百分比为42%，乙组百分比为68%，两组都统计相同类别。';
+    const unsupportedPurpose = '只有使用柱状图才可能进行正确比较';
+    const ai = vi.fn().mockResolvedValue(JSON.stringify({ elements: [{
+      type: 'text', left: 60, top: 60, width: 800, height: 80,
+      content: '<p><span style="font-size:32px">比较样本比例</span></p>',
+    }] }));
+    await generateOpenMaicBaselineContent({
+      ...outline,
+      teachingBrief: {
+        ...outline.teachingBrief!, explanation: body,
+        authoring: {
+          nodes: [{ id: 'compare-proportions', kind: 'relation', content: body,
+            prerequisiteNodeIds: [], provenance: 'derived',
+            knowledgePointIds: ['kp-private-id'], claimRefs: [{ knowledgePointId: 'kp-private-id', claimId: 'scale' }],
+            exampleIds: ['two-groups'], quoteDuties: [] }],
+          examplePlans: [{ knowledgePointId: 'kp-private-id', mode: 'textbook',
+            selectedExampleIds: ['two-groups'], rationale: '比较同一类别的两个比例' }],
+          knowledge: [{ knowledgePointId: 'kp-private-id', authoring: {
+            claims: [{ id: 'scale', kind: 'derived', text: '共同刻度使两个比例可直接比较',
+              logicalConditions: ['相同类别，且使用共同零点和尺度'], sources: [] }],
+            examples: [{ id: 'two-groups', kind: 'textbook', title: unsupportedPurpose,
+              purpose: unsupportedPurpose, facts: [facts], explanation: body, claimIds: ['scale'], sources: [] }],
+            exampleCoverage: [],
+          } }],
+        },
+        teachingPlan: {
+          purpose: '比较比例', priorKnowledge: '会读百分比', newContent: body, learnerQuestion: '两个比例相差多少',
+          reasoningSteps: [body], takeaway: '两组差26个百分点', visibleContent: ['42%', '68%'],
+          presentationContent: ['甲组42%', '乙组68%'], narrationFocus: [body],
+          introduces: ['compare-proportions'], deepens: [], references: [],
+          visualRelationship: { kind: 'quantitative', description: '相同类别的两组比例',
+            readingOrder: ['甲组', '乙组'], preferredForm: 'chart' },
+        },
+      },
+    }, ai);
+    expect(ai).toHaveBeenCalledOnce();
+    const [, user] = ai.mock.calls[0];
+    expect(user.split(body)).toHaveLength(2);
+    expect(user.split(facts)).toHaveLength(2);
+    expect(user).not.toContain(unsupportedPurpose);
+    expect(user).not.toContain('"sourceAuthoring"');
+    expect(user).not.toContain('"newContent"');
+    expect(user).not.toContain('"narrationFocus"');
+    expect(user).not.toContain('"reasoningSteps"');
+    expect(user).toContain('"preferredForm":"chart"');
+    expect(user).toContain('甲组42%');
+    expect(user).toContain('乙组68%');
+    expect(user).toContain('相同类别，且使用共同零点和尺度');
+    expect(user).toContain('样本来自明确界定的目标总体');
   });
 
   it('adds only the measured website reference profile when production opts in', async () => {
@@ -189,11 +283,11 @@ describe('pinned OpenMAIC generation baseline', () => {
     const [system, user] = ai.mock.calls[0];
     expect(system).toContain('# Slide Content Generator');
     expect(system).toContain('OpenMAIC website course-deck reference profile');
-    expect(system).toContain('CoTeach teaching enhancement adapter');
+    expect(system).toContain('PPT_RESTORED_NATIVE_4615');
     expect(system).toContain('#1E3A8A/#1E40AF');
     expect(system).toContain('Never use a table merely as a grid');
-    expect(user).toContain('Course title: 统计入门');
-    expect(user).toContain('随机抽样 | 抽样误差');
+    expect(user).toContain('"courseTitle":"统计入门"');
+    expect(user).toContain('"slideTitles":["随机抽样","抽样误差"]');
     expect(user).toContain('总体中每个个体需要具有明确的被抽取机会');
     expect(`${system}\n${user}`).not.toContain('kp-private-id');
     expect(`${system}\n${user}`).not.toContain('targetDurationSec');
@@ -217,7 +311,7 @@ describe('pinned OpenMAIC generation baseline', () => {
       };
       const failure = vi.fn();
       const ai = vi.fn().mockResolvedValue(JSON.stringify({ components: [
-        { kind: 'textBox', left: 60, top: 140, width: 880, fontSize: 24, paragraphRefs: ['adopted-content-1'] },
+        { kind: 'textBox', left: 60, top: 140, width: 880, fontSize: 18, text: point },
       ] }));
       const slide = await generateOpenMaicBaselineContent(page, ai, {
         componentAuthoring: true, onFailure: failure,
@@ -264,7 +358,7 @@ describe('pinned OpenMAIC generation baseline', () => {
     const ai = vi.fn().mockResolvedValue(JSON.stringify({ elements: [], components: [{
       kind: 'textBox', id: 'adopted-source-text', role: 'body', left: 60, top: 140,
       width: 880, height: 240, fontSize: 22,
-      paragraphRefs: adoptedPageAuthoringContent(page).map((item) => item.id),
+      paragraphs: points,
     }] }));
     const { generateSceneContent } = await import('./scene-generator');
     const generated = await generateSceneContent(page, ai, {
@@ -275,13 +369,14 @@ describe('pinned OpenMAIC generation baseline', () => {
     expect(ai).toHaveBeenCalledOnce();
     const [system, user] = ai.mock.calls[0];
     for (const clause of clauses) expect(user).toContain(clause);
-    expect(user).toContain('it need not reproduce the book sentence');
-    expect(user).toContain('original-source channel for narration');
-    expect(user).toContain('do not derive, rewrite, shorten or expand them again');
+    expect(system).toContain('A formal definition can be accurately condensed');
+    expect(system).toContain('separately authored lecture');
+    expect(system).toContain('Condense wording and combine related points');
     expect(user).not.toContain('Derive accurate presentation points directly from these original sources');
-    expect(user.lastIndexOf('Current page first-draft decisions')).toBeGreaterThan(user.lastIndexOf('Original teaching sources for this page'));
+    expect(user).not.toContain('Current page first-draft decisions');
+    expect(system).not.toContain('Authoritative adopted presentation-point slots');
     expect(system).toContain('# Slide Content Generator');
-    expect(system).toContain('definitions need not appear verbatim on the slide');
+    expect(system).toContain('Keep the complete native slide design');
     expect(`${system}\n${user}`).not.toContain('kp-private-id');
     const visible = generated && 'elements' in generated ? generated.elements.flatMap((element) =>
       element.type === 'text' ? [element.content.replace(/<[^>]+>/g, '')] : []).join('\n') : '';

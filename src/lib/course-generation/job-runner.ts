@@ -1,4 +1,5 @@
 import path from "node:path";
+import { bindTeachingManuscript, teachingManuscripts, type TeachingManuscript } from '@/lib/course-design/teaching-manuscript';
 import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { Prisma } from "@prisma/client";
@@ -15,6 +16,7 @@ import {
   type ClassroomGenerationProgress,
   type GenerateClassroomInput,
   type GenerateClassroomOptions,
+  type NativeRenderRepairCheckpoint,
 } from "@openmaic/lib/server/classroom-generation";
 import {
   generateClassroomAssets,
@@ -71,7 +73,7 @@ import {
   ADAPTIVE_RESOURCE_CONCURRENCY,
   runAdaptiveResourcePool,
 } from "@/lib/course-generation/adaptive-resource-pool";
-import type { AdaptivePreparedBranchResource, CourseContent, LessonOutlineSection, OpenMaicSceneOutlineSnapshot, TeachingBlueprintPage } from "@/lib/session/types";
+import type { AdaptivePreparedBranchResource, CourseContent, KnowledgePoint, LessonOutlineSection, OpenMaicSceneOutlineSnapshot, TeachingBlueprintPage } from "@/lib/session/types";
 import { buildAdaptiveBranchTeachingContext } from "./adaptive-teaching-context";
 import { ensureTeachingToolPlans } from "@/lib/openmaic/generation/teaching-tool-plan";
 import { TeachingPagePreflightError } from '@/lib/openmaic/generation/teaching-page-preflight';
@@ -108,6 +110,20 @@ const HEARTBEAT_INTERVAL_MS = 5_000;
 const LEASE_DURATION_MS = 30_000;
 const WORKER_ID = `course-content:${process.pid}:${randomUUID()}`;
 const MAX_STORED_EVENTS = 80;
+
+/** Source adoption retains its historical identity shape. The separate
+ * server-only authoring directory resolves actual teaching refs, never source
+ * checkpoint identity or additional page responsibilities. */
+export function buildCourseGenerationKnowledgeContext(
+  knowledgePoints: readonly Pick<KnowledgePoint, 'id' | 'evidenceItemIds' | 'authoring'>[] | undefined,
+) {
+  return {
+    sourceKnowledgePoints: knowledgePoints?.map((point) => ({ id: point.id,
+      ...(point.evidenceItemIds !== undefined ? { evidenceItemIds: [...point.evidenceItemIds] } : {}) })),
+    teachingAuthoringKnowledge: knowledgePoints?.flatMap((point) => point.authoring
+      ? [{ id: point.id, authoring: point.authoring }] : []),
+  };
+}
 
 async function hydrateTextbookFigureBytes(
   images: NonNullable<GenerateClassroomInput["textbookImages"]> | undefined,
@@ -179,6 +195,31 @@ type StoredCheckpointState = {
   authoringHistory: Array<{ request: unknown; stages: unknown[] }>;
 };
 
+/** Execution-guarded writes and request-guarded reads keep the one optional
+ * section repair budget durable without treating stale work as fresh budget. */
+export function nativeRenderRepairCheckpointCallbacks(jobId: string, executionId: string, requestFingerprint: string):
+  Pick<GenerateClassroomOptions, 'loadNativeRenderRepairCheckpoint' | 'onNativeRenderRepairCheckpoint'> {
+  return {
+    loadNativeRenderRepairCheckpoint: async (sectionId) => {
+      const row = await prisma.generationCheckpoint.findUnique({
+        where: { jobId_step: { jobId, step: `native-render-repair:${sectionId}` } }, select: { state: true },
+      });
+      if (!row) return null;
+      const saved = row.state;
+      if (!saved || typeof saved !== 'object' || Array.isArray(saved)
+        || saved.requestFingerprint !== requestFingerprint) {
+        throw Object.assign(new Error('已保存排版修复检查点属于不同的生成请求'),
+          { code: 'NATIVE_RENDER_REPAIR_IDENTITY_MISMATCH', isRetryable: false });
+      }
+      return saved;
+    },
+    onNativeRenderRepairCheckpoint: async (checkpoint: NativeRenderRepairCheckpoint) => {
+      await saveGenerationCheckpoint(jobId, `native-render-repair:${checkpoint.sectionId}`,
+        { ...checkpoint, requestFingerprint }, { executionId });
+    },
+  };
+}
+
 type TeachingSectionCheckpointSnapshot = {
   schemaVersion: 1;
   sectionKey: string;
@@ -192,6 +233,8 @@ type SplitClassroomSnapshot = Awaited<ReturnType<typeof splitGeneratedClassroom>
 type CourseFinalizationCheckpoint = {
   schemaVersion: 1;
   inputFingerprint: string;
+  /** Source and canonical speech identity, required when restoring spoken output. */
+  sourceContextFingerprint?: string;
   generated: GeneratedClassroomSnapshot;
   split?: SplitClassroomSnapshot;
   courseLinkedAt?: string;
@@ -564,6 +607,7 @@ export async function restoreOrGenerateFinalizedClassroom(input: {
     sourceNarrationBaseline?: SourceNarrationBaselineCheckpoint) => Promise<GeneratedClassroomSnapshot>;
   sourceNarrationBaseline?: unknown;
   sourceContextFingerprint?: string;
+  teachingManuscripts?: readonly TeachingManuscript[];
   stageCheckpoints?: readonly SceneStageCheckpointSnapshot[];
   onSourceNarrationBaseline?: (baseline: SourceNarrationBaselineCheckpoint) => Promise<unknown> | unknown;
   previousScenes?: ReadonlyMap<string, Scene>;
@@ -571,10 +615,31 @@ export async function restoreOrGenerateFinalizedClassroom(input: {
 }) {
   const inputFingerprint = fingerprintCourseFinalizationRequest(input.request);
   const candidate = restoreCourseFinalizationCheckpoint(input.checkpoint, input.request, input.preparedOutlines);
+  const selectedIds = input.request.generationScope === 'test-lesson' ? input.request.testLesson?.sceneOutlineIds ?? [] : undefined;
+  const currentPlan = input.preparedOutlines.length ? input.preparedOutlines : input.request.sceneOutlines ?? [];
+  const currentOutlines = resolveGenerationOutlineSelection(currentPlan, selectedIds) ?? [];
+  const hasSpoken = (outlines: readonly SceneOutline[]) => outlines.some((outline) => outline.teachingBrief?.manuscript);
+  const assertManuscripts = (outlines: readonly SceneOutline[]) => {
+    for (const outline of outlines) if (outline.teachingBrief?.manuscript) {
+      if (!input.sourceContextFingerprint) throw new Error('已保存口播缺少当前来源与正文身份，不能复用终稿');
+      // Quiz references delimit its taught scope rather than its own speech,
+      // but every referenced paragraph must still exist in the current source.
+      bindTeachingManuscript(outline, input.teachingManuscripts ?? []);
+    }
+  };
+  assertManuscripts(currentOutlines);
+  const requiresSpokenIdentity = hasSpoken(currentOutlines)
+    || Boolean(candidate && hasSpoken(candidate.generated.assetContext.outlines));
+  if (requiresSpokenIdentity && !input.sourceContextFingerprint) {
+    throw new Error('已保存口播缺少当前来源与正文身份，不能复用终稿');
+  }
   // Reuse is guarded by request, page and model identities. Content quality
   // is reviewed by the teacher after generation, never a reason to discard
   // the original finalization or purchase another authoring call.
-  const restoredFinalization = candidate;
+  const restoredFinalization = candidate && (!requiresSpokenIdentity
+    || Boolean(input.sourceContextFingerprint && candidate.sourceContextFingerprint === input.sourceContextFingerprint))
+    ? candidate : null;
+  if (restoredFinalization) assertManuscripts(restoredFinalization.generated.assetContext.outlines);
   const authored = restoredFinalization?.generated ?? await input.generate();
   // A grouped page can be rebuilt from stage checkpoints without passing through
   // loadSceneCheckpoint. Promote its accepted assets at the common finalization
@@ -585,6 +650,7 @@ export async function restoreOrGenerateFinalizedClassroom(input: {
   } : authored;
   if (!generated.scenes.length) throw new Error('No scenes were generated');
   const actual = generated.assetContext.outlines;
+  assertManuscripts(actual);
   const latest = input.getPreparedOutlines?.();
   const plan = latest?.length ? latest : input.preparedOutlines.length ? input.preparedOutlines
     : input.request.sceneOutlines?.length ? input.request.sceneOutlines : actual;
@@ -599,7 +665,7 @@ export async function restoreOrGenerateFinalizedClassroom(input: {
   }
   const sourceContentIssues = findClassroomSourceContentIssues(generated.assetContext.outlines,
     generated.scenes, input.sourceSequenceContracts ?? []);
-  return { inputFingerprint, restoredFinalization, generated, sourceContentIssues,
+  return { inputFingerprint, sourceContextFingerprint: input.sourceContextFingerprint, restoredFinalization, generated, sourceContentIssues,
     qualityDiagnostics: sourceContentDiagnosticWarnings(sourceContentIssues) };
 }
 
@@ -1701,9 +1767,8 @@ async function runJobWithCourseGenerationContext(job: CourseGenerationJob): Prom
     assertRequiredTextbookFiguresAvailable(textbookResources);
     const sourceEvidence = course?.content.courseEvidence ? { ...course.content.courseEvidence,
       items: await hydrateCourseEvidenceFigureReferences(course.content.courseEvidence.items,
-        { includeAncestorIntroductions: true }) } : undefined;
-    const sourceKnowledgePoints = course?.content.knowledgePoints.map((point) => ({ id: point.id,
-      ...(point.evidenceItemIds !== undefined ? { evidenceItemIds: [...point.evidenceItemIds] } : {}) }));
+        { includeAncestorIntroductions: true, includeSectionContext: true }) } : undefined;
+    const { sourceKnowledgePoints, teachingAuthoringKnowledge } = buildCourseGenerationKnowledgeContext(course?.content.knowledgePoints);
     const sourceSequenceContracts = scopeSourceSequenceContracts(sourceEvidence
       ? resolveCourseSourceSequenceContracts(sourceEvidence, course!.content.knowledgePoints)
       : [], generationInput.sceneOutlines ?? checkpointState.preparedOutlines);
@@ -1774,11 +1839,15 @@ async function runJobWithCourseGenerationContext(job: CourseGenerationJob): Prom
       finalization: checkpointState.courseFinalization, authoringHistory: checkpointState.authoringHistory,
       sources: { sourceEvidence, sourceKnowledgePoints, sourceSequenceContracts: sourceContentContracts } });
     const sourceCheckpointIdentities = new Map<string, Parameters<typeof restoreSourceContentCheckpoint>[1]>();
-    const { inputFingerprint: finalizationFingerprint, restoredFinalization, generated,
+    const canonicalManuscripts = teachingManuscripts(course?.content.teachingBlueprint);
+    const { inputFingerprint: finalizationFingerprint, sourceContextFingerprint: finalizationSourceFingerprint, restoredFinalization, generated,
       sourceContentIssues, qualityDiagnostics: sourceDiagnostics } = await restoreOrGenerateFinalizedClassroom({
       checkpoint: checkpointState.courseFinalization,
       sourceNarrationBaseline: checkpointState.sourceNarrationBaseline,
-      sourceContextFingerprint: fingerprintGenerationValue({ sourceEvidence, sourceKnowledgePoints, sourceContentContracts }),
+      sourceContextFingerprint: fingerprintGenerationValue({ sourceEvidence, sourceKnowledgePoints, sourceContentContracts,
+        ...(course?.content.teachingBlueprint?.sections.some((section) => section.contentMode === 'spoken')
+          ? { manuscripts: canonicalManuscripts } : {}) }),
+      teachingManuscripts: canonicalManuscripts,
       stageCheckpoints: [...checkpointState.stageCheckpoints.values()],
       onSourceNarrationBaseline: async (baseline) => {
         const stored = await saveSourceNarrationBaselineCheckpoint(job.id, baseline, { executionId });
@@ -1792,11 +1861,14 @@ async function runJobWithCourseGenerationContext(job: CourseGenerationJob): Prom
       sourceSequenceContracts: sourceContentContracts,
       generate: (rejectedSourceOutput, baseline) => generateClassroom(generationInput, {
       signal: controller.signal,
+      ...nativeRenderRepairCheckpointCallbacks(job.id, executionId, fingerprintGenerationValue(effectiveRequest)),
       allowUnstartedCapacityReplan: Boolean(request.authoringRequestId
         && request.capacityReplanRequestId === request.authoringRequestId),
       sourceSequenceContracts: sourceContentContracts,
       sourceEvidence,
       sourceKnowledgePoints,
+      teachingAuthoringKnowledge,
+      teachingManuscripts: canonicalManuscripts,
       sourceRecoveryScenes: rejectedSourceOutput?.scenes,
       completedTestLesson,
       sourceNarrationBaseline: baseline ? { scenes: baseline.finalization.generated.scenes,
@@ -2056,6 +2128,7 @@ async function runJobWithCourseGenerationContext(job: CourseGenerationJob): Prom
       await saveGenerationCheckpoint(job.id, COURSE_FINALIZATION_STEP, {
         schemaVersion: 1,
         inputFingerprint: finalizationFingerprint,
+        sourceContextFingerprint: finalizationSourceFingerprint,
         generated,
       } satisfies CourseFinalizationCheckpoint, { executionId });
     }
@@ -2086,6 +2159,7 @@ async function runJobWithCourseGenerationContext(job: CourseGenerationJob): Prom
       await saveGenerationCheckpoint(job.id, COURSE_FINALIZATION_STEP, {
         schemaVersion: 1,
         inputFingerprint: finalizationFingerprint,
+        sourceContextFingerprint: finalizationSourceFingerprint,
         generated,
         split,
       } satisfies CourseFinalizationCheckpoint, { executionId });
@@ -2286,6 +2360,7 @@ async function runJobWithCourseGenerationContext(job: CourseGenerationJob): Prom
     await saveGenerationCheckpoint(job.id, COURSE_FINALIZATION_STEP, {
       schemaVersion: 1,
       inputFingerprint: finalizationFingerprint,
+      sourceContextFingerprint: finalizationSourceFingerprint,
       generated,
       split,
       courseLinkedAt: restoredFinalization?.courseLinkedAt ?? new Date().toISOString(),
@@ -2353,6 +2428,7 @@ async function runJobWithCourseGenerationContext(job: CourseGenerationJob): Prom
     await saveGenerationCheckpoint(job.id, COURSE_FINALIZATION_STEP, {
       schemaVersion: 1,
       inputFingerprint: finalizationFingerprint,
+      sourceContextFingerprint: finalizationSourceFingerprint,
       generated,
       split,
       courseLinkedAt: restoredFinalization?.courseLinkedAt ?? new Date().toISOString(),

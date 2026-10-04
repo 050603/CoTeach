@@ -17,6 +17,7 @@ import { validateAction } from '@openmaic/dsl';
 import { whiteboardBlocks, replaceWhiteboardSteps } from '@openmaic/lib/edit/whiteboard-blocks';
 import type { WhiteboardPatch } from '@openmaic/lib/edit/whiteboard-patch';
 import type { NarrationPatch } from '@openmaic/lib/agent/tools/regenerate-scene-actions';
+import type { SlideVisualPatch } from '@openmaic/lib/agent/tools/slide-visual-patch';
 
 // Mirrors the default theme minted by createSceneWithActions for fresh slides.
 const DEFAULT_THEME = {
@@ -43,6 +44,11 @@ export function toRuntimeSlideContent(
     viewportRatio: 0.5625,
     theme: DEFAULT_THEME,
   };
+  // Element-address metadata belongs to the generated page, not the old
+  // canvas. A restored native page legitimately omits the old projection.
+  const canvas = { ...base };
+  for (const key of ['displayItems', 'contentBindings', 'presentationProjection', 'qualityDiagnostics',
+    'sourceGroupIds', 'teachingText', 'paginationVersion', 'occupiedHeight', 'layoutDecision', 'layoutMeasurement']) delete canvas[key];
   return {
     type: 'slide',
     // schemaVersion belongs at the SlideContent top level (sibling of `canvas`),
@@ -50,8 +56,13 @@ export function toRuntimeSlideContent(
     // reads it — not inside the canvas object.
     schemaVersion: CURRENT_SLIDE_CONTENT_SCHEMA_VERSION,
     canvas: {
-      ...base,
+      ...canvas,
       elements: gen.elements,
+      ...(gen.theme !== undefined ? { theme: gen.theme } : {}),
+      ...(gen.displayItems !== undefined ? { displayItems: gen.displayItems } : {}),
+      ...(gen.contentBindings !== undefined ? { contentBindings: gen.contentBindings } : {}),
+      ...(gen.presentationProjection !== undefined ? { presentationProjection: gen.presentationProjection } : {}),
+      ...(gen.qualityDiagnostics !== undefined ? { qualityDiagnostics: gen.qualityDiagnostics } : {}),
       // Replacing ALL elements with freshly-minted ids strands any persisted
       // animations on `base` — they reference element ids that no longer exist
       // (mirrors how slide edit ops drop animations whose elId is deleted).
@@ -75,6 +86,8 @@ export interface RegenerateDetails {
   /** Present only for a scoped `edit_whiteboard` tool result. */
   whiteboardPatch?: WhiteboardPatch | null;
   narrationPatch?: NarrationPatch;
+  /** Only native PPT redraw results carry an exact original-state guard. */
+  visualPatch?: SlideVisualPatch;
   error?: string;
 }
 
@@ -188,6 +201,11 @@ export function planRegenerateApply(
   const contentAllowed = toolName === undefined || toolName === 'regenerate_scene';
 
   if (contentAllowed && details.content && Array.isArray(details.content.elements)) {
+    if (details.visualPatch && (!scene || !isEqual(scene.content, details.visualPatch.beforeContent)
+      || !isEqual(scene.actions ?? [], details.visualPatch.beforeActions))) {
+      return { snapshot: null, patch: null,
+        error: '这页 PPT 或讲稿在 AI 重绘期间已被修改，已保留你的最新内容。请重新重绘。' };
+    }
     const sceneContent = scene?.content as
       | { type?: string; canvas?: Record<string, unknown> }
       | undefined;
@@ -195,7 +213,7 @@ export function planRegenerateApply(
     const runtime = toRuntimeSlideContent(details.content, existingCanvas);
     const patch: ScenePatch = {
       content: runtime,
-      ...(actions.length > 0 ? { actions } : {}),
+      ...(details.visualPatch || actions.length > 0 ? { actions } : {}),
     };
     const snapshot = scene
       ? { sceneId, content: scene.content, actions: scene.actions ?? [] }

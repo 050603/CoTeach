@@ -129,20 +129,39 @@ function updateData(row: CourseGenerationJob, patch: Patch): Prisma.GenerationJo
     values[key] = value && typeof value === "object" && "increment" in value ? Number(values[key] ?? 0) + Number(value.increment) : value === Prisma.JsonNull ? null : value;
   }
   const next = values as CourseGenerationJob;
-  return {
-    status: next.status.toUpperCase(), step: next.step, progress: next.progress, request: json(next.request), result: next.result === null ? Prisma.JsonNull : json(next.result),
-    qualityReport: next.qualityReport === null ? Prisma.JsonNull : json(next.qualityReport), error: next.error,
-    attempt: next.attempt, startedAt: next.startedAt, completedAt: next.completedAt, heartbeatAt: next.lastHeartbeatAt, retryAt: next.retryAt,
-    trace: json({ schemaVersion: 1, entries: next.trace, state: {
-      requestedBy: next.requestedBy, message: next.message, scenesGenerated: next.scenesGenerated, totalScenes: next.totalScenes,
-      estimatedRemainingSeconds: next.estimatedRemainingSeconds, tokenUsage: next.tokenUsage, tokenUsageCalls: next.tokenUsageCalls,
-      events: next.events, reviewStatus: next.reviewStatus,
-      activePages: next.activePages, stageProgress: next.stageProgress, currentStage: next.currentStage,
-      currentCall: next.currentCall,
-      reviewAvailableUntil: next.reviewAvailableUntil, stepIndex: next.stepIndex, version: next.version, preparedOutlines: next.preparedOutlines,
-      executionId: next.executionId, executionOwner: next.executionOwner, leaseExpiresAt: next.leaseExpiresAt,
-    } }),
-  };
+  // Heartbeats and progress updates must leave the adopted request and saved
+  // output in PostgreSQL: they can contain several megabytes of course input.
+  const data: Prisma.GenerationJobUpdateInput = {};
+  if (patch.status !== undefined) data.status = next.status.toUpperCase();
+  if (patch.step !== undefined) data.step = next.step;
+  if (patch.progress !== undefined) data.progress = next.progress;
+  if (patch.request !== undefined) data.request = next.request === null ? Prisma.JsonNull : json(next.request);
+  if (patch.result !== undefined) data.result = next.result === null ? Prisma.JsonNull : json(next.result);
+  if (patch.qualityReport !== undefined) data.qualityReport = next.qualityReport === null ? Prisma.JsonNull : json(next.qualityReport);
+  if (patch.error !== undefined) data.error = next.error;
+  if (patch.attempt !== undefined) data.attempt = next.attempt;
+  if (patch.startedAt !== undefined) data.startedAt = next.startedAt;
+  if (patch.completedAt !== undefined) data.completedAt = next.completedAt;
+  if (patch.lastHeartbeatAt !== undefined) data.heartbeatAt = next.lastHeartbeatAt;
+  if (patch.retryAt !== undefined) data.retryAt = next.retryAt;
+  const stateFields: readonly (keyof CourseGenerationJob)[] = [
+    "trace", "requestedBy", "message", "scenesGenerated", "totalScenes",
+    "estimatedRemainingSeconds", "tokenUsage", "tokenUsageCalls", "events", "reviewStatus",
+    "activePages", "stageProgress", "currentStage", "currentCall", "reviewAvailableUntil",
+    "stepIndex", "version", "preparedOutlines", "executionId", "executionOwner", "leaseExpiresAt",
+  ];
+  if (stateFields.some((key) => patch[key] !== undefined)) {
+    data.trace = json({ schemaVersion: 1, entries: next.trace, state: {
+        requestedBy: next.requestedBy, message: next.message, scenesGenerated: next.scenesGenerated, totalScenes: next.totalScenes,
+        estimatedRemainingSeconds: next.estimatedRemainingSeconds, tokenUsage: next.tokenUsage, tokenUsageCalls: next.tokenUsageCalls,
+        events: next.events, reviewStatus: next.reviewStatus,
+        activePages: next.activePages, stageProgress: next.stageProgress, currentStage: next.currentStage,
+        currentCall: next.currentCall,
+        reviewAvailableUntil: next.reviewAvailableUntil, stepIndex: next.stepIndex, version: next.version, preparedOutlines: next.preparedOutlines,
+        executionId: next.executionId, executionOwner: next.executionOwner, leaseExpiresAt: next.leaseExpiresAt,
+    } });
+  }
+  return data;
 }
 async function deleteCheckpoints(
   tx: Prisma.TransactionClient,
@@ -228,6 +247,7 @@ function storage(kind: JobKind) {
             { step: { startsWith: 'aux-authoring:' } },
             { step: { startsWith: 'authoring-acceptance:' } },
             { step: { startsWith: 'stage-attempt:' } },
+            { step: { startsWith: 'native-render-repair:' } },
             { step: { startsWith: 'stage:' } }, { step: { startsWith: 'page:' } },
             { step: { startsWith: 'design-authoring:' } },
             { step: { startsWith: 'design-page-capacity' } },

@@ -9,6 +9,7 @@ import {
   hasCompleteTeachingBrief,
   normalizeTeachingEnhancement,
   TEACHING_ENHANCEMENT_VERSION,
+  formatTeachingEnhancementBlock,
   withTeachingEnhancement,
 } from './teaching-enhancement';
 
@@ -46,6 +47,123 @@ const sharedContext = {
   caseFacts: ['多个网页可能转载同一份校史材料'], fixedWording: ['先确认来源关系'],
   stableTerms: ['独立来源', '同源转载'], conceptBoundaries: ['网页数量不等于独立证据数量'],
 };
+
+const originalDefinition = '来源独立性是不同材料各自形成其证据的属性。';
+const originalCaseFact = '三个网页转载同一份校史材料。';
+function modernPage(): SceneOutline {
+  const result = page('modern', 0);
+  const source = { evidenceItemId: 'source', sourceBlockIds: ['block'], textbookId: 'book', revisionId: 'revision' };
+  result.teachingBrief = {
+    schemaVersion: 1, explanation: originalDefinition, examples: [originalCaseFact], conditions: [originalDefinition],
+    evidence: [{ sourceId: 'source', quote: originalDefinition }], assessmentFocus: '区分材料来源',
+    sharedContext: { ...sharedContext, caseFacts: [originalCaseFact], fixedWording: [originalDefinition] },
+    teachingPlan: { ...teachingPlan, newContent: originalDefinition, reasoningSteps: [originalCaseFact],
+      takeaway: originalDefinition, narrationFocus: [originalDefinition], visibleContent: [originalDefinition, originalCaseFact],
+      presentationContent: ['网页与其原始来源'],
+      presentationItems: [{ text: '网页与其原始来源', nodeIds: ['definition'], role: 'key-point' }],
+      presentationTypography: { profile: 'reference-lecture-v1', bodyFontSize: 18, minimumBodyFontSize: 16 },
+      introduces: ['definition', 'example'], deepens: [], references: [],
+      visualRelationship: { kind: 'system', preferredForm: 'diagram', description: '多个网页连接同一原始来源',
+        readingOrder: ['网页', '来源'], diagram: { topology: 'branch', nodes: [
+          { id: 'origin', label: '原始材料' }, { id: 'copy', label: '转载网页' },
+        ], edges: [{ from: 'origin', to: 'copy', label: '转载' }] } },
+    },
+    learningBoundary: { prerequisiteKnowledge: [], previouslyTaughtKnowledge: [],
+      currentKnowledge: [{ id: 'kp', name: '独立来源' }], futureKnowledge: [{ id: 'next', name: '证据冲突' }] },
+    understandingCriteria: { goalSource: 'basis', goals: ['识别多个网页之间的来源关系'],
+      answerEssentials: [originalDefinition], misconceptions: ['LEGACY_ANSWER_LIST'], supportingUnitIds: ['unit'],
+      basis: [{ id: 'identify', goal: '识别多个网页之间的来源关系',
+        claimRefs: [{ knowledgePointId: 'kp', claimId: 'definition' }], nodeIds: ['definition', 'example'],
+        exampleRefs: [{ knowledgePointId: 'kp', exampleId: 'book-case' }] }] },
+    requirementIds: ['difficulty'], difficultyStrategies: [{ requirementId: 'difficulty',
+      learnerObstacle: '把网页数量视为来源数量', teachingApproach: '沿转载关系回到原始材料', understandingEvidence: '指出各网页的原始来源' }],
+    resourceNeeds: [{ kind: 'source-image', purpose: '比较来源记录', required: true, assetId: 'image' }],
+    authoring: {
+      nodes: [{ id: 'definition', kind: 'concept', content: originalDefinition, knowledgePointIds: ['kp'],
+        prerequisiteNodeIds: [], provenance: 'course-source', claimRefs: [{ knowledgePointId: 'kp', claimId: 'definition' }],
+        sourceBindings: [{ ...source, quote: originalDefinition }], quoteDuties: [{ source: { ...source, quote: originalDefinition } }] },
+      { id: 'example', kind: 'example', content: originalCaseFact, knowledgePointIds: ['kp'], prerequisiteNodeIds: ['definition'],
+        provenance: 'derived', claimRefs: [{ knowledgePointId: 'kp', claimId: 'definition' }], exampleIds: ['book-case'], quoteDuties: [] }],
+      examplePlans: [{ knowledgePointId: 'kp', mode: 'textbook', selectedExampleIds: ['book-case'], rationale: '分析具体转载关系' }],
+      knowledge: [{ knowledgePointId: 'kp', authoring: { claims: [{ id: 'definition', kind: 'textbook', text: originalDefinition,
+        sources: [{ ...source, quote: originalDefinition }] }], examples: [{ id: 'book-case', kind: 'textbook',
+        title: 'FREE_CASE_TITLE', purpose: 'FREE_CASE_PURPOSE', explanation: 'FREE_CASE_EXPLANATION',
+        conceptMapping: 'FREE_CASE_MAPPING', facts: [originalCaseFact], claimIds: ['definition'],
+        sources: [{ ...source, quote: originalCaseFact }] }], exampleCoverage: [] } }],
+    },
+  };
+  return result;
+}
+
+function sharedDesign(block: string) {
+  return JSON.parse(block.split('\n').find((line) => line.startsWith('{'))!);
+}
+
+describe('single-body native teaching adapter', () => {
+  it.each(['content', 'actions'] as const)('passes one complete body and factual case into the %s call without legacy prose copies', async (phase) => {
+    const outline = modernPage();
+    const before = structuredClone(outline);
+    const ai = vi.fn<AICallFn>().mockResolvedValue('{}');
+    await withTeachingEnhancement(ai, outline, phase)('system', 'user');
+    expect(ai).toHaveBeenCalledOnce();
+    const block = ai.mock.calls[0]![1];
+    const design = sharedDesign(block);
+    expect(block.split(originalDefinition)).toHaveLength(2);
+    expect(block.split(originalCaseFact)).toHaveLength(2);
+    for (const field of ['FREE_CASE_TITLE', 'FREE_CASE_PURPOSE', 'FREE_CASE_EXPLANATION', 'FREE_CASE_MAPPING', 'LEGACY_ANSWER_LIST']) {
+      expect(block).not.toContain(field);
+    }
+    for (const field of ['explanation', 'examples', 'conditions', 'evidence', 'authoring', 'sharedContext']) expect(design).not.toHaveProperty(field);
+    for (const field of ['newContent', 'reasoningSteps', 'narrationFocus', 'takeaway', 'visibleContent']) expect(design.teachingPlan).not.toHaveProperty(field);
+    expect(design.teachingAuthoring.explanationNodes.map((node: { bodyRef: string }) => design.teachingAuthoring.texts[node.bodyRef]))
+      .toEqual([originalDefinition, originalCaseFact]);
+    expect(design.pageAuthoring.nodeDuties.map((duty: { nodeId: string }) => duty.nodeId)).toEqual(['definition', 'example']);
+    expect(design.teachingPlan.visualRelationship).toEqual(outline.teachingBrief!.teachingPlan!.visualRelationship);
+    expect(design.teachingPlan.presentationContent).toEqual(['网页与其原始来源']);
+    expect(design.teachingPlan.presentationItems).toEqual(outline.teachingBrief!.teachingPlan!.presentationItems);
+    expect(design.teachingPlan.presentationTypography).toEqual(outline.teachingBrief!.teachingPlan!.presentationTypography);
+    expect(design.learningBoundary).toEqual(outline.teachingBrief!.learningBoundary);
+    expect(design.resourceNeeds).toEqual(outline.teachingBrief!.resourceNeeds);
+    expect(design.difficultyStrategies).toEqual(outline.teachingBrief!.difficultyStrategies);
+    expect(block).toContain('through teachingAuthoring.texts');
+    expect(block).not.toContain('teachingPlan.visibleContent retains');
+    expect(outline).toEqual(before);
+  });
+
+  it('keeps an interactive operation task and supplies the actual bound prior claim from the canonical directory', () => {
+    const outline = modernPage();
+    outline.type = 'interactive';
+    outline.teachingBrief!.pageTask = { learnerAction: '把网页连接到原始来源', newContribution: '按实际来源划分材料',
+      reasoningFocus: '核对每条转载关系', caseUse: 'reuse', changedConditions: [], preservedConditions: ['原始来源相同'] };
+    const basis = outline.teachingBrief!.understandingCriteria!.basis![0]!;
+    basis.claimRefs.push({ knowledgePointId: 'prior', claimId: 'prior-claim' });
+    const priorText = '每份材料应保留可核对的来源记录。';
+    const design = sharedDesign(formatTeachingEnhancementBlock(outline, 'content', undefined, [
+      { id: 'prior', authoring: { claims: [{ id: 'prior-claim', kind: 'textbook', text: priorText, sources: [] }], examples: [], exampleCoverage: [] } },
+      { id: 'unrelated', authoring: { claims: [{ id: 'unused', kind: 'textbook', text: 'UNRELATED_FUTURE_TEXT', sources: [] }], examples: [], exampleCoverage: [] } },
+    ]));
+    const prior = design.teachingAuthoring.statements.find((claim: { knowledgePointId: string }) => claim.knowledgePointId === 'prior');
+    expect(design.teachingAuthoring.texts[prior.statementRef]).toBe(priorText);
+    expect(design.teachingAuthoring).not.toHaveProperty('unavailableClaimRefs');
+    expect(JSON.stringify(design)).not.toContain('UNRELATED_FUTURE_TEXT');
+    expect(design.pageTask).toEqual(outline.teachingBrief!.pageTask);
+    expect(design.pageAuthoring.nodeDuties).toHaveLength(2);
+    expect(design.pageAuthoring.examplePlans.map((plan: { knowledgePointId: string }) => plan.knowledgePointId)).toEqual(['kp']);
+  });
+
+  it('retains the full no-authoring legacy prompt and its evidence reference adapter unchanged', () => {
+    const outline = modernPage();
+    delete outline.teachingBrief!.authoring;
+    expect(sharedDesign(formatTeachingEnhancementBlock(outline, 'content'))).toEqual(outline.teachingBrief);
+    expect(formatTeachingEnhancementBlock(outline, 'content')).toContain('teachingPlan.visibleContent retains');
+    const reference = vi.fn().mockReturnValue('legacy-original-text');
+    const design = sharedDesign(formatTeachingEnhancementBlock(outline, 'actions', reference));
+    expect(design).toEqual({ ...outline.teachingBrief,
+      evidence: [{ sourceId: 'source', quoteRef: 'legacy-original-text' }] });
+    expect(reference).toHaveBeenCalledWith(originalDefinition);
+    expect(design).not.toHaveProperty('teachingAuthoring');
+  });
+});
 
 describe('formal course teaching enhancement', () => {
   it('treats malformed stored briefs as incomplete instead of crashing a resumed job', () => {

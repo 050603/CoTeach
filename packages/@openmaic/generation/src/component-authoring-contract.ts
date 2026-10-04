@@ -2,6 +2,14 @@ import type { SceneOutline } from './outline-types.js';
 import { resolveDiagramSequenceGroups, type DiagramAllocation } from './diagram-compiler.js';
 import type { AuthoringContentItem, AuthoringTextAllocation } from './authoring-content.js';
 
+/** A complete measured rectangle belongs to one exact rendering profile. */
+export interface NativeDiagramAllocationHint extends DiagramAllocation {
+  orientation: 'vertical' | 'horizontal';
+  presentation: 'cards' | 'steps';
+  nodeFontSize: number;
+  annotationIncluded: boolean;
+}
+
 function adoptedContentContract(contract: { system: string; user: string }, content: readonly AuthoringContentItem[] | undefined,
   mode: 'native' | 'flow', textAllocations?: readonly AuthoringTextAllocation[], typography?: SceneOutline['presentationTypography']) {
   if (typography) contract = {
@@ -73,8 +81,34 @@ Choose representations from what students need to understand, without a required
 
 /** Keep the native slide authoring vocabulary; compile only local components. */
 export function componentAuthoringContract(outline: SceneOutline, diagramAllocations: DiagramAllocation[] = [],
-  authoringContent?: readonly AuthoringContentItem[], textAllocations?: readonly AuthoringTextAllocation[]): { system: string; user: string } {
+  authoringContent?: readonly AuthoringContentItem[], textAllocations?: readonly AuthoringTextAllocation[],
+  preserveNativeComposition = false, advisoryMeasurements = false,
+  diagramHints: readonly NativeDiagramAllocationHint[] = []): { system: string; user: string } {
   const diagram = authoritativeDiagram(outline);
+  if (preserveNativeComposition) {
+    const typography = outline.presentationTypography;
+    const body = typography?.bodyFontSize ?? 18;
+    const compact = typography?.minimumBodyFontSize ?? 16;
+    const title = typography?.titleFontSize ?? 32;
+    const minimumTitle = typography?.minimumTitleFontSize ?? 28;
+    const contract = {
+      system: `## Optional first-draft measured components
+You own the complete native page composition: editable text, shapes, tables, charts, formulae, media, supporting explanations, visual hierarchy and coordinates. Return native elements with optional local components; do not replace them with layout.groups or a whole-page template. A complete short explanation, definition with necessary conditions, case or comparison may share one text region. The number of source points does not determine the number of rectangles. Keep spoken expansion in independent narration.
+Use the supplied presentation profile: body ${body}px, compact text and table cells at least ${compact}px, titles ${minimumTitle}–${title}px. These values replace generic typography examples. Native tables need explicit cell style.fontsize. Do not reduce fonts or remove source duties to fit; allocate readable width and height. Text rectangles have 10px padding on each side. The host measures real playback text; guessed height lookup tables are not binding.
+Native text and plain textBox components are equally valid. Prefer native text when paragraph structure, emphasis or mixed typography helps the composition. A textBox provides plain editable paragraphs, not a mandatory page region. It accepts kind:"textBox", left/top/width, optional height, role:"title|body|label", fontSize and contentRef or paragraphRefs. Its height is measured locally. Native text, shape.text and table cells also accept contentRef or paragraphRefs, with selective emphasis of literal referenced substrings. Put references on the actual text slot, not inside a string or planning metadata.
+A labelGrid is only a local aligned comparison. It accepts kind:"labelGrid", left/top/width/height, fontSize and rows:[{header?,cells:[...]}]. Headers and cells may be literal strings or reference objects. Keep every row complete with equal cell counts and consistent headers; ordinary native tables remain available.
+A planned diagram is one local component whose rectangle and accentColor/nodeFill/textColor are authored by you. Preserve every canonical node, edge, sequence group, branch, feedback and annotation; do not invent cross-group connections or draw a duplicate graph. It accepts kind:"diagram", left/top/width/height and the supplied canonical plan. Choose its reading orientation and cards/steps presentation together with the corresponding measured space reference supplied in this same request. A width/height measurement for another orientation, presentation or caption scope does not establish that your chosen rectangle fits. There is no reserved whole-page region: you choose its position and the surrounding composition. Concise node labels identify stages; they do not display the definitions or explanations mapped to those nodes. Put each necessary explanation in its own real native reference slot or a combined paragraph region alongside the complete graph.
+Choose hierarchy and reading order for this page. Background shapes may contain foreground text; independent foreground text, images and diagrams must have separate readable regions. Required media use exact supplied resource identities and retain actual aspect ratios. Technical element examples below describe syntax only; they are not mandatory geometry or a page layout.`,
+      user: diagram
+        ? `Return the authored native page. Include one local diagram component preserving this complete authoritative relationship: ${JSON.stringify(diagram)}. Choose its actual rectangle together with the explanation regions and the measured reference for its chosen orientation/presentation, without a whole-page template.`
+        : 'Return the authored native page with optional measured local components where helpful. Combine source points into readable regions when their meanings belong together.',
+    };
+    if (advisoryMeasurements) return {
+      ...contract,
+      user: `${contract.user}\n\nOptional measured source-text examples: ${JSON.stringify((textAllocations ?? []).map(({ contentRef, ...allocation }) => ({ measurementSourceId: contentRef, ...allocation })))}\nMeasured complete diagram space references, scoped by rendering profile: ${JSON.stringify(diagramHints)}\nEach diagram entry is one inseparable tuple: width, height, orientation, presentation, nodeFontSize and annotationIncluded. It measures the complete canonical nodes, edges and edge labels with the actual playback font. Choose the matching orientation/presentation explicitly on your diagram component, and allocate at least the width AND height of the SAME matching tuple; do not mix dimensions or borrow a smaller measurement from another rendering profile. These finite alternatives do not choose the page layout: you own left/top, the graph's visual hierarchy, and all neighboring explanations. Keep the entire measured diagram inside x=50..950/y=50..512.5, with separate space for the title, source captions and peer foreground content. Natural diagram growth beyond the authored rectangle or canvas is not fitting space. annotationIncluded:true already reserves the full canonical annotation inside this diagram. If the plan has an annotation and you use annotationIncluded:false, display its complete text through a real bound native slot OUTSIDE the graph and reserve that slot's measured space too; a graph-only measurement cannot accommodate an internal caption. Never add an annotationIncluded field to the component; it describes this measurement, not response syntax. measurementSourceId names a source duty, not a final displayItem reference. You may condense or combine supported display wording and choose different readable geometry. An absent profile or empty examples mean no measured reference was found for that mode, never zero-height content, a fitting claim, or proof that every other composition fails. Actual returned text and chosen component rectangles are measured after this single response.`,
+    };
+    return adoptedContentContract(contract, authoringContent, 'native', textAllocations, typography);
+  }
   const contract = adoptedContentContract({
     system: `## Optional first-draft measured components
 Keep the complete native slide design: editable elements, shapes, tables, charts, rich text emphasis, borders, accent bars, pictures and the authored page hierarchy. Return {"background":...,"elements":[...],"components":[...]}. Components are optional local helpers; do not replace the page with a flow layout or split it into continuation pages. Preserve a coherent teaching page, with concise visible evidence and deeper spoken reasoning in narration.

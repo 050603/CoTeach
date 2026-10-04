@@ -15,6 +15,7 @@ type SavedDesignAuthoring = {
   teachingBlueprintAttempt?: unknown;
   classicOutline?: unknown;
   classicOutlineAttempt?: unknown;
+  spokenSections?: Array<{ step: string; state: unknown }>;
 };
 
 function record(value: unknown): Record<string, unknown> | undefined {
@@ -43,11 +44,30 @@ export function failedCourseDesignAuthoringSteps(saved: SavedDesignAuthoring, tr
     { draft: saved.classicOutline, attempt: saved.classicOutlineAttempt, completed: completed.has('lessonOutline'),
       steps: ['design-authoring:classicOutline', 'course-design-attempt:classic-outline', 'course-design:classic-outline-validation'] },
   ];
-  return stages.flatMap(({ draft, attempt, steps, completed: acceptedByTrace }) => {
+  const failedStages = stages.flatMap(({ draft, attempt, steps, completed: acceptedByTrace }) => {
     const response = record(draft), started = record(attempt);
     if (response?.status === 'validated' || acceptedByTrace) return [];
     const spent = typeof started?.attemptsStarted === 'number' && started.attemptsStarted > 0
       || typeof response?.rawResponse === 'string' || response?.bestCandidate !== undefined;
     return spent ? steps : [];
   });
+  if (record(saved.teachingBlueprint)?.status === 'validated' || completed.has('lessonOutline')) return failedStages;
+  const sections = new Map<number, { draft?: Record<string, unknown>; attempt?: Record<string, unknown>; compiled?: Record<string, unknown> }>();
+  for (const row of saved.spokenSections ?? []) {
+    const match = /^(design-authoring|course-design-attempt|course-design):spoken-section:(\d+)$/u.exec(row.step);
+    if (!match) continue;
+    const index = Number(match[2]);
+    const section = sections.get(index) ?? {};
+    section[match[1] === 'design-authoring' ? 'draft' : match[1] === 'course-design-attempt' ? 'attempt' : 'compiled'] = record(row.state);
+    sections.set(index, section);
+  }
+  // Sections are authored and compiled serially. For older jobs without a
+  // compiled receipt, only the last spent section can be the failed section;
+  // complete earlier responses must remain available for deterministic replay.
+  const last = [...sections].filter(([, section]) => typeof section.draft?.rawResponse === 'string'
+    || typeof section.attempt?.attemptsStarted === 'number' && section.attempt.attemptsStarted > 0)
+    .sort(([left], [right]) => right - left)[0];
+  if (!last || last[1].compiled?.status === 'validated') return failedStages;
+  return [...failedStages, ...['design-authoring', 'course-design-attempt', 'course-design']
+    .map((prefix) => `${prefix}:spoken-section:${last[0]}`)];
 }

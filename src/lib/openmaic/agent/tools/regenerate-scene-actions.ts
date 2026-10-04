@@ -40,6 +40,8 @@ import { parseActionsFromStructuredOutput } from '@openmaic/lib/generation/actio
 import { calibrateGeneratedVisualCues } from '@openmaic/lib/generation/semantic-visual-cues';
 import { withTeachingEnhancement } from '@openmaic/lib/generation/teaching-enhancement';
 import { buildNarrationContext } from '@openmaic/lib/generation/narration-continuity';
+import type { BaselineContentOptions } from '@openmaic/lib/generation/openmaic-baseline';
+import type { TeachingManuscript } from '@/lib/course-design/teaching-manuscript';
 
 // ── Scene context shape (client-sourced, injected via deps) ──────────────────
 
@@ -73,6 +75,12 @@ export interface SceneContext {
    * error instead of guessing.
    */
   runtimeErrors?: string[];
+  /** Server-only adopted facts for PPT redraw; never returned as tool details. */
+  sourceEvidence?: BaselineContentOptions['sourceEvidence'];
+  sourceKnowledgePoints?: BaselineContentOptions['sourceKnowledgePoints'];
+  teachingAuthoringKnowledge?: BaselineContentOptions['teachingAuthoringKnowledge'];
+  sourceSequenceContracts?: BaselineContentOptions['sourceSequenceContracts'];
+  teachingManuscripts?: readonly TeachingManuscript[];
 }
 
 // ── Deps injection interface ─────────────────────────────────────────────────
@@ -96,6 +104,7 @@ export interface RegenerateActionsDeps {
     systemPrompt: string,
     userPrompt: string,
     signal?: AbortSignal,
+    images?: Array<{ id: string; src: string }>,
   ) => Promise<string>;
 
   /**
@@ -104,6 +113,8 @@ export interface RegenerateActionsDeps {
    * model never has to fabricate outlines or content.
    */
   getSceneContext: (sceneId: string) => SceneContext | undefined;
+  /** Course-scoped redraws verify that adopted facts did not change in flight. */
+  assertCurrentSources?: () => Promise<boolean>;
 }
 
 // ── Content shape conversion ─────────────────────────────────────────────────

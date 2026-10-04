@@ -9,6 +9,7 @@ import { auditSlideLayout, closeSlideLayoutAuditBrowser } from './slide-layout-a
 import { REFERENCE_LECTURE_TYPOGRAPHY } from './slide-presentation-typography';
 import { compileTeachingNarrationActions, normalizeTeachingNarration } from './teaching-narration';
 import { adoptedPageAuthoringContent } from './adopted-page-content';
+import { expandCompiledSlidePages } from './compiled-slide-pages';
 
 const outline: SceneOutline = { id: 'slide-19', type: 'slide', order: 18, title: '支架式教学：逐步把学习交给学生', description: '', keyPoints: [],
   teachingBrief: { schemaVersion: 1, explanation: '', examples: [], conditions: [], evidence: [], assessmentFocus: '', teachingPlan: {
@@ -28,12 +29,103 @@ const strip = (text: string) => text.replace(/<[^>]+>/gu, '');
 afterAll(async () => { await closeSpatialMeasurementBrowser(); await closeSlideLayoutAuditBrowser(); });
 
 describe('verified teaching infographic layout', () => {
+  it('keeps the observed case, complete comparison and conclusion on one readable lecture page without extra switching', async () => {
+    const input = projection([
+      point('description', '青蛙的描述', '牛头上有两只角、四条腿、在草地上吃草、身上有花斑。'),
+      point('imagination', '小鱼的想象', '小鱼构建的形象满足这些特征，但仍基于鱼的形态进行想象。'),
+      ...['怎样处理新信息', '是否改变原有结构'].flatMap((row, index) => ['同化', '顺应'].map((column) => ({
+        id: `${column}-${index}`, row, column, sourceContentIds: [`source-${column}`],
+        text: index === 0 ? column === '同化' ? '新信息或经验与现有认知结构相融合，依赖已有框架解释新刺激。' : '调整或重塑认知结构以适应新信息。'
+          : column === '同化' ? '不要求根本改变原有认知结构。' : '新旧冲突时，重组或扩展原有结构。',
+      }))),
+      point('update', '本页结论', '青蛙的引导和纠正，可能帮助小鱼完成认知结构更新，真正领会“牛”。'),
+    ], { layoutVersion: 'teaching-infographic-v2', composition: 'image-focus', takeawayItemId: 'update' });
+    const page = { ...outline, title: '小鱼怎样理解“牛”：同化与顺应', targetDurationSec: 90 };
+    const result = await compileSlideInfographic(page, input, { measure: measureAuthoredSlideText,
+      images: [{ id: 'fish-image', src: 'data:image/png;base64,placeholder', width: 1200, height: 900 }] });
+    expect(result).not.toBeNull();
+    expect(result!.qualityDiagnostics ?? []).toEqual([]);
+    expect(result!.continuationPages ?? []).toHaveLength(0);
+    const image = result!.elements.find((element) => element.type === 'image')!;
+    expect(image.width).toBeGreaterThanOrEqual(280);
+    expect(image.height).toBeGreaterThanOrEqual(180);
+    expect(image.width / image.height).toBeCloseTo(4 / 3);
+    expect(image).not.toHaveProperty('clip');
+    const table = result!.elements.find((element) => element.type === 'table')!;
+    expect(table.type === 'table' && table.data).toHaveLength(3);
+    const allItems = result!.presentationProjection!.items;
+    expect(new Set(allItems.map((item) => item.id))).toEqual(new Set(input.items.map((item) => item.id)));
+    expect(allItems.map((item) => item.text)).toEqual(expect.arrayContaining(input.items.map((item) => item.text)));
+    const expanded = expandCompiledSlidePages(page, result!);
+    expect(expanded).toHaveLength(1);
+    expect(expanded.reduce((sum, item) => sum + item.outline.targetDurationSec!, 0)).toBe(90);
+    for (const content of [result!]) {
+      const audit = await auditSlideLayout(content, 'mixed-case-comparison');
+      expect(audit.issues).toEqual([]);
+      expect(audit.findings).toEqual([]);
+    }
+  }, 30_000);
+
+  it('renders the seven-step teaching design as one continuous spine with wide observations', async () => {
+    const labels = ['教学目标分析', '情境创设', '信息资源设计', '自主学习设计', '协作学习环境设计', '学习效果评价设计', '强化练习设计'];
+    const page: SceneOutline = { ...outline, title: '建构主义学习环境下的教学设计七步', visualIntent: { representation: 'native-diagram', observationGoal: '观察完整七步及其对应解释',
+      diagram: { topology: 'sequence', nodes: labels.map((label, index) => ({ id: `step${index + 1}`, label: `${index + 1}. ${label}` })) } } };
+    const input = projection([
+      { ...point('start', '教学目标分析', '目标分析 → 确定“核心主题”；是教学设计的起点和主线。'), diagramNodeId: 'step1' },
+      point('use', '七步的用途', '参考流程开发课程；也可按各步骤查缺补漏、教学反思与迭代。'),
+      point('next', '后续安排', '具体教学模式与教学方法的选择和过程，将在后续章节讲解。'),
+    ], { layoutVersion: 'teaching-infographic-v2' });
+    const result = await compileSlideInfographic(page, input, { measure: measureAuthoredSlideText });
+    expect(result).not.toBeNull();
+    expect(result!.qualityDiagnostics ?? []).toEqual([]);
+    const headings = labels.map((_, index) => result!.elements.find((element) => element.id === `infographic-diagram-node-step${index + 1}`) as PPTTextElement);
+    expect(new Set(headings.map((element) => element.left)).size).toBe(1);
+    expect(headings.every((element) => element.defaultColor === '#334155')).toBe(true);
+    expect(headings.every((element, index) => !index || element.top > headings[index - 1]!.top)).toBe(true);
+    const lines = result!.elements.filter((element) => element.type === 'line');
+    expect(lines).toHaveLength(6);
+    expect(lines.every((element) => element.start[0] === element.end[0] && element.end[1] > element.start[1])).toBe(true);
+    const mapping = result!.presentationProjection!.elementIdsBySource;
+    expect(mapping['source-start']).toContain(headings[0]!.id);
+    for (const item of input.items) {
+      const native = result!.elements.find((element) => element.id === item.id) as PPTTextElement;
+      expect(native.width).toBeGreaterThan(400);
+      expect(strip(native.content)).toContain(item.text);
+      expect(native.left).toBeGreaterThan(headings[0]!.left + headings[0]!.width);
+    }
+    const audit = await auditSlideLayout(result!, 'seven-step-spine');
+    expect(audit.issues).toEqual([]);
+    expect(audit.findings).toEqual([]);
+  }, 30_000);
+
+  it('displays a comparison takeaway as its actual sentence without an editorial prefix', async () => {
+    const input = projection([
+      { id: 'a', row: '认知结构', column: '同化', text: '不要求根本改变', sourceContentIds: ['source-a'] },
+      { id: 'b', row: '认知结构', column: '顺应', text: '调整、重组或扩展', sourceContentIds: ['source-b'] },
+      point('takeaway', '本页结论', '学习包含外部互动与内部重构'),
+    ], { layoutVersion: 'teaching-infographic-v2', composition: 'comparison', takeawayItemId: 'takeaway' });
+    const before = structuredClone(input);
+    const result = await compileSlideInfographic(outline, input, { measure: measureAuthoredSlideText });
+    expect(result).not.toBeNull();
+    const takeaway = result!.elements.find((element) => element.id === 'takeaway') as PPTTextElement;
+    expect(strip(takeaway.content)).toBe('学习包含外部互动与内部重构');
+    expect(result!.elements.some((element) => element.type === 'shape' && element.fill === '#FFF7ED')).toBe(true);
+    expect(result!.presentationProjection!.elementIdsBySource['source-takeaway']).toContain(takeaway.id);
+    expect(input).toEqual(before);
+  }, 30_000);
+
   it('keeps source inputs immutable and maps each real heading and text to its sources', async () => {
     const input = projection([point('a', '判断标准', '学生能否独立完成任务。'), point('b', '修正方向', '随能力提升逐步撤去帮助。')]);
+    input.items[0]!.emphasis = ['独立完成任务'];
+    input.items[0]!.emphasisStyle = 'bold';
     const original = structuredClone(input);
     const result = await compileSlideInfographic(outline, input, { measure });
     expect(input).toEqual(original);
     expect(result?.elements.filter((element) => element.type === 'text').map((element) => element.id)).toEqual(['infographic-title', 'a-heading', 'a', 'b-heading', 'b']);
+    const body = result!.elements.find((element) => element.id === 'a') as PPTTextElement;
+    const heading = result!.elements.find((element) => element.id === 'a-heading') as PPTTextElement;
+    expect(body.content).toContain('<strong style="color:#334155;white-space:nowrap">独立完成任务</strong>');
+    expect(heading.defaultColor).toBe(body.defaultColor);
     expect(result?.presentationProjection?.elementIdsBySource['source-a']).toEqual(['a-rule', 'a-heading', 'a']);
     expect(result?.elements.filter((element) => element.type === 'line')).toHaveLength(0);
     expect(nativeSlideCollisions(result!.elements)).toEqual([]);
@@ -161,7 +253,9 @@ describe('verified teaching infographic layout', () => {
     const result = await compileSlideInfographic(outline, input, { measure: measureAuthoredSlideText });
     const lines = result?.elements.filter((element) => element.type === 'line') ?? [];
     expect(lines).toHaveLength(1);
-    expect(lines[0]?.end[1]).toBeGreaterThan(lines[0]!.start[1]);
+    // A measured label can now fit a horizontal corridor as well as a vertical
+    // one. The authored a -> b direction, not one fixed orientation, matters.
+    expect(lines[0]!.end[0] > lines[0]!.start[0] || lines[0]!.end[1] > lines[0]!.start[1]).toBe(true);
     expect(result!.elements.find((element) => element.id === 'infographic-link-0-label')).toMatchObject({ content: expect.stringContaining('据此调整') });
     expect(lines[0]?.points).toEqual(['', 'arrow']);
     expect(result?.presentationProjection?.elementIdsBySource['source-a']).toContain(lines[0]?.id);
@@ -303,22 +397,25 @@ describe('verified teaching infographic layout', () => {
 
 
 describe('complete original-content draft fallback', () => {
-  it('keeps exact source text and fixed fonts within three candidates, reporting real overflow rather than a fake pass', async () => {
+  it('paginates overflowing original text with exact character conservation and unchanged readable fonts', async () => {
     const sources = [{ id: 'original-a', text: '完整事实和必要条件。'.repeat(180) }, { id: 'original-b', text: '否定和数量必须保留。'.repeat(180) }];
-    const before = structuredClone(sources), spy = vi.fn(measure);
-    const result = await compileOriginalSlideDraft(outline, sources, { measure: spy });
+    const before = structuredClone(sources);
+    const result = await compileOriginalSlideDraft(outline, sources, { measure });
+    const pages = [result, ...(result.continuationPages ?? [])];
     expect(sources).toEqual(before);
+    expect(pages.length).toBeGreaterThan(1);
     for (const source of sources) {
-      const element = result.elements.find((element) => element.id === source.id) as PPTTextElement;
-      expect(strip(element.content)).toBe(source.text);
-      expect(element.content).toContain('font-size:18px');
-      expect(spy.mock.calls.filter(([request]) => request.text === source.text)).toHaveLength(3);
-      expect(result.presentationProjection?.elementIdsBySource[source.id]).toContain(source.id);
+      const pieces = pages.flatMap((page) => page.elements.filter((element): element is PPTTextElement =>
+        element.type === 'text' && (page.presentationProjection?.elementIdsBySource[source.id] ?? []).includes(element.id)));
+      expect(pieces.map((element) => strip(element.content)).join('')).toBe(source.text);
+      expect(pieces.every((element) => element.content.includes('font-size:18px'))).toBe(true);
     }
-    expect(result.qualityDiagnostics?.some((detail) => detail.includes('measured content reaches y=') && detail.includes('beyond the safe bottom'))).toBe(true);
-    expect(result).not.toHaveProperty('continuationPages');
-    expect(result.elements.filter((element): element is PPTTextElement => element.type === 'text').some((element) => element.top + element.height > 512.5)).toBe(true);
-    expect(result.presentationProjection?.verified).toBe(true); // Exact original-source identity, not a geometry approval.
+    for (const page of pages) {
+      expect(page.paginationVersion).toBe('balanced-v1');
+      expect(page.elements.filter((element) => element.type !== 'line').every((element) => element.top + element.height <= 512.5)).toBe(true);
+      expect(page.teachingText?.length).toBeGreaterThan(0);
+      expect(page.presentationProjection?.verified).toBe(true);
+    }
   });
 
   it('retains every original node, implicit sequence edge, annotation, image and caption when space is insufficient', async () => {
@@ -330,21 +427,173 @@ describe('complete original-content draft fallback', () => {
     const sources = [{ id: 'definition', text: '每一个环节均需完整保留。' }, { id: 'diagram-annotation', text: annotation }];
     const images = Array.from({ length: 5 }, (_, index) => ({ id: `source-image-${index}`, src: `/source-${index}.png`, width: 640, height: 480, caption: `完整教材图注${index}` }));
     const result = await compileOriginalSlideDraft(page, sources, { measure, images });
-    const nodes = result.elements.filter((element): element is PPTShapeElement => element.type === 'shape' && Boolean(element.text));
+    const elements = [result, ...(result.continuationPages ?? [])].flatMap((page) => page.elements);
+    const nodes = elements.filter((element): element is PPTShapeElement => element.type === 'shape' && Boolean(element.text));
     expect(nodes.map((node) => strip(node.text!.content))).toEqual(page.visualIntent!.diagram!.nodes.map((node) => node.label));
-    expect(result.elements.filter((element) => element.type === 'line')).toHaveLength(6);
-    expect(result.elements.find((element) => element.id === 'original-diagram-annotation')).toMatchObject({ content: expect.stringContaining(annotation) });
+    expect(elements.filter((element) => element.type === 'line')).toHaveLength(6);
+    expect(elements.find((element) => element.id === 'original-diagram-annotation')).toMatchObject({ content: expect.stringContaining(annotation) });
     for (const image of images) {
-      const rendered = result.elements.find((element) => element.id === image.id)!;
+      const rendered = elements.find((element) => element.id === image.id)!;
       expect(rendered.type).toBe('image');
       if (rendered.type !== 'image') throw new Error('Expected preserved image');
       expect(rendered.src).toBe(image.src);
       expect(rendered.width / rendered.height).toBeCloseTo(4 / 3);
       expect(rendered).not.toHaveProperty('clip');
-      expect(result.elements.find((element) => element.id === `${image.id}-caption`)).toMatchObject({ content: expect.stringContaining(image.caption) });
+      expect(elements.find((element) => element.id === `${image.id}-caption`)).toMatchObject({ content: expect.stringContaining(image.caption) });
     }
-    expect(result.qualityDiagnostics?.some((detail) => detail.includes('no feasible measured allocation'))).toBe(true);
-    expect(result.qualityDiagnostics?.some((detail) => detail.includes('beyond the safe bottom'))).toBe(true);
+    expect(result.continuationPages?.length).toBeGreaterThan(0);
+    expect(elements.filter((element) => element.type !== 'line').every((element) => element.top + element.height <= 512.5)).toBe(true);
+  });
+
+  it.each([
+  {
+    "title": "迁移学习：用较少数据适配下游任务",
+    "keyPoints": [
+      "对象：预训练模型",
+      "目标：针对不同下游任务设计相应的目标模型结构",
+      "手段：基于相对较少的数据进行微调",
+      "基本思想：把先前任务或领域中的知识经验应用到新任务或新领域"
+    ],
+    "visualIntent": {
+      "observationGoal": "同一个预训练模型可针对不同下游任务分别设计目标模型结构并进行微调。",
+      "representation": "native-diagram",
+      "diagram": {
+        "topology": "branch",
+        "nodes": [
+          {
+            "id": "pretrained",
+            "label": "预训练模型"
+          },
+          {
+            "id": "taskA",
+            "label": "下游任务A：目标模型结构 + 微调"
+          },
+          {
+            "id": "taskB",
+            "label": "下游任务B：目标模型结构 + 微调"
+          },
+          {
+            "id": "taskC",
+            "label": "下游任务C：目标模型结构 + 微调"
+          }
+        ],
+        "edges": [
+          {
+            "from": "pretrained",
+            "to": "taskA"
+          },
+          {
+            "from": "pretrained",
+            "to": "taskB"
+          },
+          {
+            "from": "pretrained",
+            "to": "taskC"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "title": "抛锚式教学法六步：围绕“锚”解决问题",
+    "keyPoints": [
+      "1 创设情境：用信息技术等设计接近现实的学习情境",
+      "2 进行“抛锚”：选择真实且有挑战性的中心问题",
+      "3 自主探索：学生探究并制定方案；教师给线索，不直接给答案",
+      "4 拓展延伸：围绕“锚”设计相关拓展问题",
+      "5 讨论交流：围绕“锚”问题共享观点、相互启发",
+      "6 效果评价：通过过程表现评价，记录反馈并调整教学"
+    ],
+    "visualIntent": {
+      "observationGoal": "抛锚式教学法的六步顺序，围绕“锚”问题展开。",
+      "representation": "native-diagram",
+      "diagram": {
+        "topology": "sequence",
+        "nodes": [
+          {
+            "id": "a1",
+            "label": "1 创设情境"
+          },
+          {
+            "id": "a2",
+            "label": "2 进行“抛锚”"
+          },
+          {
+            "id": "a3",
+            "label": "3 自主探索"
+          },
+          {
+            "id": "a4",
+            "label": "4 拓展延伸"
+          },
+          {
+            "id": "a5",
+            "label": "5 讨论交流"
+          },
+          {
+            "id": "a6",
+            "label": "6 效果评价"
+          }
+        ]
+      }
+    }
+  }
+])('fits the saved real page $title with complete text and topology in the actual remaining height', async (fixture) => {
+    const page = { ...outline, ...fixture } as SceneOutline;
+    const sources = fixture.keyPoints.map((text, index) => ({ id: `source-${index}`, text }));
+    const result = await compileOriginalSlideDraft(page, sources, { measure: measureAuthoredSlideText });
+    expect(result.continuationPages).toBeUndefined();
+    for (const source of sources) {
+      const mapped = new Set(result.presentationProjection?.elementIdsBySource[source.id]);
+      const text = result.elements.filter((element) => mapped.has(element.id)).map((element) =>
+        element.type === 'text' ? strip(element.content) : element.type === 'shape' ? strip(element.text?.content ?? '') : '').join('：');
+      expect(text).toContain(source.text);
+    }
+    for (const node of fixture.visualIntent.diagram.nodes) {
+      const targets = new Set(result.presentationProjection?.elementIdsBySource[`diagram-node:${node.id}`]);
+      expect(result.elements.filter((element) => targets.has(element.id)).some((element) =>
+        element.type === 'text' ? strip(element.content) === node.label : element.type === 'shape' && strip(element.text?.content ?? '') === node.label)).toBe(true);
+    }
+    expect(result.elements.filter((element) => element.type === 'line')).toHaveLength(fixture.visualIntent.diagram.nodes.length - 1);
+    for (const element of result.elements) {
+      if (element.type === 'line') continue;
+      expect(element.top + element.height).toBeLessThanOrEqual(512.5);
+      if (element.type === 'shape' && element.text) {
+        const measured = await measureAuthoredSlideText({ html: element.text.content, text: strip(element.text.content), width: element.width,
+          fontSize: 20, fontWeight: 700, fontFamily: 'Noto Sans SC', padding: 10, lineHeight: 1.25, paragraphSpace: 0, align: 'center', preserveRichText: true });
+        expect(measured.height).toBeLessThanOrEqual(element.height + 0.5);
+      }
+    }
+  });
+
+  it('moves the whole graph to the first continuation group while conserving overflowing prose afterwards', async () => {
+    const page = { ...outline, visualIntent: { representation: 'native-diagram', observationGoal: '完整分支', resourceRefs: [], diagram: {
+      topology: 'branch', nodes: [{ id: 'root', label: '起点' }, { id: 'a', label: '分支甲' }, { id: 'b', label: '分支乙' }],
+      edges: [{ from: 'root', to: 'a' }, { from: 'root', to: 'b' }],
+    } } } as SceneOutline;
+    const sources = [{ id: 'detail', text: '保留完整事实与必要条件。'.repeat(140) }];
+    const result = await compileOriginalSlideDraft(page, sources, { measure });
+    expect(result.sourceGroupIds).toEqual(['diagram-node:root', 'diagram-node:a', 'diagram-node:b']);
+    expect(result.teachingText).toEqual(['起点', '分支甲', '分支乙']);
+    expect(result.elements.filter((element) => element.type === 'line')).toHaveLength(2);
+    expect(result.continuationPages!.flatMap((part) => part.teachingText ?? []).join('')).toBe(sources[0]!.text);
+    for (const part of [result, ...result.continuationPages!]) expect(part.elements.filter((element) => element.type !== 'line')
+      .every((element) => element.top + element.height <= 512.5)).toBe(true);
+  });
+
+  it('retains an intrinsically oversized complete diagram and image caption with honest diagnostics after pagination', async () => {
+    const label = '完整原始节点说明'.repeat(120), caption = '完整教材图注'.repeat(200);
+    const page = { ...outline, visualIntent: { representation: 'native-diagram', observationGoal: '', resourceRefs: [], diagram: {
+      topology: 'branch', nodes: [{ id: 'oversized', label }], edges: [],
+    } } } as SceneOutline;
+    const result = await compileOriginalSlideDraft(page, [{ id: 'fact', text: '完整事实。' }], {
+      measure, images: [{ id: 'source-image', src: '/source.png', width: 640, height: 480, caption }],
+    });
+    const pages = [result, ...(result.continuationPages ?? [])], elements = pages.flatMap((part) => part.elements);
+    expect(elements.find((element) => element.id === 'original-diagram-node-oversized')).toMatchObject({ text: { content: expect.stringContaining(label) } });
+    expect(elements.find((element) => element.id === 'source-image-caption')).toMatchObject({ content: expect.stringContaining(caption) });
+    expect(pages.flatMap((part) => part.qualityDiagnostics ?? []).some((detail) => detail.includes('complete') && detail.includes('retained'))).toBe(true);
+    expect(pages.flatMap((part) => part.qualityDiagnostics ?? []).some((detail) => detail.includes('beyond the safe bottom'))).toBe(true);
   });
 
   it('preserves default lecture fonts and propagates actual measurement failures', async () => {

@@ -6,6 +6,8 @@ import { mergeSourceSequenceUses } from '@/lib/textbook/source-sequence-use';
 import { evaluateSemanticPageCapacity, type SemanticCapacityGroup, type SemanticPageCapacityAssessment,
   type SemanticPageCapacityOptions } from './semantic-page-capacity';
 import { hasReferenceLectureTypography } from './slide-presentation-typography';
+import { redistributePageAuthoring, teachingQuoteDutyKey } from '@/lib/course-design/teaching-example-authoring';
+import { PPT_PAGE_PLANNING_CONTRACT } from '@/lib/course-design/ppt-page-planning-contract';
 
 const GAP = 12;
 
@@ -131,6 +133,9 @@ function rebalanceTeachingSection(
   const sectionId = outlines[0]!.lectureSectionId;
   if (!sectionId || outlines.some((outline) => outline.lectureSectionId !== sectionId)) return undefined;
   if (!assessments.some((assessment) => assessment.decision === 'page-overflow' || assessment.decision === 'section-overload')) return undefined;
+  const spoken = outlines.every((outline) => Boolean(outline.teachingBrief?.manuscript));
+  if (!spoken && outlines.some((outline) => outline.teachingBrief?.manuscript)) return undefined;
+  if (spoken && outlines.some((outline) => outline.teachingBrief!.manuscript!.sectionId !== sectionId)) return undefined;
   const owners = new Map(outlines.map((outline) => [outline.id, outline]));
   const groups: OwnedGroup[] = assessments.flatMap((assessment, index) => assessment.groups.map((group) => ({
     ...group, sourcePageId: outlines[index]!.id, owner: outlines[index]!, height: group.measuredHeight ?? Infinity,
@@ -178,8 +183,38 @@ function rebalanceTeachingSection(
     const page = firstPageForNode.get(`${source.id}:${nodeId}`) ?? firstPageForSource.get(source.id);
     if (page !== undefined && !firstIntroductionPage.has(nodeId)) firstIntroductionPage.set(nodeId, page);
   }
+  const spokenPageSegments = pages.map(() => [] as string[]);
+  if (spoken) {
+    const assigned = new Set<string>();
+    let previous = 0;
+    for (const source of outlines) for (const id of source.teachingBrief!.manuscript!.segmentIds) {
+      if (assigned.has(id)) continue;
+      const bound = firstPageForNode.get(`${source.id}:${id}`) ?? firstPageForSource.get(source.id) ?? previous;
+      const destination = Math.max(previous, bound);
+      spokenPageSegments[destination]!.push(id);
+      assigned.add(id);
+      previous = destination;
+    }
+  }
+  const quoteOwnerPage = new Map<string, number>();
+  for (const source of outlines) for (const node of source.teachingBrief?.authoring?.nodes ?? []) {
+    for (const duty of node.quoteDuties ?? []) {
+      const key = teachingQuoteDutyKey(node.id, duty);
+      if (quoteOwnerPage.has(key)) continue;
+      const candidatePages = pages.flatMap((page, index) => page.some((group) =>
+        group.sourcePageId === source.id && group.sourceNodeIds.includes(node.id)) ? [index] : []);
+      // A split definition or condition belongs where its actual part occurs.
+      // When the quote is a source slot rather than inline body text, the
+      // node's first actual part owns that explicitly planned first quotation.
+      const exactPage = candidatePages.find((index) => pages[index]!.some((group) =>
+        group.sourceNodeIds.includes(node.id) && group.narrationExpansion.some((text) => text.includes(duty.source.quote ?? ''))));
+      const owner = exactPage ?? candidatePages[0];
+      if (owner !== undefined) quoteOwnerPage.set(key, owner);
+    }
+  }
   const priorTeachingNodeIds = new Set(options.priorTeachingNodeIds ?? []);
   const version = createHash('sha256').update(JSON.stringify({ policy: 'semantic-section-rebalance-v2',
+    pagePlanningVersion: PPT_PAGE_PLANNING_CONTRACT.planningVersion,
     sectionId, assignments: pages.map((page) => page.map((group) => ({ id: group.id,
       presentationItems: group.presentationItems, typography: group.owner.teachingBrief?.teachingPlan?.presentationTypography }))),
   })).digest('hex').slice(0, 16);
@@ -199,18 +234,22 @@ function rebalanceTeachingSection(
     const nodeIds = new Set(page.flatMap((group) => group.sourceNodeIds));
     const knowledgePointIds = distinct(page.flatMap((group) => group.knowledgePointIds));
     const sourced = ownerPageIds.map((id) => owners.get(id)!);
-    const narrationFocus = distinct(page.flatMap((group) => group.narrationExpansion).concat(sourced.flatMap((item) =>
+    const narrationFocus = spoken ? [] : distinct(page.flatMap((group) => group.narrationExpansion).concat(sourced.flatMap((item) =>
       firstPageForSource.get(item.id) === index ? (item.teachingBrief?.teachingPlan?.narrationFocus ?? [])
         .filter((focus) => !groups.some((group) => group.sourcePageId === item.id
           && (group.narrationExpansion.includes(focus) || group.sourceClaim?.text === focus))) : [])));
-    const responsibilities = (kind: 'introduces' | 'deepens' | 'references') => distinct(sourced.flatMap((item) => {
+    const responsibilities = (kind: 'introduces' | 'deepens' | 'references') => {
+      if (spoken && kind === 'introduces') return spokenPageSegments[index]!;
+      if (spoken && kind === 'deepens') return [];
+      return distinct(sourced.flatMap((item) => {
       const plan = item.teachingBrief?.teachingPlan;
       const original = (plan?.[kind] ?? []).filter((id) => nodeIds.has(id)
         ? kind !== 'introduces' || firstPageForNode.get(`${item.id}:${id}`) === index
         : firstPageForSource.get(item.id) === index && !groups.some((group) => group.sourcePageId === item.id && group.sourceNodeIds.includes(id)));
       return kind === 'deepens' ? [...original, ...(plan?.introduces ?? []).filter((id) => nodeIds.has(id)
         && firstPageForNode.get(`${item.id}:${id}`) !== index)] : original;
-    }));
+      }));
+    };
     const mediaGenerations = sourced.flatMap((item) => item.mediaGenerations ?? []).filter((item) => resourceIds.has(item.elementId));
     const resourceRefs = sourced.flatMap((item) => item.visualIntent?.resourceRefs ?? []).filter((item) => resourceIds.has(item.resourceId));
     const diagramOwner = page.find((group) => group.kind === 'diagram')?.owner;
@@ -271,7 +310,7 @@ function rebalanceTeachingSection(
       ...presentationItems.flatMap((item) => item.nodeIds),
     ]).filter((id) => !nodeIds.has(id) && (priorTeachingNodeIds.has(id)
       || (firstIntroductionPage.get(id) ?? Infinity) < index));
-    const explanation = distinct([...visible, ...narrationFocus]).join('\n');
+    const explanation = spoken ? '' : distinct([...visible, ...narrationFocus]).join('\n');
     const localVisualDescription = visible.join('；') || source.teachingObjective || source.title;
     const localVisualRelationship = originalPlan?.visualRelationship ? {
       ...originalPlan.visualRelationship,
@@ -287,13 +326,13 @@ function rebalanceTeachingSection(
       ...originalPlan,
       ...(sourced.some((item) => item.teachingBrief?.teachingPlan?.sourceSequenceUses !== undefined)
         ? { sourceSequenceUses: mergeSourceSequenceUses(sourced) } : {}),
-      visibleContent: hasPresentationProjection ? distinct([...visible, ...narrationFocus]) : visible,
+      visibleContent: !spoken && hasPresentationProjection ? distinct([...visible, ...narrationFocus]) : visible,
       ...(hasPresentationProjection ? { presentationContent: visible } : {}),
       ...(sourced.some((item) => item.teachingBrief?.teachingPlan?.presentationItems !== undefined)
         ? { presentationItems } : {}),
-      newContent: hasPresentationProjection ? explanation : visible.join('；') || originalPlan.newContent,
+      newContent: spoken ? '' : hasPresentationProjection ? explanation : visible.join('；') || originalPlan.newContent,
       takeaway: visible.at(-1) ?? originalPlan.takeaway,
-      narrationFocus: narrationFocus.length ? narrationFocus : visible,
+      narrationFocus: spoken ? [] : narrationFocus.length ? narrationFocus : visible,
       introduces: responsibilities('introduces'), deepens: responsibilities('deepens'),
       references: distinct([...responsibilities('references'), ...displayReferenceIds,
         ...page.flatMap((group) => group.prerequisiteNodeIds ?? [])
@@ -302,7 +341,7 @@ function rebalanceTeachingSection(
       visualRelationship: diagramOwner?.teachingBrief?.teachingPlan?.visualRelationship
         ?? sourceImageOwner?.teachingBrief?.teachingPlan?.visualRelationship
         ?? (movedDiagram ? undefined : localVisualRelationship),
-      ...(index > 0 ? { entryPoint: { kind: 'continuation' as const,
+      ...(index > 0 ? { entryPoint: spoken ? undefined : { kind: 'continuation' as const,
         object: visible[0] ?? source.title, bridge: '承接前页，继续解释当前教学内容。' } } : {}),
     } : undefined;
     const id = index < outlines.length ? outlines[index]!.id : `${outlines[0]!.id}--capacity-${index + 1}-${version}`;
@@ -353,7 +392,17 @@ function rebalanceTeachingSection(
                 : source.visualIntent?.representation ?? 'text' as const,
       } : undefined,
       teachingBrief: source.teachingBrief ? { ...source.teachingBrief,
+        ...(source.teachingBrief.manuscript ? {
+          manuscript: { sectionId: source.teachingBrief.manuscript.sectionId,
+            segmentIds: spokenPageSegments[index]! },
+        } : {}),
         explanation,
+        ...(spoken ? { authoring: undefined } : sourced.some((item) => item.teachingBrief?.authoring) ? {
+          authoring: redistributePageAuthoring(sourced.map((item) => item.teachingBrief), nodeIds, knowledgePointIds,
+            (id) => distinct(page.filter((group) => group.sourceNodeIds.includes(id))
+              .flatMap((group) => group.narrationExpansion)).join('\n'),
+            { quoteDutyKeys: new Set([...quoteOwnerPage].filter(([, owner]) => owner === index).map(([key]) => key)) }),
+        } : {}),
         ...(teachingPlan ? { teachingPlan } : {}),
         resourceNeeds,
       } : undefined,
@@ -376,7 +425,8 @@ export type MeasuredTeachingSectionReplanResult =
   | { status: 'unchanged'; reason?: string; assessments: SemanticPageCapacityAssessment[] }
   | { status: 'infeasible'; reason: string; assessments: SemanticPageCapacityAssessment[] };
 
-/** Current lecture pages are partitioned by complete measured compositions,
+/** Implements the shared page planning contract only after real overflow.
+ * Current lecture pages are partitioned by complete measured compositions,
  * never by the sum of one independently padded full-width box per claim. The
  * integer boundaries retain reading order and each original indivisible unit. */
 async function rebalanceReferenceLectureSection(
@@ -447,6 +497,8 @@ export async function replanMeasuredTeachingSection(
     return { status: 'infeasible', reason: 'Capacity replanning requires one complete teaching section.', assessments };
   }
   const locked = new Set(options.lockedOutlineIds ?? []);
+  const referenceLecture = (outline: SceneOutline) => hasReferenceLectureTypography(outline)
+    || Boolean(options.useReferenceLectureTypography?.(outline));
   const lockedVersions = distinct(outlines.filter((outline) => locked.has(outline.id))
     .flatMap((outline) => outline.sectionPlanVersion ? [outline.sectionPlanVersion] : []));
   if (lockedVersions.length > 1) {
@@ -459,7 +511,7 @@ export async function replanMeasuredTeachingSection(
   // Keep it intact and repair only contiguous actual overloads. Legacy pages
   // retain their original additive redistribution and saved placement grammar.
   const retain = (index: number) => locked.has(outlines[index]!.id)
-    || hasReferenceLectureTypography(outlines[index]!) && !failed(assessments[index]!);
+    || referenceLecture(outlines[index]!) && !failed(assessments[index]!);
   for (let start = 0; start < outlines.length;) {
     if (retain(start)) { result.push(outlines[start]!); start += 1; continue; }
     let end = start + 1;
@@ -474,7 +526,7 @@ export async function replanMeasuredTeachingSection(
         priorTeachingNodeIds: distinct([...(options.priorTeachingNodeIds ?? []),
           ...result.flatMap((outline) => outline.teachingBrief?.teachingPlan?.introduces ?? [])]),
       };
-      const replanned = segment.every(hasReferenceLectureTypography)
+      const replanned = segment.every(referenceLecture)
         ? await rebalanceReferenceLectureSection(segment, measured, rebalanceOptions)
         : rebalanceMeasuredTeachingSection(segment, measured, rebalanceOptions);
       if (!replanned) return { status: 'infeasible', reason: 'A complete semantic unit cannot fit a measured page while preserving its observations and the section budget.', assessments };
@@ -491,6 +543,7 @@ export async function replanMeasuredTeachingSection(
   // still independently fingerprinted and the caller bounds recovery epochs.
   const version = lockedVersions[0] ?? createHash('sha256').update(JSON.stringify({
     policy: 'semantic-section-recovery-v1', sectionId: outlines[0]!.lectureSectionId,
+    pagePlanningVersion: PPT_PAGE_PLANNING_CONTRACT.planningVersion,
     pages: result.map((outline) => ({ id: outline.id, sourcePageIds: outline.sourcePageIds,
       keyPoints: outline.keyPoints, targetDurationSec: outline.targetDurationSec, plannedTiming: outline.plannedTiming })),
   })).digest('hex').slice(0, 16);

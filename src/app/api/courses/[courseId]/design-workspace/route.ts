@@ -29,6 +29,7 @@ import {
   validateTeachingBlueprintBudget,
 } from "@/lib/course-design/teaching-blueprint";
 import { ZH_CN_COURSE_LANGUAGE_DIRECTIVE } from "@/lib/openmaic/generation/course-language";
+import { PPT_PAGE_PLANNING_VERSION } from "@/lib/course-design/ppt-page-planning-contract";
 import { deriveKnowledgeLectureSectionsFromOutlines } from "@/lib/knowledge-lecture";
 import { buildNewSystemAiTeachingOutline } from "@/lib/classroom/new-system-course";
 import { contentGenerationJobs, designGenerationJobs } from "@/lib/course-generation/job-storage";
@@ -203,6 +204,14 @@ function blueprintFrom(value: unknown, course: Course, figures: readonly CourseT
   if (![1, 2, 3].includes(blueprint.schemaVersion) || !Array.isArray(blueprint.sections) || !blueprint.sections.length) {
     throw new WorkspaceInputError("教学蓝图至少需要一个知识小节。");
   }
+  const savedBlueprint = course.content.teachingBlueprint;
+  const savedSections = new Map(savedBlueprint?.sections.map((section) => [section.id, section]));
+  if (savedBlueprint?.sections.some((section) => section.contentMode === "spoken")
+    && (blueprint.inputFingerprint !== savedBlueprint.inputFingerprint
+      || savedBlueprint.sections.some((section) => section.contentMode === "spoken"
+        && !blueprint.sections.some((candidate) => candidate.id === section.id && candidate.contentMode === "spoken")))) {
+    throw new WorkspaceInputError("讲稿来源或小节身份已改变，请重新加载后编辑。", "BLUEPRINT_SOURCE_CONFLICT", 409);
+  }
   const knownPointIds = new Set(course.content.knowledgePoints.map((point) => point.id));
   for (const section of blueprint.sections) {
     if (!Array.isArray(section.units) || !section.units.length || !Array.isArray(section.pages) || !section.pages.length
@@ -211,6 +220,47 @@ function blueprintFrom(value: unknown, course: Course, figures: readonly CourseT
       || section.pages.some((page) => !page.id?.trim() || !page.title?.trim()
         || !Array.isArray(page.unitIds) || !Array.isArray(page.knowledgePointIds) || !Array.isArray(page.keyPoints))) {
       throw new WorkspaceInputError('教学蓝图的页面身份或正文格式无效。');
+    }
+    if (section.contentMode === "spoken") {
+      const savedSection = savedSections.get(section.id);
+      if (savedSection?.contentMode !== "spoken") {
+        throw new WorkspaceInputError("讲稿来源或小节身份已改变，请重新加载后编辑。", "BLUEPRINT_SOURCE_CONFLICT", 409);
+      }
+      if (section.pptPlanningVersion !== savedSection.pptPlanningVersion) {
+        throw new WorkspaceInputError("页面规划合同已改变，请重新加载后编辑。", "BLUEPRINT_SOURCE_CONFLICT", 409);
+      }
+      const savedNodes = new Map(savedSection.units.flatMap((unit) => unit.explanationNodes ?? []).map((node) => [node.id, node]));
+      const nodes = section.units.flatMap((unit) => unit.explanationNodes ?? []);
+      if (nodes.length !== savedNodes.size || new Set(nodes.map((node) => node.id)).size !== savedNodes.size
+        || nodes.some((node) => !savedNodes.has(node.id) || typeof node.content !== "string" || !node.content.trim())) {
+        throw new WorkspaceInputError("讲稿段落缺失、重复或正文为空，请保留完整讲稿后保存。");
+      }
+      for (const node of nodes) {
+        const saved = savedNodes.get(node.id)!;
+        for (const field of ["sourceBindings", "provenance", "claimRefs", "quoteDuties"] as const) {
+          if (JSON.stringify(node[field]) !== JSON.stringify(saved[field])) {
+            throw new WorkspaceInputError("讲稿来源身份不能随正文编辑改变，请重新加载后编辑。", "BLUEPRINT_SOURCE_CONFLICT", 409);
+          }
+        }
+      }
+      for (const page of section.pages) {
+        if (section.pptPlanningVersion === PPT_PAGE_PLANNING_VERSION) {
+          if (typeof page.description !== "string" || !page.description.trim()
+            || !page.keyPoints.length || page.keyPoints.some((point) => typeof point !== "string" || !point.trim())) {
+            throw new WorkspaceInputError("页面说明与页面要点不能为空，请保留完整页面职责后保存。");
+          }
+          // Native pages own these two fields directly. A stale client may
+          // still send a display projection; it cannot overwrite that plan.
+          delete page.presentationItems;
+          continue;
+        }
+        if (!Array.isArray(page.presentationItems) || page.presentationItems.some((item) => typeof item.text !== "string"
+          || !Array.isArray(item.nodeIds) || item.nodeIds.some((id) => !savedNodes.has(id))
+          || !["heading", "key-point", "comparison", "process-label", "case-observation"].includes(item.role))) {
+          throw new WorkspaceInputError("页面展示内容或讲稿关联格式无效。");
+        }
+        page.keyPoints = page.presentationItems.map((item) => item.text).filter((text) => text.trim());
+      }
     }
     const unitIds = new Set(section.units.map((unit) => unit.id));
     const referencedKnowledge = [
@@ -232,7 +282,12 @@ function blueprintFrom(value: unknown, course: Course, figures: readonly CourseT
       knowledgePointIds: figure.knowledgePointIds, orderedSteps: figure.orderedSteps })), ...sourceSequences,
   ]);
   qualityDiagnostics.push(...sequenceIssues.map((issue) => `教材步骤待核对 [${issue.pageId}]：${issue.detail}`));
-  const outlines = teachingBlueprintToOutlines(boundBlueprint, ZH_CN_COURSE_LANGUAGE_DIRECTIVE);
+  let outlines: ReturnType<typeof teachingBlueprintToOutlines>;
+  try {
+    outlines = teachingBlueprintToOutlines(boundBlueprint, ZH_CN_COURSE_LANGUAGE_DIRECTIVE);
+  } catch (error) {
+    throw new WorkspaceInputError(error instanceof Error ? error.message : "教学蓝图无法编译为可执行页面。");
+  }
   try {
     assertSourceSequencesInOutlines(outlines, sourceSequences, figures);
   } catch (error) {

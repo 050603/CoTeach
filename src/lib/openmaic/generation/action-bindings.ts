@@ -80,7 +80,12 @@ function resolveCue(
   const issues: ActionBindingIssue[] = [];
   const elementIds = new Set(slide.content.elements.map((element) => element.id));
   const binding = slide.bindings.find((candidate) => candidate.semanticId === cue.semanticId);
-  const elementId = cue.elementId ?? binding?.elementIds[0];
+  const boundTarget = binding?.elementTargets?.find((target) => isValidSlideVisualTarget(slide.content.elements, target))
+    ?? binding?.elementTargets?.[0];
+  const elementId = cue.elementId ?? boundTarget?.elementId ?? binding?.elementIds[0];
+  // A direct authored target owns its selector. A host binding is used only
+  // when narration relies on its semantic reference rather than a direct id.
+  const selector = cue.selector ?? (cue.elementId ? undefined : boundTarget?.selector);
   if (!elementId) {
     issues.push(issue(
       "missing-element-binding",
@@ -95,7 +100,7 @@ function resolveCue(
     ));
   } else if (!isValidSlideVisualTarget(slide.content.elements, {
     elementId,
-    ...(cue.selector ? { selector: cue.selector } : {}),
+    ...(selector ? { selector } : {}),
   })) {
     issues.push(issue(
       "selector-quote-missing",
@@ -169,7 +174,7 @@ function resolveCue(
     id: cue.id,
     elementId,
     speechId: segment.id,
-    ...(cue.selector ? { selector: cue.selector } : {}),
+    ...(selector ? { selector } : {}),
     ...(anchor ? {
       speechAnchor: { quote: anchor.quote, occurrence: anchor.occurrence },
     } : {}),

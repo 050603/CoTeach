@@ -4,7 +4,9 @@ import type { SemanticCapacityGroup, SemanticPageCapacityAssessment } from './se
 import { rebalanceMeasuredTeachingSection, replanMeasuredTeachingSection } from './section-capacity-replanner';
 import type { TextMeasure } from '@openmaic/generation';
 import { hasCompatibleOutlinePlan } from '@/lib/course-generation/generation-scope';
+import { bindTeachingManuscript } from '@/lib/course-design/teaching-manuscript';
 import { REFERENCE_LECTURE_TYPOGRAPHY } from './slide-presentation-typography';
+import { PPT_PAGE_PLANNING_CONTRACT } from '@/lib/course-design/ppt-page-planning-contract';
 
 const group = (id: string, sourcePageId: string, height: number, extra: Partial<SemanticCapacityGroup> = {}): SemanticCapacityGroup => ({
   id, kind: 'text', visibleText: `完整教学点 ${id}`, narrationExpansion: [`解释 ${id}`],
@@ -28,6 +30,38 @@ const assessment = (id: string, groups: SemanticCapacityGroup[], decision: Seman
 });
 
 describe('measured section redistribution', () => {
+  it('redistributes manuscript references without promoting display or stale narration into speech', () => {
+    const source = outline('source');
+    source.teachingBrief!.manuscript = { sectionId: 'section', segmentIds: ['first', 'oral', 'second'] };
+    source.teachingBrief!.teachingPlan!.introduces = ['first', 'oral', 'second'];
+    const groups = [
+      group('first-display', 'source', 220, { sourceNodeIds: ['first'] }),
+      group('second-display', 'source', 220, { sourceNodeIds: ['second'] }),
+      group('visual-only', 'source', 220, { sourceNodeIds: [], referencedNodeIds: ['second'] }),
+    ];
+    const pages = rebalanceMeasuredTeachingSection([source], [assessment('source', groups, 'page-overflow')])!;
+    expect(pages.map((page) => page.teachingBrief?.manuscript?.segmentIds)).toEqual([['first', 'oral'], ['second'], []]);
+    expect(pages.flatMap((page) => page.teachingBrief?.teachingPlan?.deepens ?? [])).toEqual([]);
+    const manuscripts = [{ sectionId: 'section', segments: [
+      { id: 'first', text: '第一段保留真实限定。' }, { id: 'oral', text: '这是只讲不显示的一段。' },
+      { id: 'second', text: '第二段按原顺序继续。' },
+    ] }];
+    expect(pages.flatMap((page) => bindTeachingManuscript(page, manuscripts).segments.map((segment) => segment.text)))
+      .toEqual(manuscripts[0]!.segments.map((segment) => segment.text));
+    for (const page of pages) {
+      expect(page.teachingBrief?.explanation).toBe('');
+      expect(page.teachingBrief?.teachingPlan?.newContent).toBe('');
+      expect(page.teachingBrief?.teachingPlan?.narrationFocus).toEqual([]);
+    }
+    const repeated = rebalanceMeasuredTeachingSection(pages, pages.map((page, index) =>
+      assessment(page.id, [group(`replay-${index}`, page.id, 220, {
+        sourceNodeIds: page.teachingBrief!.manuscript!.segmentIds,
+      })], index === 0 ? 'page-overflow' : 'fits')), { allowAcceptedPlan: true })!;
+    expect(repeated.flatMap((page) => page.teachingBrief?.manuscript?.segmentIds ?? []))
+      .toEqual(['first', 'oral', 'second']);
+    expect(pages.reduce((sum, page) => sum + page.targetDurationSec!, 0)).toBe(60);
+  });
+
   it('restores only actually established display references and never promotes a visual continuation into an introduction', () => {
     const first = outline('first'), continuation = outline('visual');
     first.teachingBrief!.teachingPlan!.introduces = ['definition'];
@@ -65,6 +99,18 @@ describe('measured section redistribution', () => {
     original.teachingBrief!.teachingPlan!.presentationContent = presentationItems.map((item) => item.text);
     original.teachingBrief!.teachingPlan!.introduces = ['definition', 'case'];
     original.teachingBrief!.explanation = explanations.join('\n');
+    const binding = { evidenceItemId: 'evidence', sourceBlockIds: ['original-block'],
+      quote: explanations[0], textbookId: 'book', revisionId: 'revision' };
+    const example = { id: 'roster-case', kind: 'textbook' as const, title: '样本名单',
+      facts: ['样本名单来自需要研究的目标总体。'], explanation: explanations[1]!, purpose: '核对抽样框覆盖', sources: [binding] };
+    original.teachingBrief!.authoring = {
+      nodes: [{ id: 'definition', kind: 'concept', content: explanations[0]!, knowledgePointIds: ['first'],
+        prerequisiteNodeIds: [], provenance: 'derived', sourceBindings: [binding] },
+      { id: 'case', kind: 'example', content: explanations[1]!, knowledgePointIds: ['first'],
+        prerequisiteNodeIds: ['definition'], provenance: 'derived', exampleIds: ['roster-case'], sourceBindings: [binding] }],
+      examplePlans: [{ knowledgePointId: 'first', mode: 'textbook', selectedExampleIds: ['roster-case'], rationale: example.purpose }],
+      knowledge: [{ knowledgePointId: 'first', authoring: { claims: [], examples: [example], exampleCoverage: [] } }],
+    };
     const groups = presentationItems.map((item, index) => group(`item-${index}`, 'first', 220, {
       visibleText: item.text, sourceNodeIds: item.nodeIds, presentationItems: [item], narrationExpansion: [explanations[index]!],
     }));
@@ -74,6 +120,12 @@ describe('measured section redistribution', () => {
     expect(pages.map((page) => page.teachingBrief?.teachingPlan?.presentationItems)).toEqual(presentationItems.map((item) => [item]));
     expect(pages.flatMap((page) => page.teachingBrief?.teachingPlan?.narrationFocus ?? [])).toEqual(explanations);
     expect(pages.map((page) => page.teachingBrief?.teachingPlan?.introduces)).toEqual([['definition'], ['case']]);
+    expect(pages.map((page) => page.teachingBrief?.authoring?.nodes.map((node) => node.id))).toEqual([['definition'], ['case']]);
+    expect(pages[1]!.teachingBrief!.authoring!.nodes[0]).toMatchObject({
+      content: explanations[1], exampleIds: ['roster-case'], sourceBindings: [binding],
+    });
+    expect(pages[1]!.teachingBrief!.authoring!.knowledge[0]!.authoring.examples[0]).toEqual(example);
+    expect(pages[1]!.teachingBrief!.authoring!.examplePlans[0]!.selectedExampleIds).toEqual(['roster-case']);
     expect(pages.every((page) => page.teachingBrief?.teachingPlan?.presentationTypography === REFERENCE_LECTURE_TYPOGRAPHY)).toBe(true);
     expect(pages.reduce((seconds, page) => seconds + page.targetDurationSec!, 0)).toBe(60);
     const legacy = structuredClone(original);
@@ -225,6 +277,35 @@ describe('measured section redistribution', () => {
     return { naturalWidth: text.length * fontSize, height: padding * 2 + lines * fontSize * 1.5,
       lines: Array.from({ length: lines }, () => text) };
   };
+
+  it('fingerprints the shared planning policy while retaining the same teaching assignments and timing', async () => {
+    const original = outline('policy');
+    original.keyPoints = Array.from({ length: 5 }, (_, index) => `教材条目${index + 1}：${'完整条件与解释'.repeat(12)}`);
+    original.teachingBrief!.teachingPlan!.visibleContent = original.keyPoints;
+    const groups = [1, 2, 3, 4].map((value) => group(`unit-${value}`, 'policy', 145));
+    const measured = assessment('policy', groups, 'page-overflow');
+    const baseline = rebalanceMeasuredTeachingSection([original], [measured])!;
+    const recovery = await replanMeasuredTeachingSection([original], { measure });
+    expect(recovery.status).toBe('replanned');
+    const contract = PPT_PAGE_PLANNING_CONTRACT as { planningVersion: string };
+    const planningVersion = contract.planningVersion;
+    try {
+      contract.planningVersion = `${planningVersion}-revision`;
+      const revised = rebalanceMeasuredTeachingSection([original], [measured])!;
+      expect(revised[0]!.sectionPlanVersion).not.toBe(baseline[0]!.sectionPlanVersion);
+      expect(revised.map((page) => ({ keyPoints: page.keyPoints, timing: page.plannedTiming })))
+        .toEqual(baseline.map((page) => ({ keyPoints: page.keyPoints, timing: page.plannedTiming })));
+      const revisedRecovery = await replanMeasuredTeachingSection([original], { measure });
+      expect(revisedRecovery.status).toBe('replanned');
+      if (recovery.status === 'replanned' && revisedRecovery.status === 'replanned') {
+        expect(revisedRecovery.outlines[0]!.sectionPlanVersion).not.toBe(recovery.outlines[0]!.sectionPlanVersion);
+        expect(revisedRecovery.outlines.flatMap((page) => page.keyPoints)).toEqual(original.keyPoints);
+        expect(revisedRecovery.outlines.reduce((seconds, page) => seconds + page.targetDurationSec!, 0)).toBe(60);
+      }
+    } finally {
+      contract.planningVersion = planningVersion;
+    }
+  });
 
   it('partitions a real overload by grouped measured compositions and preserves already-fitting neighboring pages', async () => {
     const original = outline('overload'), neighboring = outline('neighbor');

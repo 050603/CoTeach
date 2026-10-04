@@ -11,6 +11,38 @@ const anchors = new Map([
 ]);
 
 describe('original-source narration authoring', () => {
+  it('accepts a byte-identical redundant source part without changing the authored order', () => {
+    const authored = { pageId: 'page-1', segments: [{ textParts: [
+      { text: '先建立必要前提。' }, { sourceRef: 'source-list-1-item-2', text: source2 },
+      { text: '再据此解释不同任务的难度。' },
+    ] }] };
+    expect(resolveNarrationSourceParts(authored, anchors)).toEqual({ pageId: 'page-1', segments: [{
+      text: `先建立必要前提。${source2}再据此解释不同任务的难度。`,
+    }] });
+    expect(() => assertNarrationSourceDuties(authored, [{ text: source2,
+      availableReferences: [{ pageId: 'page-1', sourceRef: 'source-list-1-item-2' }] }], undefined, anchors)).not.toThrow();
+  });
+
+  it('retains a playable conflicting source part with a real diagnostic without upgrading its source identity', () => {
+    const speech = '这个例子里的程序只接收表格。';
+    const authored = { pageId: 'page-1', segments: [{ id: 'speech', textParts: [
+      { text: '我们只看当前程序的输入方式。' }, { sourceRef: 'source-list-1-item-2', text: speech },
+    ], semanticIds: ['page-1:teaching'], anchors: [] }] };
+    const diagnostics: string[] = [];
+    const resolved = resolveNarrationSourceParts(authored, anchors, undefined, {
+      qualityReviewMode: 'diagnostic', onDiagnostic: (message) => { diagnostics.push(message); },
+    });
+    expect(resolved).toEqual({ pageId: 'page-1', segments: [{ id: 'speech',
+      text: `我们只看当前程序的输入方式。${speech}`, semanticIds: ['page-1:teaching'], anchors: [] }] });
+    expect(diagnostics).toHaveLength(1);
+    expect(diagnostics[0]).toContain('without verifying it as a quotation');
+    expect(() => assertNarrationSourceDuties(authored, [{ text: source2,
+      availableReferences: [{ pageId: 'page-1', sourceRef: 'source-list-1-item-2' }] }], undefined, anchors)).toThrow();
+    expect(() => resolveNarrationSourceParts({ pageId: 'page-1', segments: [{ textParts: [
+      { sourceRef: 'other-page-definition', text: speech },
+    ] }] }, anchors, undefined, { qualityReviewMode: 'diagnostic' })).toThrow('unknown source reference');
+  });
+
   it('retains usable authored speech and quotes with source-quality diagnostics', () => {
     const diagnostics: Array<{ pageId?: string; message: string }> = [];
     const authored = { pageId: 'page-1', segments: [

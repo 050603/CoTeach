@@ -33,6 +33,9 @@ export interface TextMeasureResult {
   /** Optional host-measured visible glyph extents, relative to the allocated box. */
   inkBottom?: number;
   inkRight?: number;
+  /** Actual glyph ink in local allocation coordinates, including padding
+   * offsets but excluding padding area. Omit when glyph bounds are unknown. */
+  inkRects?: Array<{ left: number; top: number; width: number; height: number }>;
   /** Actual content-box height in px, including top and bottom padding. */
   height: number;
   /** Visible lines after browser layout, in their displayed order. */
@@ -97,6 +100,8 @@ export class TextLayoutError extends Error {
 /** Production keeps usable text when a measured quality preference cannot be met. */
 export interface TextLayoutDiagnostics {
   onDiagnostic?: (detail: string) => void;
+  /** Native authoring can use the spare width inside its own text-only panel. */
+  preserveNativeComposition?: boolean;
 }
 
 function qualityIssue(message: string, options: TextLayoutDiagnostics): void {
@@ -738,7 +743,7 @@ async function measureNativeHtml(
   measure: TextMeasure,
   maxHeightGrowth = 0,
   options: TextLayoutDiagnostics = {},
-): Promise<{ content: string; requiredHeight: number }> {
+): Promise<{ content: string; requiredHeight: number; measurement?: TextMeasureResult }> {
   const text = nativeHtmlText(html);
   if (!text) return { content: html, requiredHeight: allocation.height };
   const check = (candidate: string) => measure({ ...spec, html: candidate, text: nativeHtmlText(candidate), width: allocation.width, preserveRichText: true });
@@ -750,48 +755,210 @@ async function measureNativeHtml(
   const orphan = !preservedBreaks && measured.lines.length > 1 && measured.lines.some(isOrphanTextLine);
   if (!orphan) {
     if (!fits(measured)) qualityIssue(`native text ${allocation.id} exceeds its authored ${allocation.width}×${allocation.height}px allocation (visible bounds ${measured.inkRight ?? measured.naturalWidth}×${measured.inkBottom ?? measured.height}px)`, options);
-    return { content: html, requiredHeight: measured.inkBottom ?? measured.height };
+    return { content: html, requiredHeight: measured.inkBottom ?? measured.height, measurement: measured };
   }
   for (const candidate of nativeBreakCandidates(html)) {
     const result = await check(candidate);
     if (fits(result) && !result.lines.some(isOrphanTextLine)
       && result.lines.every((line) => !FORBIDDEN_LINE_START.test(line))) {
-      return { content: candidate, requiredHeight: result.inkBottom ?? result.height };
+      return { content: candidate, requiredHeight: result.inkBottom ?? result.height, measurement: result };
     }
   }
   qualityIssue(`native text ${allocation.id} has a single-character wrapped line that cannot fit its authored allocation; widen the label without changing its text or font size`, options);
-  return { content: html, requiredHeight: measured.inkBottom ?? measured.height };
+  return { content: html, requiredHeight: measured.inkBottom ?? measured.height, measurement: measured };
 }
 
 /** Measure native foreground text once, making only lossless short-label break edits. */
 export async function compileNativeTextLayout(elements: PPTElement[], measure: TextMeasure, options: TextLayoutDiagnostics = {}): Promise<PPTElement[]> {
-  const compiled = await Promise.all(elements.map(async (element): Promise<PPTElement> => {
+  type InkRect = NonNullable<TextMeasureResult['inkRects']>[number];
+  const intersects = (a: InkRect, b: InkRect) => a.left < b.left + b.width - 0.5 && a.left + a.width > b.left + 0.5
+    && a.top < b.top + b.height - 0.5 && a.top + a.height > b.top + 0.5;
+  const contains = (outer: InkRect, inner: InkRect) => outer.left <= inner.left + 0.5 && outer.top <= inner.top + 0.5
+    && outer.left + outer.width >= inner.left + inner.width - 0.5 && outer.top + outer.height >= inner.top + inner.height - 0.5;
+  const sourceInk = new Map<number, InkRect[]>();
+  const sourceMeasurements = new Map<number, TextMeasureResult>();
+  const compiledInk = new Map<number, InkRect[]>();
+  const cache = new Map<string, Promise<TextMeasureResult>>();
+  const cachedMeasure: TextMeasure = (input) => {
+    const key = JSON.stringify(input);
+    let pending = cache.get(key);
+    if (!pending) { pending = Promise.resolve(measure(input)); cache.set(key, pending); }
+    return pending;
+  };
+  const specFor = (element: PPTTextElement | PPTShapeElement) => {
+    const text = element.type === 'text' ? element : element.text!;
+    const sizes = [...text.content.matchAll(/font-size\s*:\s*([\d.]+)px/gi)].map((match) => Number(match[1]));
+    return { fontSize: Math.max(16, ...sizes), fontWeight: 400 as const, fontFamily: text.defaultFontName || TEXT_LAYOUT_FONT,
+      padding: element.type === 'text' ? 10 : 0, lineHeight: text.lineHeight ?? 1.5,
+      paragraphSpace: text.paragraphSpace ?? 5, align: 'left' as const };
+  };
+  const inkFor = (element: PPTElement, result?: TextMeasureResult): InkRect[] | undefined => {
+    if (!result?.inkRects || (element.type !== 'text' && element.type !== 'shape') || (element.rotate ?? 0) !== 0
+      || result.inkRects.some((rect) => Object.values(rect).some((value) => !Number.isFinite(value)) || rect.width < 0 || rect.height < 0)) return;
+    const alignment = element.type === 'text' ? element.vAlign : element.text?.align;
+    const offset = alignment === 'middle' ? Math.max(0, element.height - result.height) / 2
+      : alignment === 'bottom' ? Math.max(0, element.height - result.height) : 0;
+    return result.inkRects.map((rect) => ({ ...rect, left: rect.left + element.left, top: rect.top + element.top + offset }));
+  };
+  // Seed every peer before adapting any one box. Cached requests keep this a
+  // single measurement of each unchanged HTML/width, with deterministic checks.
+  await Promise.all(elements.map(async (element, index) => {
+    if (element.type !== 'text' && (element.type !== 'shape' || !element.text)) return;
+    const text = element.type === 'text' ? element : element.text!;
+    if (!nativeHtmlText(text.content)) return;
+    const result = await cachedMeasure({ ...specFor(element), html: text.content, text: nativeHtmlText(text.content),
+      width: element.width, preserveRichText: true });
+    sourceMeasurements.set(index, result);
+    const ink = inkFor(element, result);
+    if (ink) sourceInk.set(index, ink);
+  }));
+  if (options.preserveNativeComposition) {
+    // The model can inset a text frame inside a card while the renderer adds
+    // another 10px of padding. Use that existing card width before declaring
+    // overflow, without changing the card, text, font, vertical rhythm or page.
+    const blankPanel = (element: PPTElement): element is PPTShapeElement => element.type === 'shape'
+      && !element.text?.content?.trim() && Boolean(element.fill && element.fill !== 'transparent' && element.fill !== 'none')
+      && element.opacity !== 0 && (element.rotate ?? 0) === 0 && element.width > 0 && element.height > 0;
+    const foregroundBounds = (element: PPTElement): InkRect => {
+      if (element.type !== 'line') return element;
+      const points = [element.start, element.end, element.broken, element.broken2, element.curve, ...(element.cubic ?? [])]
+        .filter((point): point is [number, number] => Boolean(point));
+      const padding = Math.max(1, element.width) / 2;
+      const left = Math.min(...points.map((point) => point[0])), right = Math.max(...points.map((point) => point[0]));
+      const top = Math.min(...points.map((point) => point[1])), bottom = Math.max(...points.map((point) => point[1]));
+      return { left: element.left + left - padding, top: element.top + top - padding,
+        width: right - left + padding * 2, height: bottom - top + padding * 2 };
+    };
+    const owners = new Map<number, number>();
+    for (const [index, element] of elements.entries()) {
+      if (element.type !== 'text' || element.opacity === 0 || (element.rotate ?? 0) !== 0 || !nativeHtmlText(element.content)) continue;
+      const owner = elements.flatMap((panel, panelIndex) => panelIndex < index && blankPanel(panel) && contains(panel, element)
+        ? [{ index: panelIndex, area: panel.width * panel.height }] : []).sort((a, b) => a.area - b.area)[0];
+      if (owner) owners.set(index, owner.index);
+    }
+    type PanelColumn = { index: number; panel: PPTShapeElement; texts: number[]; insetLeft: number; insetRight: number };
+    const columns: PanelColumn[] = [];
+    for (const [panelIndex, panel] of elements.entries()) {
+      if (!blankPanel(panel)) continue;
+      const texts = [...owners].filter(([, owner]) => owner === panelIndex).map(([index]) => index);
+      const first = elements[texts[0]!] as PPTTextElement | undefined;
+      if (!first || !texts.every((index) => Math.abs(elements[index]!.left - first.left) <= EPSILON
+        && Math.abs(elements[index]!.width - first.width) <= EPSILON)) continue;
+      const insetLeft = first.left - panel.left, insetRight = panel.left + panel.width - first.left - first.width;
+      // Bound this to normal card padding, rather than turning an intentional
+      // narrow column inside a large background into a whole-page text box.
+      if (insetLeft < 0 || insetRight < 0 || insetLeft + insetRight <= EPSILON
+        || Math.max(insetLeft, insetRight) > TEXT_LAYOUT_PADDING * 2) continue;
+      if (panel.left < SAFE_LEFT || panel.left + panel.width > SAFE_RIGHT
+        || panel.top < SAFE_TOP || panel.top + panel.height > SAFE_BOTTOM) continue;
+      const hasOtherContent = elements.some((other, otherIndex) => {
+        if (otherIndex === panelIndex || texts.includes(otherIndex) || other.type === 'text') return false;
+        // Larger backgrounds own the whole region; nested shapes, media,
+        // tables and connectors make this more than a single text column.
+        if (otherIndex < panelIndex && blankPanel(other) && contains(other, panel)) return false;
+        return intersects(panel, foregroundBounds(other));
+      });
+      if (!hasOtherContent) columns.push({ index: panelIndex, panel, texts, insetLeft, insetRight });
+    }
+    const bottomMargin = (column: PanelColumn, index: number) => {
+      const ink = sourceInk.get(index);
+      return ink?.length ? column.panel.top + column.panel.height - Math.max(...ink.map((rect) => rect.top + rect.height)) : Infinity;
+    };
+    const needsWidth = (column: PanelColumn) => column.texts.some((index) =>
+      (sourceMeasurements.get(index)?.inkBottom ?? sourceMeasurements.get(index)?.height ?? 0) > (elements[index] as PPTTextElement).height + EPSILON
+      || bottomMargin(column, index) < TEXT_LAYOUT_PADDING - EPSILON);
+    const acceptColumns = async (requested: PanelColumn[]): Promise<boolean> => {
+      const candidates = new Map<number, { element: PPTTextElement; measurement: TextMeasureResult; ink: InkRect[] }>();
+      for (const column of requested) for (const index of column.texts) {
+        const original = elements[index] as PPTTextElement;
+        const candidate = { ...original, left: column.panel.left, width: column.panel.width };
+        const measured = await cachedMeasure({ ...specFor(candidate), html: candidate.content,
+          text: nativeHtmlText(candidate.content), width: candidate.width, preserveRichText: true });
+        const ink = inkFor(candidate, measured);
+        const inset = { left: column.panel.left + TEXT_LAYOUT_PADDING, top: column.panel.top + TEXT_LAYOUT_PADDING,
+          width: column.panel.width - TEXT_LAYOUT_PADDING * 2, height: column.panel.height - TEXT_LAYOUT_PADDING * 2 };
+        if (!ink?.length || !ink.every((rect) => contains(inset, rect))
+          || (measured.inkBottom ?? measured.height) > candidate.height + EPSILON
+          || measured.lines.length > 1 && measured.lines.some(isOrphanTextLine)) return false;
+        candidates.set(index, { element: candidate, measurement: measured, ink });
+      }
+      for (const [index, candidate] of candidates) {
+        if (elements.some((other, otherIndex) => {
+          if (otherIndex === index) return false;
+          const owner = elements[owners.get(index)!] as PPTShapeElement;
+          if (otherIndex < index && blankPanel(other) && contains(other, owner)) return false;
+          const otherInk = candidates.get(otherIndex)?.ink ?? sourceInk.get(otherIndex);
+          return candidate.ink.some((first) => (otherInk ?? [foregroundBounds(other)]).some((second) => intersects(first, second)));
+        })) return false;
+      }
+      elements = elements.map((element, index) => candidates.get(index)?.element ?? element);
+      for (const [index, candidate] of candidates) {
+        sourceInk.set(index, candidate.ink);
+        sourceMeasurements.set(index, candidate.measurement);
+      }
+      return true;
+    };
+    for (const column of columns) {
+      if (!needsWidth(column)) continue;
+      const peers = columns.filter((other) => other.panel.fill === column.panel.fill
+        && Math.abs(other.panel.top - column.panel.top) <= EPSILON
+        && Math.abs(other.panel.width - column.panel.width) <= EPSILON
+        && Math.abs(other.panel.height - column.panel.height) <= EPSILON
+        && Math.abs(other.insetLeft - column.insetLeft) <= EPSILON
+        && Math.abs(other.insetRight - column.insetRight) <= EPSILON);
+      if (await acceptColumns(peers)) continue;
+      if (peers.length > 1 && await acceptColumns([column])) continue;
+      for (const index of column.texts) if (bottomMargin(column, index) < TEXT_LAYOUT_PADDING - EPSILON) {
+        qualityIssue(`native text ${elements[index]!.id} lacks ${TEXT_LAYOUT_PADDING}px bottom clearance in its owning panel ${column.panel.id}; the measured panel-width candidate was not safe`, options);
+      }
+    }
+  }
+  const ownBackground = (index: number, other: PPTElement, otherIndex: number, ink?: InkRect[]) => otherIndex < index
+    && other.type === 'shape' && !other.text?.content?.trim() && Boolean(other.fill && other.fill !== 'transparent' && other.fill !== 'none')
+    && Boolean(ink?.length && ink.every((rect) => contains(other, rect)));
+  // A filled shape behind an unrelated caption is background paint, not a
+  // foreground obstacle. Keep the containment limit for a card which owns
+  // the original text, and still check every actual peer word/image/table.
+  const unrelatedBackground = (index: number, other: PPTElement, otherIndex: number) => otherIndex < index
+    && other.type === 'shape' && !other.text?.content?.trim()
+    && Boolean(other.fill && other.fill !== 'transparent' && other.fill !== 'none')
+    && Boolean(sourceInk.get(index)?.length) && !contains(other, elements[index] as InkRect)
+    && !ownBackground(index, other, otherIndex, sourceInk.get(index));
+  const remember = (index: number, output: PPTElement, measurement?: TextMeasureResult) => {
+    const ink = inkFor(output, measurement);
+    if (ink) compiledInk.set(index, ink);
+    return output;
+  };
+  const compiled = await Promise.all(elements.map(async (element, index): Promise<PPTElement> => {
     if (element.type === 'text' || (element.type === 'shape' && element.text)) {
       const text = element.type === 'text' ? element : element.text!;
       const html = text.content;
-      const fontSizes = [...html.matchAll(/font-size\s*:\s*([\d.]+)px/gi)].map((match) => Number(match[1]));
-      const spec = { fontSize: Math.max(16, ...fontSizes), fontWeight: 400 as const, fontFamily: text.defaultFontName || TEXT_LAYOUT_FONT,
-        padding: element.type === 'text' ? 10 : 0, lineHeight: text.lineHeight ?? 1.5,
-        paragraphSpace: text.paragraphSpace ?? 5, align: 'left' as const };
+      const spec = specFor(element);
       // Browser glyph bounds can exceed a model's box by a fraction of one
       // line. Grow that box in its available space before rejecting the page.
       const maxHeightGrowth = element.type === 'text' ? Math.min(16, Math.ceil(spec.fontSize / 2)) : 0;
       let resolvedWidth = element.width;
       let result: Awaited<ReturnType<typeof measureNativeHtml>>;
       try {
-        result = await measureNativeHtml(html, element, spec, measure, maxHeightGrowth);
+        result = await measureNativeHtml(html, element, spec, cachedMeasure, maxHeightGrowth);
       } catch (error) {
         if (element.type !== 'text' || element.rotate !== 0 || !(error instanceof TextLayoutError)
           || !/single-character wrapped line/.test(error.message)) {
           if (!options.onDiagnostic || !(error instanceof TextLayoutError)
             || !/exceeds its authored|single-character wrapped line/.test(error.message)) throw error;
-          result = await measureNativeHtml(html, element, spec, measure, maxHeightGrowth, options);
-          return element.type === 'text' ? { ...element, content: result.content,
-            height: Math.max(element.height, Math.ceil(result.requiredHeight)) } : element;
+          result = await measureNativeHtml(html, element, spec, cachedMeasure, maxHeightGrowth, options);
+          return remember(index, element.type === 'text' ? { ...element, content: result.content,
+            height: Math.max(element.height, Math.ceil(result.requiredHeight)) } : element, result.measurement);
         }
         let repaired: Awaited<ReturnType<typeof measureNativeHtml>> | undefined;
-        const overlapsForeground = (width: number, height: number) => elements.some((other) => {
-          if (other === element || other.type === 'line') return false;
+        const overlapsForeground = (width: number, height: number, measurement?: TextMeasureResult) => elements.some((other, otherIndex) => {
+          if (other === element || other.type === 'line' || unrelatedBackground(index, other, otherIndex)) return false;
+          const ink = inkFor({ ...element, width, height }, measurement);
+          if (ink) {
+            if (ownBackground(index, other, otherIndex, sourceInk.get(index)) && ink.every((rect) => contains(other, rect))) return false;
+            const otherInk = sourceInk.get(otherIndex);
+            return ink.some((first) => (otherInk ?? [other as InkRect]).some((second) => intersects(first, second)));
+          }
           const whollyContains = other.left <= element.left && other.top <= element.top
             && other.left + other.width >= element.left + width
             && other.top + other.height >= element.top + height;
@@ -805,11 +972,11 @@ export async function compileNativeTextLayout(elements: PPTElement[], measure: T
           const candidate = { ...element, width };
           // Width collisions cannot improve as the box grows. Height
           // collisions may improve if widening removes a wrapped line.
-          if (overlapsForeground(width, element.height)) break;
+          if (!sourceInk.has(index) && overlapsForeground(width, element.height)) break;
           try {
-            const measured = await measureNativeHtml(html, candidate, spec, measure, maxHeightGrowth);
+            const measured = await measureNativeHtml(html, candidate, spec, cachedMeasure, maxHeightGrowth);
             const height = Math.max(element.height, Math.ceil(measured.requiredHeight));
-            if (element.top + height > 562.5 || overlapsForeground(width, height)) continue;
+            if (element.top + height > 562.5 || overlapsForeground(width, height, measured.measurement)) continue;
             repaired = measured;
             resolvedWidth = width;
             break;
@@ -819,17 +986,17 @@ export async function compileNativeTextLayout(elements: PPTElement[], measure: T
         }
         if (!repaired) {
           if (!options.onDiagnostic) throw error;
-          repaired = await measureNativeHtml(html, element, spec, measure, maxHeightGrowth, options);
+          repaired = await measureNativeHtml(html, element, spec, cachedMeasure, maxHeightGrowth, options);
         }
         result = repaired;
       }
-      if (element.type === 'text') return {
+      if (element.type === 'text') return remember(index, {
         ...element,
         width: resolvedWidth,
         content: result.content,
         height: Math.max(element.height, Math.ceil(result.requiredHeight)),
-      };
-      return result.content === html ? element : { ...element, text: { ...element.text!, content: result.content } };
+      }, result.measurement);
+      return remember(index, result.content === html ? element : { ...element, text: { ...element.text!, content: result.content } }, result.measurement);
     }
     if (element.type !== 'table') return element;
     const widths = element.colWidths.map((width) => width * element.width);
@@ -879,7 +1046,14 @@ export async function compileNativeTextLayout(elements: PPTElement[], measure: T
     }
     const originalBottom = original.top + original.height;
     const obstruction = compiled.find((other, otherIndex) => {
-      if (otherIndex === index || other.type === 'line') return false;
+      if (otherIndex === index || other.type === 'line' || unrelatedBackground(index, other, otherIndex)) return false;
+      const ink = compiledInk.get(index);
+      if (ink) {
+        if (ownBackground(index, other, otherIndex, sourceInk.get(index)) && ink.every((rect) => contains(other, rect))) return false;
+        const otherInk = compiledInk.get(otherIndex);
+        return ink.some((first) => first.top + first.height > originalBottom + 0.5
+          && (otherInk ?? [other as InkRect]).some((second) => intersects(first, second)));
+      }
       if (other.left <= element.left + 0.5 && other.left + other.width >= element.left + element.width - 0.5
         && other.top <= element.top + 0.5 && other.top + other.height >= element.top + element.height - 0.5) return false;
       return element.left < other.left + other.width - 0.5

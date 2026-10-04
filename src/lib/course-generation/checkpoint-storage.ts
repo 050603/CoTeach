@@ -27,6 +27,8 @@ export async function loadGenerationCheckpoints(jobId: string) {
     courseSeedAttempt: rows.find((row) => row.step === 'course-design-attempt:course-seed')?.state ?? null,
     classicOutline: rows.find((row) => row.step === 'design-authoring:classicOutline')?.state ?? null,
     classicOutlineAttempt: rows.find((row) => row.step === 'course-design-attempt:classic-outline')?.state ?? null,
+    spokenSections: rows.filter((row) => /^(?:design-authoring|course-design-attempt|course-design):spoken-section:\d+$/u.test(row.step))
+      .map((row) => ({ step: row.step, state: row.state })),
     courseFinalization: rows.find((row) => row.step === COURSE_FINALIZATION_STEP)?.state ?? null,
     sourceNarrationBaseline: rows.find((row) => row.step === SOURCE_NARRATION_BASELINE_STEP)?.state ?? null,
     authoringHistory: rows.filter((row) => /^authoring-history:v\d+:usage-summary$/u.test(row.step)).map((row) => {
@@ -39,6 +41,7 @@ export async function loadGenerationCheckpoints(jobId: string) {
     stages: rows.filter((row) => row.step.startsWith("stage:")).map((row) => row.state),
     stageAttempts: rows.filter((row) => row.step.startsWith("stage-attempt:")).map((row) => row.state),
     authoringResponses: rows.filter((row) => row.step.startsWith("authoring-response:")).map((row) => row.state),
+    authoringAcceptances: rows.filter((row) => row.step.startsWith("authoring-acceptance:")).map((row) => row.state),
     auxiliaryAuthoringStates: rows.filter((row) => row.step.startsWith('aux-authoring:')).map((row) => row.state),
     teachingSections: rows.filter((row) => row.step.startsWith("teaching-section:")).map((row) => row.state),
     sectionCapacities: rows.filter((row) => row.step.startsWith(SECTION_CAPACITY_CHECKPOINT_PREFIX)).map((row) => row.state),
@@ -120,7 +123,7 @@ export async function resetGenerationCheckpoints(jobId: string) {
   // authoring replacement uses job-storage's transactional history archive.
   await prisma.generationCheckpoint.deleteMany({ where: { jobId, NOT: [
     CLASSROOM_MEDIA_ORIGIN_PREFIX, 'model-usage:', 'authoring-history:',
-    'authoring-response:', 'aux-authoring:', 'stage-attempt:', 'course-design:', 'course-design-attempt:', 'design-authoring:',
+    'authoring-response:', 'aux-authoring:', 'stage-attempt:', 'native-render-repair:', 'course-design:', 'course-design-attempt:', 'design-authoring:',
   ].map((prefix) => ({ step: { startsWith: prefix } })).concat([{ step: { startsWith: TEACHING_BLUEPRINT_STEP } }]) } });
 }
 /**

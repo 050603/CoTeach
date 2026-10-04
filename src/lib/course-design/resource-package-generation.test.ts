@@ -229,12 +229,13 @@ describe("confirmed resource package generation", () => {
     ]));
   }, 15_000);
 
-  it("locks teaching to the approved minutes even outside the legacy ratio", () => {
+  it("keeps the approved nominal minutes while allowing necessary teaching to overrun", () => {
     const stagePlan = stagePlanFromResourcePackage(confirmedPackage().draft);
     expect(knowledgeLectureBudgetBounds(2, stagePlan)).toMatchObject({ courseMinutes: 140, minMinutes: 80, maxMinutes: 80 });
     const input = { course: { name: "AI", subject: "科技", grade: "七年级", hours: 140 / 60, summary: "" }, stagePlan, knowledgePoints: [{ id: "kp-1", name: "训练样本", description: "作用" }, { id: "kp-2", name: "测试样本", description: "检验" }], teacherBrief: "", generationMode: "standard" as const };
     const messages = buildNewSystemAiDurationMessages(input);
-    expect(messages[0].content).toContain("固定 80 分钟");
+    expect(messages[0].content).toContain("第二阶段知识讲授 80 分钟");
+    expect(messages[0].content).toContain("实际讲清必要内容可以超过预计时长");
     expect(messages[0].content).not.toContain("20%–40%");
     const recommendation = normalizeNewSystemAiDurationRecommendation({ durationMin: 20, rationale: "按教案分配", teachingClusterBudgets: [{ clusterId: "teaching-cluster-1", knowledgePointIds: ["kp-1"], durationMin: 1 }, { clusterId: "teaching-cluster-2", knowledgePointIds: ["kp-2"], durationMin: 3 }] }, input);
     expect(recommendation.durationMin).toBe(80);

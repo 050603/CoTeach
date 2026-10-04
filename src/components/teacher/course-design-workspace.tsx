@@ -46,6 +46,7 @@ import type {
 import { teachingRequirementResponsibility } from "@/lib/session/types";
 import type { CourseStagePlan, ResourcePackageStage } from "@/lib/resource-package/types";
 import { COURSE_DESIGN_WORKSPACE_SECTIONS } from "@/lib/course-design/workspace";
+import { PPT_PAGE_PLANNING_VERSION } from "@/lib/course-design/ppt-page-planning-contract";
 import { cn } from "@/lib/utils";
 
 type WorkspaceJob = { status: string; step: string; message: string; progress: number; error: string | null } | null;
@@ -714,6 +715,10 @@ function BlueprintEditor({ course, edit }: { course: Course; edit: (fn: (course:
       knowledgePointIds: unit?.knowledgePointIds.length ? [...unit.knowledgePointIds] : [...section.knowledgePointIds],
       description: "请说明本页要解释、演示或组织的内容。",
       keyPoints: ["请补充页面要点"],
+      ...(section.contentMode === "spoken" ? { introducesNodeIds: [],
+        ...(section.pptPlanningVersion === PPT_PAGE_PLANNING_VERSION ? {} : {
+          presentationItems: [{ text: "请补充页面要点", nodeIds: [], role: "key-point" as const }],
+        }) } : {}),
       teachingObjective: section.learningObjective,
     });
   });
@@ -730,8 +735,26 @@ function BlueprintEditor({ course, edit }: { course: Course; edit: (fn: (course:
             <div className="md:col-span-4"><Field label="小节学习目标"><input className={INPUT} value={section.learningObjective} onChange={(event) => updateSection(sectionIndex, (next) => { next.learningObjective = event.target.value; })} /></Field></div>
           </div>
           <div className="space-y-5 p-4">
-            <div><h3 className="text-sm font-black text-stone-900">讲授单元</h3><div className="mt-3 space-y-3">{section.units.map((unit, unitIndex) => <UnitEditor key={unit.id} unit={unit} update={(mutator) => updateSection(sectionIndex, (next) => mutator(next.units[unitIndex]!))} />)}</div></div>
-            <div><div className="flex flex-wrap items-center justify-between gap-3"><div><h3 className="text-sm font-black text-stone-900">页面安排</h3><p className="mt-1 text-xs text-stone-500">增删页面与知识关联会在保存时通过蓝图预算和引用校验。</p></div><button className="inline-flex min-h-10 items-center gap-2 rounded-[8px] border border-stone-300 px-3 text-xs font-bold text-stone-800" onClick={() => addPage(sectionIndex)} type="button"><Plus size={14} />添加页面</button></div><div className="mt-3 space-y-3">{section.pages.map((page, pageIndex) => <PageEditor key={page.id} knowledgePoints={course.content.knowledgePoints.filter((point) => section.knowledgePointIds.includes(point.id))} onDelete={() => updateSection(sectionIndex, (next) => { next.pages.splice(pageIndex, 1); })} page={page} units={section.units} update={(mutator) => updateSection(sectionIndex, (next) => mutator(next.pages[pageIndex]!))} />)}</div></div>
+            <div><h3 className="text-sm font-black text-stone-900">讲授单元</h3><div className="mt-3 space-y-3">{section.units.map((unit, unitIndex) => <UnitEditor key={unit.id} unit={unit} section={section} moveNode={(nodeId, pageId) => updateSection(sectionIndex, (next) => {
+              for (const page of next.pages) page.introducesNodeIds = (page.introducesNodeIds ?? []).filter((id) => id !== nodeId);
+              const target = next.pages.find((page) => page.id === pageId);
+              if (target) {
+                target.introducesNodeIds = [...(target.introducesNodeIds ?? []), nodeId];
+                target.unitIds = [...new Set([...target.unitIds, unit.id])];
+                target.knowledgePointIds = [...new Set([...target.knowledgePointIds, ...unit.knowledgePointIds])];
+              }
+            })} update={(mutator) => updateSection(sectionIndex, (next) => mutator(next.units[unitIndex]!))} />)}</div></div>
+            <div><div className="flex flex-wrap items-center justify-between gap-3"><div><h3 className="text-sm font-black text-stone-900">页面安排</h3><p className="mt-1 text-xs text-stone-500">讲稿段落可安排到对应页面；页面要点单独用于屏幕展示。</p></div><button className="inline-flex min-h-10 items-center gap-2 rounded-[8px] border border-stone-300 px-3 text-xs font-bold text-stone-800" onClick={() => addPage(sectionIndex)} type="button"><Plus size={14} />添加页面</button></div><div className="mt-3 space-y-3">{section.pages.map((page, pageIndex) => <PageEditor key={page.id} spoken={section.contentMode === "spoken" && section.pptPlanningVersion !== PPT_PAGE_PLANNING_VERSION} canDelete={section.pages.length > 1} knowledgePoints={course.content.knowledgePoints.filter((point) => section.knowledgePointIds.includes(point.id))} onDelete={() => updateSection(sectionIndex, (next) => { if (next.pages.length <= 1) return;
+              if (next.contentMode === "spoken") {
+                const removed = next.pages[pageIndex]!;
+                const target = next.pages[pageIndex + 1] ?? next.pages[pageIndex - 1]!;
+                target.introducesNodeIds = pageIndex + 1 < next.pages.length
+                  ? [...(removed.introducesNodeIds ?? []), ...(target.introducesNodeIds ?? [])]
+                  : [...(target.introducesNodeIds ?? []), ...(removed.introducesNodeIds ?? [])];
+                target.unitIds = [...new Set([...target.unitIds, ...removed.unitIds])];
+                target.knowledgePointIds = [...new Set([...target.knowledgePointIds, ...removed.knowledgePointIds])];
+              }
+              next.pages.splice(pageIndex, 1); })} page={page} units={section.units} update={(mutator) => updateSection(sectionIndex, (next) => mutator(next.pages[pageIndex]!))} />)}</div></div>
             <Field label="检测重点" hint="每行一项。"><textarea className={TEXTAREA} value={section.assessmentFocus.join("\n")} onChange={(event) => updateSection(sectionIndex, (next) => { next.assessmentFocus = lines(event.target.value); })} /></Field>
           </div>
         </article>
@@ -740,12 +763,35 @@ function BlueprintEditor({ course, edit }: { course: Course; edit: (fn: (course:
   );
 }
 
-function UnitEditor({ unit, update }: { unit: TeachingBlueprintUnit; update: (fn: (unit: TeachingBlueprintUnit) => void) => void }) {
+function UnitEditor({ unit, section, moveNode, update }: { unit: TeachingBlueprintUnit; section: TeachingBlueprintSection; moveNode: (nodeId: string, pageId: string) => void; update: (fn: (unit: TeachingBlueprintUnit) => void) => void }) {
+  if (section.contentMode === "spoken") {
+    return <div className="space-y-4 rounded-[8px] bg-stone-50 p-4">
+      <div className="grid gap-4 lg:grid-cols-2">
+        <Field label="单元标题"><input className={INPUT} value={unit.title} onChange={(event) => update((next) => { next.title = event.target.value; })} /></Field>
+        <Field label="学习结果"><input className={INPUT} value={unit.learningOutcome} onChange={(event) => update((next) => { next.learningOutcome = event.target.value; })} /></Field>
+      </div>
+      {unit.explanationNodes?.map((node, index) => <div className="space-y-2" key={node.id}>
+        <Field label={`讲稿段落 ${index + 1}`} hint="课堂按此正文讲授，保存的修改将用于后续课堂生成。">
+          <textarea className={TEXTAREA} rows={6} value={node.content} onChange={(event) => update((next) => { next.explanationNodes![index]!.content = event.target.value; })} />
+        </Field>
+        <Field label="讲授页面"><select className={INPUT} value={section.pages.find((page) => page.introducesNodeIds?.includes(node.id))?.id ?? ""} onChange={(event) => moveNode(node.id, event.target.value)}>
+          <option disabled value="">请选择页面</option>
+          {section.pages.map((page) => <option key={page.id} value={page.id}>{page.title}</option>)}
+        </select></Field>
+      </div>)}
+    </div>;
+  }
   return <div className="grid gap-4 rounded-[8px] bg-stone-50 p-4 lg:grid-cols-2"><Field label="单元标题"><input className={INPUT} value={unit.title} onChange={(event) => update((next) => { next.title = event.target.value; })} /></Field><Field label="学习结果"><input className={INPUT} value={unit.learningOutcome} onChange={(event) => update((next) => { next.learningOutcome = event.target.value; })} /></Field><Field label="核心解释"><textarea className={TEXTAREA} value={unit.explanation} onChange={(event) => update((next) => { next.explanation = event.target.value; })} /></Field><Field label="原理与推理"><textarea className={TEXTAREA} value={unit.mechanism} onChange={(event) => update((next) => { next.mechanism = event.target.value; })} /></Field><Field label="例证"><textarea className={TEXTAREA} value={unit.workedExample} onChange={(event) => update((next) => { next.workedExample = event.target.value; })} /></Field><Field label="常见误解" hint="每行一项。"><textarea className={TEXTAREA} value={unit.misconceptions.join("\n")} onChange={(event) => update((next) => { next.misconceptions = lines(event.target.value); })} /></Field></div>;
 }
 
-function PageEditor({ page, update, onDelete, units, knowledgePoints }: { page: TeachingBlueprintPage; update: (fn: (page: TeachingBlueprintPage) => void) => void; onDelete: () => void; units: TeachingBlueprintUnit[]; knowledgePoints: KnowledgePoint[] }) {
-  return <div className="grid gap-4 rounded-[8px] border border-stone-200 p-4 lg:grid-cols-[180px_minmax(0,1fr)_44px]"><Field label="页面类型"><select className={INPUT} value={page.type} onChange={(event) => update((next) => { next.type = event.target.value as TeachingBlueprintPage["type"]; })}><option value="slide">讲授页</option><option value="interactive">互动页</option></select></Field><Field label="页面标题"><input className={INPUT} value={page.title} onChange={(event) => update((next) => { next.title = event.target.value; })} /></Field><button aria-label={`删除页面：${page.title}`} className="mt-6 grid size-11 place-items-center rounded-[8px] text-red-700" onClick={onDelete} type="button"><Trash2 size={15} /></button><div className="lg:col-span-3"><Field label="页面说明"><textarea className={TEXTAREA} value={page.description} onChange={(event) => update((next) => { next.description = event.target.value; })} /></Field></div><div className="lg:col-span-3"><p className="text-sm font-semibold text-stone-800">知识与讲授单元关联</p><div className="mt-2 flex flex-wrap gap-2">{knowledgePoints.map((point) => <label className="inline-flex min-h-9 items-center gap-2 rounded-full border border-stone-200 px-3 text-xs text-stone-700" key={point.id}><input checked={page.knowledgePointIds.includes(point.id)} onChange={() => update((next) => { next.knowledgePointIds = next.knowledgePointIds.includes(point.id) ? next.knowledgePointIds.filter((id) => id !== point.id) : [...next.knowledgePointIds, point.id]; })} type="checkbox" />{point.name}</label>)}{units.map((unit) => <label className="inline-flex min-h-9 items-center gap-2 rounded-full border border-blue-200 bg-blue-50 px-3 text-xs text-blue-800" key={unit.id}><input checked={page.unitIds.includes(unit.id)} onChange={() => update((next) => { next.unitIds = next.unitIds.includes(unit.id) ? next.unitIds.filter((id) => id !== unit.id) : [...next.unitIds, unit.id]; })} type="checkbox" />单元：{unit.title}</label>)}</div></div><Field label="教学目标"><input className={INPUT} value={page.teachingObjective} onChange={(event) => update((next) => { next.teachingObjective = event.target.value; })} /></Field><div className="lg:col-span-2"><Field label="页面要点" hint="每行一项。"><textarea className={TEXTAREA} value={page.keyPoints.join("\n")} onChange={(event) => update((next) => { next.keyPoints = lines(event.target.value); })} /></Field></div></div>;
+function PageEditor({ page, spoken, canDelete, update, onDelete, units, knowledgePoints }: { page: TeachingBlueprintPage; spoken: boolean; canDelete: boolean; update: (fn: (page: TeachingBlueprintPage) => void) => void; onDelete: () => void; units: TeachingBlueprintUnit[]; knowledgePoints: KnowledgePoint[] }) {
+  return <div className="grid gap-4 rounded-[8px] border border-stone-200 p-4 lg:grid-cols-[180px_minmax(0,1fr)_44px]"><Field label="页面类型"><select className={INPUT} value={page.type} onChange={(event) => update((next) => { next.type = event.target.value as TeachingBlueprintPage["type"]; })}><option value="slide">讲授页</option><option value="interactive">互动页</option></select></Field><Field label="页面标题"><input className={INPUT} value={page.title} onChange={(event) => update((next) => { next.title = event.target.value; })} /></Field><button disabled={!canDelete} aria-label={`删除页面：${page.title}`} className="mt-6 grid size-11 place-items-center rounded-[8px] text-red-700 disabled:opacity-40" onClick={onDelete} type="button"><Trash2 size={15} /></button><div className="lg:col-span-3"><Field label="页面说明"><textarea className={TEXTAREA} value={page.description} onChange={(event) => update((next) => { next.description = event.target.value; })} /></Field></div><div className="lg:col-span-3"><p className="text-sm font-semibold text-stone-800">知识与讲授单元关联</p><div className="mt-2 flex flex-wrap gap-2">{knowledgePoints.map((point) => <label className="inline-flex min-h-9 items-center gap-2 rounded-full border border-stone-200 px-3 text-xs text-stone-700" key={point.id}><input checked={page.knowledgePointIds.includes(point.id)} onChange={() => update((next) => { next.knowledgePointIds = next.knowledgePointIds.includes(point.id) ? next.knowledgePointIds.filter((id) => id !== point.id) : [...next.knowledgePointIds, point.id]; })} type="checkbox" />{point.name}</label>)}{units.map((unit) => <label className="inline-flex min-h-9 items-center gap-2 rounded-full border border-blue-200 bg-blue-50 px-3 text-xs text-blue-800" key={unit.id}><input checked={page.unitIds.includes(unit.id)} onChange={() => update((next) => { next.unitIds = next.unitIds.includes(unit.id) ? next.unitIds.filter((id) => id !== unit.id) : [...next.unitIds, unit.id]; })} type="checkbox" />单元：{unit.title}</label>)}</div></div><Field label="教学目标"><input className={INPUT} value={page.teachingObjective} onChange={(event) => update((next) => { next.teachingObjective = event.target.value; })} /></Field><div className="lg:col-span-2">{spoken ? <div className="space-y-3">
+    {(page.presentationItems ?? []).map((item, index) => <div className="flex items-end gap-2" key={index}>
+      <div className="flex-1"><Field label={`页面要点 ${index + 1}`}><textarea className={TEXTAREA} value={item.text} onChange={(event) => update((next) => { next.presentationItems![index]!.text = event.target.value; next.keyPoints = next.presentationItems!.map((entry) => entry.text); })} /></Field></div>
+      <button className="grid size-11 place-items-center text-red-700" aria-label={`删除页面要点 ${index + 1}`} onClick={() => update((next) => { next.presentationItems!.splice(index, 1); next.keyPoints = next.presentationItems!.map((entry) => entry.text); })} type="button"><Trash2 size={15} /></button>
+    </div>)}
+    <button className="min-h-11 text-sm text-stone-700" onClick={() => update((next) => { next.presentationItems = [...(next.presentationItems ?? []), { text: "", nodeIds: [...(next.introducesNodeIds ?? [])], role: "key-point" }]; next.keyPoints = next.presentationItems.map((entry) => entry.text); })} type="button">添加页面要点</button>
+  </div> : <Field label="页面要点" hint="每行一项。"><textarea className={TEXTAREA} value={page.keyPoints.join("\n")} onChange={(event) => update((next) => { next.keyPoints = lines(event.target.value); })} /></Field>}</div></div>;
 }
 
 function ClassroomEditorPanel({ course, job, selectedSections, setSelectedSections, onGenerate, onDecideCandidate, working }: { course: Course; job: WorkspaceJob; selectedSections: string[]; setSelectedSections: (ids: string[]) => void; onGenerate: () => void; onDecideCandidate: (id: string, adopt: boolean) => void; working: boolean }) {

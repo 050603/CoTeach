@@ -41,13 +41,17 @@ function durationInput(): NewSystemAiDurationInput {
 }
 
 describe("new-system AI duration judgment", () => {
-  it("chooses a total budget within 20–40 percent before generating content", () => {
+  it("keeps the nominal 20–40 percent allocation while allowing a complete explanation to take longer", () => {
     const messages = buildNewSystemAiDurationMessages(durationInput());
     expect(messages[0].content).toContain("20%–40%");
     expect(messages[0].content).toContain("24–48 分钟");
     expect(messages[0].content).toContain("确定总时长后再分配知识簇预算");
     expect(messages[0].content).toContain("不得输出逐知识点时间表");
     expect(messages[0].content).toContain("不得套用固定讲解比例");
+    expect(messages[0].content).toContain("必要解释可以超出参考时间");
+    expect(messages[0].content).toContain("需要更多实际讲授时间不构成 capacityConflict");
+    expect(messages[0].content).not.toContain("不可突破的硬约束");
+    expect(messages[0].content).not.toContain("不得套用固定讲解比例或在总预算外追加时间");
     expect(messages[0].content).not.toContain("68%");
     expect(messages[1].content).toContain('"availableMinutes":120');
     expect(messages[1].content).toContain('"assessmentMode":"adaptive"');
@@ -227,7 +231,7 @@ describe("new-system AI duration judgment", () => {
     expect(aiCall).toHaveBeenCalledTimes(1);
   });
 
-  it.each([79, 150])("caps an overlong %i minute judgment at 40 percent", (durationMin) => {
+  it.each([79, 150])("keeps a %i minute need visible while preserving the nominal 40 percent allocation", (durationMin) => {
     const result = normalizeNewSystemAiDurationRecommendation({
       durationMin,
       rationale: "完整展开需要更长时间。",
@@ -242,7 +246,9 @@ describe("new-system AI duration judgment", () => {
 
     expect(result.durationMin).toBe(48);
     expect(result.scopeWarning).toBeUndefined();
-    expect(result.assumptions.join(" ")).toContain("已按整课 40% 上限调整为 48 分钟");
+    expect(result.assumptions.join(" ")).toContain(`模型原建议 ${durationMin} 分钟`);
+    expect(result.assumptions.join(" ")).toContain("名义计划按整课 40% 参考份额记录为 48 分钟");
+    expect(result.assumptions.join(" ")).toContain("完整实际讲授可超过参考时间");
     expect(result.teachingClusterBudgets.reduce((sum, item) => sum + item.durationMin, 0)).toBe(48);
   });
 
@@ -262,13 +268,14 @@ describe("new-system AI duration judgment", () => {
     expect(result.teachingClusterBudgets.reduce((sum, item) => sum + item.durationMin, 0)).toBe(36);
   });
 
-  it("raises too-short advice to 20 percent, not a knowledge-count-based floor", () => {
+  it("preserves the nominal 20 percent allocation without requiring the speech to fill it", () => {
     const input = durationInput();
     input.knowledgePoints = Array.from({ length: 30 }, (_, i) => ({ id: `kp-${i}`, name: `知识${i}`, description: "" }));
     const result = normalizeNewSystemAiDurationRecommendation({ durationMin: 5, rationale: "精简讲解" }, input);
     expect(result.durationMin).toBe(24);
     expect(result.teachingClusterBudgets.reduce((sum, item) => sum + item.durationMin, 0)).toBeCloseTo(24);
-    expect(result.assumptions.join(" ")).toContain("20% 下限");
+    expect(result.assumptions.join(" ")).toContain("20% 参考份额");
+    expect(result.assumptions.join(" ")).toContain("不要求重复内容填满时间");
   });
 
   it("assigns one shared budget to several related knowledge points", () => {

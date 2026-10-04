@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { SceneOutline } from '@openmaic/lib/types/generation';
+import type { CourseEvidenceSnapshot } from '@/lib/textbook/course-evidence-types';
+import { buildTtsTimingPlan } from '@/lib/openmaic/audio/tts-timing';
 import {
   generateSceneContent,
   objectiveQuestionRequiresWrittenExplanation,
@@ -33,6 +35,209 @@ function expectAuthoredQuiz(result: Awaited<ReturnType<typeof generateSceneConte
 }
 
 describe('section short-answer quiz contract', () => {
+  it('keeps spoken assessment scope and original sources without compatibility answer summaries', async () => {
+    const stale = '兼容摘要错误地声称所有抽样结果都无偏';
+    const original = '随机抽样减少人为选择产生的偏差，但样本仍可能存在随机误差。';
+    const quiz: SceneOutline = { ...outline, teachingObjective: '说明抽样方法和误差的关系', description: stale, keyPoints: [stale],
+      assessmentTargets: [{ unitId: 'unit-sampling', knowledgePointId: 'kp-sampling', unitTitle: stale, learningOutcome: stale }],
+      teachingBrief: { schemaVersion: 1, manuscript: { sectionId: 'section', segmentIds: ['node'] },
+        explanation: stale, examples: [stale], conditions: [stale], evidence: [{ sourceId: 'book', quote: original }], assessmentFocus: stale,
+        understandingCriteria: { goals: [stale], answerEssentials: [stale], misconceptions: [stale], supportingUnitIds: [] },
+        authoring: { nodes: [{ id: 'node', kind: 'concept', content: stale, prerequisiteNodeIds: [], provenance: 'derived' }], knowledge: [], examplePlans: [] } },
+    };
+    const ai = vi.fn().mockResolvedValue(JSON.stringify([{ id: 'q1', type: 'short_answer', question: '随机抽样能否保证没有误差？',
+      referenceAnswer: '不能，仍可能有随机误差', analysis: original, knowledgePointIds: ['kp-sampling'], points: 10 }]));
+    await generateSceneContent(quiz, ai);
+    const prompt = ai.mock.calls[0]![1];
+    expect(prompt).toContain('说明抽样方法和误差的关系');
+    expect(prompt).toContain(original);
+    expect(prompt).not.toContain(stale);
+    expect(prompt).not.toContain('answerEssentials');
+    expect(prompt).not.toContain('teachingAuthoring');
+    expect(prompt).toContain('what was actually taught');
+    expect(ai).toHaveBeenCalledOnce();
+  });
+
+  it('does not promote reference-mode compatibility goals or a generated lecture conclusion into an answer rule', async () => {
+    const unsupported = '生成的兼容结论：凡是新任务都只能重新训练';
+    const inventedExplanation = '生成的讲解总结：任务名称变化就必须重新训练';
+    const sourceText = '可以复用已有模型处理新任务或新领域。是否调整取决于给定的应用要求。';
+    const quiz: SceneOutline = { ...outline, teachingObjective: unsupported,
+      description: unsupported, keyPoints: [unsupported],
+      assessmentTargets: [{ unitId: 'unit-sampling', knowledgePointId: 'kp-sampling',
+        unitTitle: unsupported, learningOutcome: unsupported }],
+      teachingBrief: { schemaVersion: 1, explanation: unsupported, examples: [], conditions: [],
+        evidence: [], assessmentFocus: unsupported,
+        understandingCriteria: { goalSource: 'references', goals: [unsupported],
+          answerEssentials: [unsupported], misconceptions: [unsupported], supportingUnitIds: ['unit-sampling'],
+          basis: [{ id: 'application', goal: unsupported, operation: 'apply', answerRelation: 'conditional-application',
+            nodeIds: ['use-model'], claimRefs: [{ knowledgePointId: 'kp-sampling', claimId: 'original' }],
+            exampleRefs: [{ knowledgePointId: 'kp-sampling', exampleId: 'program' }] }] },
+        authoring: { nodes: [{ id: 'use-model', kind: 'mechanism', content: inventedExplanation,
+          knowledgePointIds: ['kp-sampling'], prerequisiteNodeIds: [], provenance: 'derived',
+          claimRefs: [{ knowledgePointId: 'kp-sampling', claimId: 'original' }], quoteDuties: [], exampleIds: ['program'] }],
+          examplePlans: [{ knowledgePointId: 'kp-sampling', mode: 'constructed', selectedExampleIds: ['program'],
+            rationale: '展示明确接口下的应用' }],
+          knowledge: [{ knowledgePointId: 'kp-sampling', authoring: {
+            claims: [{ id: 'original', kind: 'textbook', text: sourceText, sources: [] }],
+            examples: [{ id: 'program', kind: 'constructed', title: unsupported, purpose: unsupported,
+              facts: [], explanation: inventedExplanation, objectAndTask: '使用只读取表格的程序统计观测记录',
+              assumptions: ['该程序只接收数值表格'], actions: ['操作者按列名录入观测值，程序执行已给的统计规则'],
+              outcome: '程序输出统计结果', claimIds: ['original'], sources: [] }], exampleCoverage: [],
+          } }] } } };
+    const ai = vi.fn().mockResolvedValue(JSON.stringify([{ id: 'q1', type: 'short_answer',
+      question: '程序只接收数值表格。操作者为什么按列名整理观测值？', referenceAnswer: '满足该程序的输入接口',
+      analysis: '这一要求来自题干中明确的程序接口。', knowledgePointIds: ['kp-sampling'], points: 10 }]));
+    await generateSceneContent(quiz, ai);
+    const [system, prompt] = ai.mock.calls[0]!;
+    expect(prompt).not.toContain(unsupported);
+    expect(prompt).not.toContain(inventedExplanation);
+    expect(prompt).toContain('"operation":"apply"');
+    expect(prompt).toContain('"goalSource":"references"');
+    expect(prompt).toContain('"taughtNodes":');
+    expect(prompt).not.toContain('"bodyRef":');
+    expect(prompt).toContain(sourceText);
+    expect(prompt).toContain('该程序只接收数值表格');
+    expect(prompt).toContain('操作者按列名录入观测值');
+    expect(system).toContain('A basis requiredConditions list records planned premises, not proof');
+    expect(ai).toHaveBeenCalledOnce();
+  });
+
+  it('keeps the three existing playback phases in one natural-voice budget without fixed sentence quotas', async () => {
+    const quiz: SceneOutline = { ...outline, targetDurationSec: 22,
+      timingPlan: buildTtsTimingPlan({ targetDurationSec: 10, activityTargetDurationSec: 22,
+        studentActivitySec: 11, transitionSec: 1, pageKind: 'quiz', providerId: 'qwen-tts',
+        modelId: 'qwen-audio-3.0-tts-plus', voiceId: 'longanlingxin', language: 'zh-CN' }),
+      teachingBrief: { schemaVersion: 1, explanation: '实际解释', examples: [], conditions: [], evidence: [], assessmentFocus: '依据来源判断',
+        authoring: { nodes: [], knowledge: [], examplePlans: [] } } };
+    const phases = [{ type: 'text', phase: 'intro', content: '请独立作答。' },
+      { type: 'text', phase: 'review-guidance', content: '解析出现后核对理由，再确认理解。' },
+      { type: 'text', phase: 'handoff', content: '接着用这一认识解释抽样结果。' }];
+    const ai = vi.fn().mockResolvedValue(JSON.stringify({ questions: [{ id: 'q1', type: 'short_answer',
+      question: '为何要按随机规则选人？', referenceAnswer: '减少人为选择偏差',
+      analysis: '选择规则独立于便利程度。', knowledgePointIds: ['kp-sampling'], points: 10 }], phaseNarration: phases }));
+    const result = await generateSceneContent(quiz, ai, { singlePassQuiz: true });
+    expect(result && 'phaseNarration' in result ? result.phaseNarration : undefined).toEqual(phases);
+    expect(ai).toHaveBeenCalledOnce();
+    const [system, prompt] = ai.mock.calls[0]!;
+    expect(prompt).toContain('"narrationDurationSec":10');
+    expect(prompt).toContain('"reservedDurationSec":12');
+    expect(prompt).toContain('"voiceId":"longanlingxin"');
+    expect(prompt).toContain('"naturalSpeed":1');
+    expect(prompt).not.toContain('各约20%');
+    expect(prompt).not.toContain('衔接约60%');
+    expect(system).not.toContain('two concise, connected spoken sentences');
+    expect(system).not.toContain('two distinct spoken sentences');
+    expect(system).not.toContain('three distinct moves');
+    expect(system).toContain('without a fixed sentence count or paragraph ratio');
+  });
+
+  it.each(['page', 'directory'] as const)('bases the first answer design on %s premises instead of duplicate summaries', async (mode) => {
+    const falseSummary = '同一单元的生成摘要不能成为无条件定律';
+    const criterion = { id: 'criterion', goal: '依据指定接口判断输入能否处理', nodeIds: ['interface'],
+      claimRefs: [{ knowledgePointId: 'kp-sampling', claimId: 'conditional' }], requiredConditions: ['指定程序的接口只接收数值表格'],
+      answerRelation: 'conditional-application' as const };
+    const quiz: SceneOutline = { ...outline, description: falseSummary, keyPoints: [falseSummary],
+      teachingBrief: { schemaVersion: 1, explanation: falseSummary, examples: [], conditions: [falseSummary], evidence: [], assessmentFocus: falseSummary,
+        understandingCriteria: { goals: [criterion.goal], answerEssentials: [falseSummary], misconceptions: [falseSummary],
+          supportingUnitIds: ['unit-sampling'], basis: [criterion] },
+        authoring: { nodes: [{ id: 'interface', kind: 'mechanism', provenance: 'derived', prerequisiteNodeIds: [],
+          content: '在指定接口只接收数值表格的设定下，输入需符合表格格式。', knowledgePointIds: ['kp-sampling'],
+          claimRefs: criterion.claimRefs, quoteDuties: [] }], examplePlans: [],
+          knowledge: [{ knowledgePointId: 'kp-sampling', authoring: { claims: [{ id: 'conditional', kind: 'derived',
+            text: '该程序接收符合接口的数值表格。', logicalConditions: ['指定程序的接口只接收数值表格'], teachingScope: '本课的输入形式', sources: [] }],
+            examples: [], exampleCoverage: [] } }] } } };
+    const teachingAuthoringKnowledge = quiz.teachingBrief!.authoring!.knowledge.map((point) => ({
+      id: point.knowledgePointId, authoring: point.authoring,
+    }));
+    if (mode === 'directory') quiz.teachingBrief!.authoring!.knowledge = [];
+    const ai = vi.fn().mockResolvedValue(JSON.stringify([{ id: 'q1', type: 'short_answer',
+      question: '指定程序的接口只接收数值表格，为什么要把观测记录按该格式整理？', referenceAnswer: '使输入符合该接口',
+      commentPrompt: '根据题干给定的接口约束解释即可。', analysis: '必要性由这个程序的接口约束产生。', points: 10, knowledgePointIds: ['kp-sampling'] }]));
+    await generateSceneContent(quiz, ai, mode === 'directory' ? {
+      sourceKnowledgePoints: [{ id: 'kp-sampling', evidenceItemIds: [] }], teachingAuthoringKnowledge,
+    } : {});
+    const [system, prompt] = ai.mock.calls[0]!;
+    expect(prompt).not.toContain(falseSummary);
+    expect(prompt).not.toContain('answerEssentials');
+    expect(prompt).not.toContain('"misconceptions":');
+    expect(prompt).toContain('"requiredConditions":["指定程序的接口只接收数值表格"]');
+    expect(prompt).toContain('"logicalConditions":["指定程序的接口只接收数值表格"]');
+    expect(prompt).toContain('"claimId":"conditional"');
+    expect(prompt).toContain('"answerRelation":"conditional-application"');
+    expect(system).toContain('Insufficient evidence for a proposition does not prove its opposite universally');
+    expect(ai).toHaveBeenCalledOnce();
+  });
+
+  it('gives the first quiz call complete original conditions separately from a stronger upstream summary', async () => {
+    const passage = '简单而言，生成式人工智能的构建流程可分为预训练和迁移学习。微调一般仅需相对少量的新数据。';
+    const sourceEvidence: CourseEvidenceSnapshot = { schemaVersion: 2, version: 1, fingerprint: 'original',
+      createdAt: '2026-10-02', retrievalMode: 'hybrid', selections: [], mappings: [], warnings: [],
+      items: [{ id: 'evidence', kind: 'source-block', title: '构建流程', content: '检索摘要',
+        source: { textbookId: 'book', textbookTitle: '教材', revisionId: 'revision', revisionVersion: 1,
+          sectionPath: ['构建流程'], sourceBlockId: 'original-block', quote: passage } }] };
+    const stronger = '通用基础模型不能直接用于任何具体任务。';
+    const quiz: SceneOutline = { ...outline, description: stronger, keyPoints: [stronger],
+      teachingBrief: { schemaVersion: 1, explanation: stronger, examples: [], conditions: [], evidence: [], assessmentFocus: stronger,
+        authoring: { nodes: [], examplePlans: [], knowledge: [{ knowledgePointId: 'kp-sampling', authoring: {
+          claims: [{ id: 'summary', kind: 'derived', text: stronger, sources: [], conditions: '只针对所讲的微调流程情境' }],
+          examples: [], exampleCoverage: [],
+        } }] } } };
+    const ai = vi.fn().mockResolvedValue(JSON.stringify({ questions: [{ id: 'q1', type: 'short_answer',
+      question: '在所讲的构建流程中，为什么微调通常只需相对少量的新数据？', answer: ['复用预训练形成的能力'],
+      analysis: '已有能力可复用，因此一般只需针对任务适配。', knowledgePointIds: ['kp-sampling'], points: 10 }],
+      phaseNarration: [{ type: 'text', phase: 'intro', content: '来检验一下刚才的理解。' },
+        { type: 'text', phase: 'review-guidance', content: '请对照具体条件查看解析。' },
+        { type: 'text', phase: 'handoff', content: '带着这一认识继续学习。' }],
+    }));
+    await generateSceneContent(quiz, ai,
+      { sourceEvidence, sourceKnowledgePoints: [{ id: 'kp-sampling', evidenceItemIds: ['evidence'] }], singlePassQuiz: true });
+    const [system, prompt] = ai.mock.calls[0]!;
+    expect(prompt).toContain(passage);
+    expect(prompt).toContain('"kind":"derived"');
+    expect(prompt).not.toContain('只针对所讲的微调流程情境');
+    expect(quiz.teachingBrief!.authoring!.knowledge[0].authoring.claims[0].conditions).toBe('只针对所讲的微调流程情境');
+    expect(system).toContain('A common or recommended path cannot make an alternative universally wrong');
+    expect(ai).toHaveBeenCalledTimes(1);
+  });
+
+  it('carries a comparative answer basis and its full qualified source without an exclusive summary rule', async () => {
+    const passage = '在所述查询任务中，方法甲更适合查找局部记录，方法乙更适合汇总全部记录，两种方法可以配合使用。';
+    const unsupported = '推荐甲就说明乙不能完成这类任务';
+    const binding = { evidenceItemId: 'comparison-evidence', sourceBlockIds: ['comparison-block'],
+      textbookId: 'book', revisionId: 'revision', quote: passage };
+    const sourceEvidence: CourseEvidenceSnapshot = { schemaVersion: 2, version: 1, fingerprint: 'comparison-source',
+      createdAt: '2026-10-02', retrievalMode: 'hybrid', selections: [], mappings: [], warnings: [],
+      items: [{ id: binding.evidenceItemId, kind: 'source-block', title: '方法的侧重', content: '检索目录',
+        source: { textbookId: 'book', textbookTitle: '教材', revisionId: 'revision', revisionVersion: 1,
+          sectionPath: ['方法的侧重'], sourceBlockId: 'comparison-block', quote: passage } }] };
+    const basis = { id: 'comparison', goal: '根据给定目标比较方法的适用侧重', nodeIds: ['compare'],
+      claimRefs: [{ knowledgePointId: 'kp-choice', claimId: 'source' }], answerRelation: 'comparative-fit' as const };
+    const quiz: SceneOutline = { ...outline, description: unsupported, keyPoints: [unsupported],
+      knowledgePointIds: ['kp-choice'], assessmentUnitMap: [{ unitId: 'unit-choice', knowledgePointIds: ['kp-choice'] }],
+      quizConfig: { ...outline.quizConfig!, questionTypes: ['single'], minShortAnswerQuestions: 0, maxShortAnswerQuestions: 0 },
+      teachingBrief: { schemaVersion: 1, explanation: unsupported, examples: [], conditions: [], evidence: [], assessmentFocus: unsupported,
+        understandingCriteria: { goals: [basis.goal], answerEssentials: [unsupported], misconceptions: [unsupported],
+          supportingUnitIds: ['unit-choice'], basis: [basis] },
+        authoring: { nodes: [{ id: 'compare', kind: 'relation', content: '比较时先辨认要查局部记录还是汇总全部记录，再选择更贴合目标的方法。',
+          prerequisiteNodeIds: [], knowledgePointIds: ['kp-choice'], provenance: 'derived', claimRefs: basis.claimRefs, quoteDuties: [] }],
+          examplePlans: [], knowledge: [{ knowledgePointId: 'kp-choice', authoring: { claims: [{ id: 'source', kind: 'textbook',
+            text: passage, sources: [binding] }], examples: [], exampleCoverage: [] } }] } } };
+    const ai = vi.fn().mockResolvedValue(JSON.stringify([{ id: 'q1', type: 'single',
+      question: '需要查找限定范围内的记录，按所述方法侧重，哪种选择更贴合这一目标？',
+      options: [{ label: '方法甲', value: 'A' }, { label: '方法乙', value: 'B' }], answer: ['A'],
+      analysis: '按给定比较，甲更贴合局部查找目标；乙还可配合承担汇总，不据此排除乙在其他条件下的应用。',
+      knowledgePointIds: ['kp-choice'], points: 10 }]));
+    const result = await generateSceneContent(quiz, ai, { sourceEvidence });
+    const [system, prompt] = ai.mock.calls[0]!;
+    expect(prompt).toContain('"answerRelation":"comparative-fit"');
+    expect(prompt).toContain(passage);
+    expect(prompt).not.toContain(unsupported);
+    expect(system).toContain('a relatively better fit does not mean other methods cannot work');
+    expect(result && 'questions' in result ? result.questions[0].answer : null).toEqual(['A']);
+    expect(ai).toHaveBeenCalledOnce();
+  });
+
   it('distinguishes a selection stem about reasons from an added written response', () => {
     expect(objectiveQuestionRequiresWrittenExplanation(
       '请从下列选项中选择最能说明这种现象原因的一项。',

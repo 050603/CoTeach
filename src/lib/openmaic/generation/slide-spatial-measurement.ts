@@ -1,10 +1,12 @@
 /** Server-only, pre-authoring measurements; never measures generated slides to request repairs. */
-import { access, readFile } from 'node:fs/promises';
+import { readFile } from 'node:fs/promises';
 import path from 'node:path';
-import { chromium, type Browser, type Page } from 'playwright-core';
+import type { Browser, Page } from 'playwright-core';
+import { launchSlideBrowser } from './slide-browser';
 import type { SlideTeachingRegion } from './slide-spatial-types';
 import { SLIDE_RENDERER_STYLES } from '../../../../packages/@openmaic/renderer/src/styles';
 import type { TextMeasure, TextMeasureInput, TextMeasureResult } from '../../../../packages/@openmaic/generation/src/text-layout-compiler';
+import { measureBrowserTextInk } from '../../course-quality-review/browser-text-ink';
 
 export const SPATIAL_FONT = 'Noto Sans SC';
 export const SPATIAL_PADDING = 10;
@@ -51,35 +53,9 @@ async function assetCss(cssPath: string, prefix: string): Promise<string> {
   return css.replace(/url\(['"]?(\.?\.?\/[^)'"\s]+)['"]?\)/g, (_match, file: string) => `url('https://spatial.local/${prefix}/${path.basename(file)}')`);
 }
 
-async function executableExists(executablePath: string): Promise<boolean> {
-  try { await access(executablePath); return true; }
-  catch { return false; }
-}
-
-async function launchChromium(): Promise<Browser> {
-  const configured = process.env.OPENPBL_CHROMIUM_EXECUTABLE_PATH?.trim();
-  const candidates: Array<string | undefined> = [configured || undefined, undefined];
-  for (const systemPath of ['/usr/bin/chromium', '/usr/bin/chromium-browser', '/snap/bin/chromium', '/usr/bin/google-chrome']) {
-    if (await executableExists(systemPath)) candidates.push(systemPath);
-  }
-  const attempted = new Set<string>();
-  let lastError: unknown;
-  for (const executablePath of candidates) {
-    const key = executablePath ?? 'playwright-default';
-    if (attempted.has(key)) continue;
-    attempted.add(key);
-    try {
-      return await chromium.launch({ headless: true, ...(executablePath ? { executablePath } : {}) });
-    } catch (error) {
-      lastError = error;
-    }
-  }
-  throw lastError ?? new Error('No Chromium executable is available');
-}
-
 async function getPage(): Promise<Page> {
   if (page && browser?.isConnected()) return page;
-  browser = await launchChromium();
+  browser = await launchSlideBrowser();
   page = await browser.newPage({ viewport: { width: 1000, height: 563 } });
   const [fontCss, katexCss] = await Promise.all([
     Promise.all([400, 700].map((weight) => assetCss(path.join(process.cwd(), `node_modules/@fontsource/noto-sans-sc/${weight}.css`), 'noto'))).then((styles) => styles.join('\n')),
@@ -241,7 +217,8 @@ export const measureAuthoredSlideText: TextMeasure = async (input: TextMeasureIn
   const key = JSON.stringify(input);
   const cached = authoredTextCache.get(key);
   if (cached) return cached;
-  const measured = await serialized(async (target) => target.evaluate(async (spec) => {
+  const measured = await serialized(async (target) => {
+    const layout = await target.evaluate(async (spec) => {
     const node = document.getElementById('measure')!;
     node.className = spec.tableCell ? 'slide-renderer-prose slide-renderer-cell-text' : 'slide-renderer-prose';
     node.style.cssText = '';
@@ -314,7 +291,19 @@ export const measureAuthoredSlideText: TextMeasure = async (input: TextMeasureIn
     }
     const lines = rows.sort((a, b) => a.top - b.top).map((row) => row.text.trim()).filter(Boolean);
     return { naturalWidth, height: Math.ceil(box.height), lines, inkBottom, inkRight };
-  }, input));
+    }, input);
+    // Capacity and component-placement requests need only DOM layout. Native
+    // authored foregrounds opt in through their existing rich-text contract.
+    if (!input.preserveRichText) return layout;
+    const glyphs = await target.evaluate(measureBrowserTextInk, { selector: '#measure' });
+    if (!glyphs.exact) return layout;
+    const origin = await target.locator('#measure').boundingBox();
+    if (!origin) return layout;
+    const inkRects = glyphs.rects.map((rect) => ({ ...rect, left: rect.left - origin.x, top: rect.top - origin.y }));
+    return { ...layout, inkRects,
+      inkBottom: Math.max(0, ...inkRects.map((rect) => rect.top + rect.height)),
+      inkRight: Math.max(0, ...inkRects.map((rect) => rect.left + rect.width)) };
+  });
   authoredTextCache.set(key, measured);
   return measured;
 };

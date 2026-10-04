@@ -4,6 +4,7 @@ import { TEACHING_ENHANCEMENT_VERSION } from './teaching-enhancement';
 import { deriveTeachingConstraints } from '@openmaic/lib/pedagogy/teaching-constraints';
 import { findSectionSourceContentIssues, findSourceContentIssues } from '@/lib/course-generation/source-content-acceptance';
 import type { FigureSequenceContract } from '@/lib/textbook/course-visual-binding';
+import { buildTtsTimingPlan } from '@/lib/openmaic/audio/tts-timing';
 import {
   buildTeachingNarrationSemantics,
   canUseIndependentTeachingNarration,
@@ -80,6 +81,44 @@ function raw(text = '先看看学校简介。它有没有写出这个年份？',
   }] };
 }
 
+function caseAuthoring(): NonNullable<NonNullable<SceneOutline['teachingBrief']>['authoring']> {
+  const sources = [{ evidenceItemId: 'book-story', sourceBlockIds: ['story-a', 'story-b'],
+    textbookId: 'learning-book', revisionId: 'learning-v1' }];
+  return {
+    nodes: [
+      { id: 'fish-node', kind: 'example', content: '小鱼把青蛙说的牛理解成带鱼尾的大鱼，说明已有形象参与了理解。',
+        knowledgePointIds: ['construction'], prerequisiteNodeIds: [], provenance: 'course-source',
+        sourceBindings: sources, exampleIds: ['fish-story'] },
+      { id: 'map-node', kind: 'example', content: '比较两张已采用的地图，说明原有认识怎样影响对新信息的解释。',
+        knowledgePointIds: ['construction'], prerequisiteNodeIds: [], provenance: 'course-source',
+        sourceBindings: sources, exampleIds: ['map-story'] },
+      { id: 'advice-node', kind: 'condition', content: '学生难以想象新信息时，可以先用熟悉形象帮助解释。',
+        knowledgePointIds: ['construction'], prerequisiteNodeIds: [], provenance: 'derived' },
+    ],
+    examplePlans: [{ knowledgePointId: 'construction', mode: 'textbook',
+      selectedExampleIds: ['fish-story', 'map-story'], rationale: '两个教材案例说明不同的理解困难。' }],
+    knowledge: [{ knowledgePointId: 'construction', authoring: {
+      claims: [
+        { id: 'supported', kind: 'textbook', text: '已有认识会参与对新信息的理解。', sources },
+        { id: 'advice', kind: 'derived', text: '可以先用熟悉形象帮助解释。', sources,
+          conditions: '学生难以想象新信息时' },
+      ],
+      examples: [
+        { id: 'fish-story', kind: 'textbook', title: '小鱼、青蛙和牛',
+          purpose: '观察已有形象怎样参与理解', facts: ['青蛙向小鱼描述牛。', '小鱼想象的牛保留了鱼的形象。'],
+          explanation: '已有经验影响了小鱼的想象。', form: 'everyday',
+          limitations: '教材没有描述小鱼随后修正认识的结局。', sources },
+        { id: 'map-story', kind: 'textbook', title: '比较地图', purpose: '解释相同信息的不同理解',
+          facts: ['教材给出两张已采用的地图。'], explanation: '联系原有认识说明差异。', sources },
+        { id: 'unused-domain', kind: 'constructed', title: 'AI课堂应用', purpose: '补充领域迁移',
+          facts: ['学生设计AI课堂活动。'], explanation: '领域示例仅为未采用候选。', form: 'domain', sources: [] },
+      ],
+      exampleCoverage: [{ textbookId: 'learning-book', revisionId: 'learning-v1', status: 'complete',
+        evidenceItemIds: ['book-story'] }],
+    } }],
+  };
+}
+
 function expectAuthoredTextSegments(
   generated: Awaited<ReturnType<typeof generateTeachingNarration>> | Awaited<ReturnType<typeof generateTeachingSectionNarration>>,
   authored: { pages?: Array<{ segments: Array<{ text?: string }> }>; segments?: Array<{ text?: string }> },
@@ -92,6 +131,412 @@ function expectAuthoredTextSegments(
 }
 
 describe('independent first-pass teaching narration', () => {
+  it.each([
+    { mode: 'page', contract: 'local' }, { mode: 'section', contract: 'local' },
+    { mode: 'page', contract: 'canonical' }, { mode: 'section', contract: 'canonical' },
+    { mode: 'page', contract: 'legacy' }, { mode: 'section', contract: 'legacy' },
+  ] as const)('keeps continuity factual for the $mode call with a $contract catalog', async ({ mode, contract }) => {
+    const authoring = caseAuthoring();
+    authoring.nodes = [{ ...authoring.nodes[2], quoteDuties: [] }];
+    const canonical = authoring.knowledge.map((point) => ({ id: point.knowledgePointId,
+      authoring: { ...point.authoring, readingContract: 'source-blocks-v1' as const } }));
+    if (contract === 'local') authoring.knowledge[0].authoring.readingContract = 'source-blocks-v1';
+    const summary = '旧摘要不得作为确定结论';
+    const takeaway = '旧承接概括不得作为确定结论';
+    const quizFocus = '旧检测概括不得作为确定结论';
+    const objective = '旧目标投影不得作为确定结论';
+    const actualNarration = '前节实际已经讲出的具体认识';
+    const page: SceneOutline = { ...outline(), order: 2, stageKey: 'ai-learning',
+      generationPurpose: 'knowledge-teaching', lectureSectionId: 'current', knowledgePointIds: ['construction'],
+      teachingObjective: objective, description: objective, keyPoints: [], teachingBrief: { ...outline().teachingBrief!, authoring,
+        understandingCriteria: { goals: [], answerEssentials: [], misconceptions: [], supportingUnitIds: [],
+          goalSource: 'references', basis: [] } } };
+    const prior: SceneOutline = { ...outline(), id: 'earlier-page', order: 0, stageKey: 'ai-learning',
+      generationPurpose: 'knowledge-teaching', lectureSectionId: 'earlier', description: summary, keyPoints: [],
+      teachingBrief: { ...outline().teachingBrief!,
+        teachingPlan: { ...outline().teachingBrief!.teachingPlan!, takeaway } } };
+    const quiz: SceneOutline = { ...prior, id: 'earlier-quiz', order: 1, type: 'quiz',
+      teachingBrief: { ...prior.teachingBrief!, assessmentFocus: quizFocus,
+        understandingCriteria: { goals: [quizFocus], answerEssentials: [], misconceptions: [], supportingUnitIds: [] } } };
+    const sources = contract === 'canonical' ? { teachingAuthoringKnowledge: canonical } : {};
+    const response = raw('依据当前给定的条件解释新关系。');
+    const aiCall = vi.fn().mockResolvedValue(JSON.stringify(mode === 'section'
+      ? { pages: [{ pageId: page.id, ...response }] } : response));
+    if (mode === 'section') await generateTeachingSectionNarration({ sectionId: 'current',
+      pages: [{ outline: page, content: content() }], courseProgression: [prior, quiz, page],
+      previousSectionActualNarration: [actualNarration], requirements: { requirement: '连接已经讲清的事实' },
+      ...sources, aiCall });
+    else await generateTeachingNarration({ outline: page, requirements: { requirement: '连接已经讲清的事实' },
+      outlineContext: { pageIndex: 2, totalPages: 3, allTitles: ['前节', '检测', page.title], previousSpeeches: [],
+        previousPageSummary: summary, currentTeachingObjective: objective,
+        previousSectionTakeaways: [takeaway], previousSectionQuizFocus: [quizFocus],
+        previousSectionActualNarration: [actualNarration], endingDisposition: 'continues' }, ...sources, aiCall });
+    const wire = aiCall.mock.calls[0][1];
+    for (const compatibilityText of [summary, takeaway, quizFocus, objective]) {
+      if (contract === 'legacy' && (mode === 'page' || compatibilityText !== summary)) expect(wire).toContain(compatibilityText);
+      else expect(wire).not.toContain(compatibilityText);
+    }
+    expect(wire).toContain(actualNarration);
+    expect(aiCall).toHaveBeenCalledOnce();
+  });
+
+  it.each(['page', 'section'] as const)('passes bound contributions and entry premises through the actual %s authoring request', async (mode) => {
+    const authoring = caseAuthoring();
+    authoring.nodes = [{ ...authoring.nodes[2], quoteDuties: [],
+      claimRefs: [{ knowledgePointId: 'construction', claimId: 'advice' }] }];
+    authoring.examplePlans = [];
+    authoring.knowledge[0].authoring.readingContract = 'source-blocks-v1';
+    for (const claim of authoring.knowledge[0].authoring.claims) claim.teachingScope = '不应供稿的生成范围释义';
+    authoring.nodes[0].contentContributions = [{ partId: 'reason', start: 0, end: authoring.nodes[0].content.length,
+      contribution: { kind: 'reasoning', claimRefs: authoring.nodes[0].claimRefs! } }];
+    const entryPoint = { kind: 'direct-explanation' as const, object: '当前给定的理解困难',
+      bridge: '依据已经给定的情境解释提供帮助的作用',
+      basis: { claimRefs: authoring.nodes[0].claimRefs! } };
+    const page = { ...outline(), teachingBrief: { ...outline().teachingBrief!, authoring,
+      teachingPlan: { ...outline().teachingBrief!.teachingPlan!, entryPoint } } };
+    const response = raw('在给定的理解困难下，熟悉形象可以提供一个解释起点。');
+    const aiCall = vi.fn().mockResolvedValue(JSON.stringify(mode === 'section'
+      ? { pages: [{ pageId: page.id, ...response }] } : response));
+    if (mode === 'section') await generateTeachingSectionNarration({ sectionId: 'section',
+      pages: [{ outline: page, content: content() }], requirements: { requirement: '讲清当前真实关系' }, aiCall });
+    else await generateTeachingNarration({ outline: page, requirements: { requirement: '讲清当前真实关系' }, aiCall });
+    const request = JSON.parse(aiCall.mock.calls[0][1]);
+    const node = request.teachingAuthoring.explanationNodes[0];
+    expect(node.contentContributions).toEqual(authoring.nodes[0].contentContributions);
+    expect(request.teachingAuthoring.texts[node.bodyRef]).toBe(authoring.nodes[0].content);
+    expect(JSON.stringify(request).split(authoring.nodes[0].content)).toHaveLength(2);
+    expect(aiCall.mock.calls[0][1]).not.toContain('不应供稿的生成范围释义');
+    const plan = mode === 'section' ? request.pages[0].teachingPlan : request.page.teachingPlan;
+    expect(plan.entryPoint).toEqual(entryPoint);
+    expect(aiCall).toHaveBeenCalledOnce();
+  });
+
+  it.each(['page', 'section'] as const)('keeps a reference-mode ability out of the %s lecture body and retains the owned explanation', async (mode) => {
+    const compatibilityConclusion = '生成的旧目标：只有出现这项条件才可能理解';
+    const authoring = caseAuthoring();
+    authoring.nodes = [{ ...authoring.nodes[2], quoteDuties: [],
+      claimRefs: [{ knowledgePointId: 'construction', claimId: 'advice' }] }];
+    authoring.examplePlans = [];
+    const page: SceneOutline = { ...outline(), teachingObjective: compatibilityConclusion,
+      teachingBrief: { ...outline().teachingBrief!, authoring,
+        understandingCriteria: { goalSource: 'references', goals: [compatibilityConclusion],
+          answerEssentials: [compatibilityConclusion], misconceptions: [], supportingUnitIds: ['unit-a'],
+          basis: [{ id: 'advice-application', goal: compatibilityConclusion, operation: 'apply',
+            claimRefs: [{ knowledgePointId: 'construction', claimId: 'advice' }], nodeIds: ['advice-node'] }] } } };
+    const response = raw('在给定的理解困难下，熟悉形象可以提供一个解释起点。');
+    const aiCall = vi.fn().mockResolvedValue(JSON.stringify(mode === 'section'
+      ? { pages: [{ pageId: page.id, ...response }] } : response));
+    if (mode === 'section') await generateTeachingSectionNarration({ sectionId: 'section',
+      pages: [{ outline: page, content: content() }], requirements: { requirement: '说明案例理解过程' }, aiCall });
+    else await generateTeachingNarration({ outline: page,
+      requirements: { requirement: '说明案例理解过程' }, aiCall });
+    const request = JSON.parse(aiCall.mock.calls[0][1]);
+    expect(aiCall.mock.calls[0][1]).not.toContain(compatibilityConclusion);
+    expect(request.understandingCriteria).toMatchObject({ goalSource: 'references',
+      basis: [{ operation: 'apply', claimRefs: [{ knowledgePointId: 'construction', claimId: 'advice' }] }] });
+    expect(request.understandingCriteria).not.toHaveProperty('goals');
+    const node = request.teachingAuthoring.explanationNodes[0];
+    expect(request.teachingAuthoring.texts[node.bodyRef]).toBe(authoring.nodes[0].content);
+    expect(request.sourceAuthoringDuties).toEqual([]);
+    expect(aiCall).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    { mode: 'section', directory: false }, { mode: 'page', directory: false },
+    { mode: 'section', directory: true }, { mode: 'page', directory: true },
+  ] as const)('gives the first $mode call one body and conditional references (directory=$directory)', async ({ mode, directory }) => {
+    const authoring = caseAuthoring();
+    authoring.nodes = [{ ...authoring.nodes[2], id: 'one-body', content: '仅在学生缺乏相关形象时，以熟悉对象作为理解新信息的起点。',
+      claimRefs: [{ knowledgePointId: 'construction', claimId: 'advice' }], quoteDuties: [] }];
+    authoring.knowledge[0].authoring.claims[1].logicalConditions = ['学生缺乏相关形象'];
+    authoring.knowledge[0].authoring.claims[1].teachingScope = '本节的理解框架';
+    const text = authoring.nodes[0].content;
+    const page: SceneOutline = { ...outline(), targetDurationSec: 80,
+      timingPlan: buildTtsTimingPlan({ targetDurationSec: 76, activityTargetDurationSec: 80, transitionSec: 4,
+        providerId: 'qwen-tts', modelId: 'qwen-audio-3.0-tts-plus', voiceId: 'longanlingxin', language: 'zh-CN', pageKind: 'slide' }),
+      teachingBrief: { ...outline().teachingBrief!, explanation: text, authoring,
+        teachingPlan: { ...outline().teachingBrief!.teachingPlan!, newContent: text, reasoningSteps: [text], narrationFocus: [text], introduces: ['one-body'] } } };
+    const response = { segments: [{ text: '在这种前提下，以熟悉对象帮助形成具体认识。', semanticIds: ['page-a:teaching'] }] };
+    const teachingAuthoringKnowledge = authoring.knowledge.map((point) => ({ id: point.knowledgePointId, authoring: point.authoring }));
+    if (directory) authoring.knowledge = [];
+    const sources = directory ? { sourceKnowledgePoints: [{ id: 'construction', evidenceItemIds: [] }], teachingAuthoringKnowledge } : {};
+    const aiCall = vi.fn().mockResolvedValue(JSON.stringify(mode === 'section' ? { pages: [{ pageId: page.id, ...response }] } : response));
+    if (mode === 'section') await generateTeachingSectionNarration({ sectionId: 's', pages: [{ outline: page, content: content() }],
+      requirements: { requirement: '解释理解的前提' }, ...sources, aiCall });
+    else await generateTeachingNarration({ outline: page, requirements: { requirement: '解释理解的前提' }, ...sources, aiCall });
+    const wire = JSON.parse(aiCall.mock.calls[0][1]);
+    expect(aiCall.mock.calls[0][1].split(text)).toHaveLength(2);
+    const pageInput = mode === 'section' ? wire.pages[0] : wire.page;
+    expect(pageInput.teachingPlan).not.toHaveProperty('newContent');
+    expect(pageInput.teachingPlan).not.toHaveProperty('reasoningSteps');
+    expect(pageInput.teachingPlan).not.toHaveProperty('narrationFocus');
+    expect(pageInput.authoring.nodeDuties).toEqual([{ nodeId: 'one-body', nodeRef: 'node-1', role: 'introduce' }]);
+    expect(wire.teachingAuthoring.statements[0]).toMatchObject({ claimId: 'advice', kind: 'derived',
+      logicalConditions: ['学生缺乏相关形象'], teachingScope: '本节的理解框架' });
+    expect(wire.speechBudget).toMatchObject({ naturalSpeed: 1, narrationDurationSec: 76, reservedDurationSec: 4, quoteExpansionIncluded: true });
+    expect(wire.speechBudget.pageHints).toHaveLength(1);
+    expect(wire.understandingCriteria).not.toHaveProperty('answerEssentials');
+    expect(aiCall).toHaveBeenCalledOnce();
+  });
+
+  it('uses explicit first-owner quote duties and keeps ordinary source definitions as context', async () => {
+    const definition = '输入表示，是指将待处理信息组织为约定形式。';
+    const ordinaryDefinition = '输出表示，是指将处理结果组织为约定形式。';
+    const passage = definition + ordinaryDefinition;
+    const binding = { evidenceItemId: 'io-source', sourceBlockIds: ['io-block'], quote: definition,
+      textbookId: 'io-book', revisionId: 'io-v1' };
+    const authoring = caseAuthoring();
+    authoring.knowledge = [];
+    authoring.examplePlans = [];
+    authoring.nodes = [{ id: 'input-definition', kind: 'concept', provenance: 'derived', knowledgePointIds: ['io'],
+      content: '理解输入形式与处理接口的关系。', prerequisiteNodeIds: [], quoteDuties: [{ source: binding }] }];
+    const first: SceneOutline = { ...outline(), knowledgePointIds: ['io'], teachingBrief: { ...outline().teachingBrief!, authoring,
+      evidence: [{ sourceId: 'io-source', quote: ordinaryDefinition }] } };
+    const second = structuredClone(first);
+    second.id = 'page-b';
+    second.order = 1;
+    const aiCall = vi.fn().mockResolvedValue(JSON.stringify({ pages: [first, second].map((page) => ({ pageId: page.id,
+      segments: [{ text: '接口规定了所接收的信息形式。', semanticIds: [`${page.id}:teaching`] }] })) }));
+    await generateTeachingSectionNarration({ sectionId: 'io', pages: [first, second].map((page) => ({ outline: page, content: content() })),
+      requirements: { requirement: '讲输入接口' }, sourceKnowledgePoints: [{ id: 'io', evidenceItemIds: ['io-source'] }],
+      sourceEvidence: { schemaVersion: 2, version: 1, fingerprint: 'io', createdAt: '2026-10-02', retrievalMode: 'hybrid',
+        selections: [], mappings: [], warnings: [], items: [{ id: 'io-source', kind: 'source-block', title: '输入输出', content: passage,
+          source: { textbookId: 'io-book', textbookTitle: '接口', revisionId: 'io-v1', revisionVersion: 1,
+            sourceBlockId: 'io-block', sectionPath: ['接口'], quote: passage } }] }, aiCall });
+    const prompt = readNarrationPrompt(aiCall.mock.calls[0][1]);
+    expect(prompt.sourceAuthoringDuties).toHaveLength(1);
+    expect(prompt.sourceAuthoringDuties[0]).toMatchObject({ text: definition, availableReferences: [{ pageId: first.id }] });
+    expect(prompt.pages[1].originalTeachingSources.authoritativeAnchors).toContainEqual(expect.objectContaining({ text: ordinaryDefinition }));
+    // Quote ownership remains finite, while the JSON example no longer
+    // prescribes a quotation-only opening followed by a separate unpacking.
+    expect(prompt.requiredOutputShape.pages[0].segments[0]).not.toHaveProperty('textParts');
+    expect(prompt.requiredOutputShape.pages[0].segments[0]).toHaveProperty('text');
+    expect(prompt.requiredOutputShape.pages[1].segments[0]).not.toHaveProperty('textParts');
+    expect(prompt.requiredOutputShape.pages[1].segments[0]).toHaveProperty('text');
+    expect(aiCall).toHaveBeenCalledOnce();
+  });
+
+  it.each(['section', 'page'] as const)('passes both textbook cases and their local reasoning to first %s narration without promoting planning advice', async (mode) => {
+    const authoring = caseAuthoring();
+    authoring.knowledge[0].authoring.examples[0].purpose = '只有这个帮助才能得到结果的上游概括';
+    authoring.knowledge[0].authoring.examples[0].title = '上游预设必要条件的标题';
+    const page: SceneOutline = { ...outline(), knowledgePointIds: ['construction'],
+      teachingBrief: { ...outline().teachingBrief!, authoring, examples: ['旧版领域示例'], reviewItems: [
+        { id: 'pending', kind: 'unverified-claim', provenance: 'unverified', content: '未经核实的成效', teachingPurpose: '待查' },
+      ] } };
+    const speech = '青蛙描述了牛，小鱼却想象出带鱼尾的形象。这个差别帮助我们理解已有认识怎样参与新信息的解释。';
+    const response = { segments: [{ text: speech, semanticIds: ['page-a:teaching'] }] };
+    const aiCall = vi.fn().mockResolvedValue(JSON.stringify(mode === 'section'
+      ? { pages: [{ pageId: page.id, ...response }] } : response));
+    const generated = mode === 'section'
+      ? await generateTeachingSectionNarration({ sectionId: 'construction', pages: [{ outline: page, content: content() }],
+        requirements: { requirement: '用教材案例解释理解过程' }, aiCall })
+      : await generateTeachingNarration({ outline: page, requirements: { requirement: '用教材案例解释理解过程' }, aiCall });
+    const prompt = readNarrationPrompt(aiCall.mock.calls[0][1]);
+    const pageContext = mode === 'section' ? prompt.pages[0] : prompt.page;
+    const adoptedCases = mode === 'section' ? pageContext.requiredCaseApplications : prompt.requiredCaseApplications;
+    expect(adoptedCases.map((item: { id: string }) => item.id)).toEqual(['construction:fish-story', 'construction:map-story']);
+    expect(adoptedCases[0]).toMatchObject({ caseRef: 'construction:fish-story', nodeIds: ['fish-node'] });
+    const candidate = prompt.teachingAuthoring.cases[0];
+    expect(candidate).not.toHaveProperty('title');
+    expect(candidate).not.toHaveProperty('purpose');
+    expect(JSON.stringify(prompt)).not.toContain(authoring.knowledge[0].authoring.examples[0].purpose);
+    expect(JSON.stringify(prompt)).not.toContain(authoring.knowledge[0].authoring.examples[0].title);
+    expect(candidate).toMatchObject({ kind: 'textbook', form: 'everyday',
+      sources: authoring.knowledge[0].authoring.examples[0].sources,
+      limitations: '教材没有描述小鱼随后修正认识的结局。' });
+    expect(candidate.factsRefs.map((ref: string) => prompt.teachingAuthoring.texts[ref])).toEqual(authoring.knowledge[0].authoring.examples[0].facts);
+    expect(prompt.teachingAuthoring.texts[prompt.teachingAuthoring.explanationNodes[0].bodyRef]).toBe(authoring.nodes[0].content);
+    expect(prompt.teachingAuthoring.explanationNodes[2]).not.toHaveProperty('sourceBindings');
+    expect(prompt.teachingAuthoring.statements[1]).toMatchObject({ kind: 'derived' });
+    expect(prompt.teachingAuthoring.statements[1]).not.toHaveProperty('conditions');
+    expect(authoring.knowledge[0].authoring.claims[1].conditions).toBe('学生难以想象新信息时');
+    expect(pageContext.authoring).not.toHaveProperty('nodes');
+    expect(mode === 'section' ? pageContext.examples : prompt.examples).toBeUndefined();
+    expect(pageContext.stableTeachingMaterials).toBeUndefined();
+    if (mode === 'section') {
+      expect(JSON.stringify(prompt.requiredOutputShape)).not.toContain(authoring.knowledge[0].authoring.examples[0].facts[0]);
+      expect(prompt.requiredOutputShape.pages[0].segments).toHaveLength(1);
+    }
+    const system = aiCall.mock.calls[0][0];
+    expect(system).toContain('keyInfo, summaries, teachingPlan boundaries and blueprint conclusions are not independent factual sources');
+    expect(system).toContain('A citation elsewhere in a unit does not verify every claim');
+    expect(system).not.toContain('design is the authority for knowledge');
+    expect(system).not.toContain('explanation responsibility and source of knowledge');
+    expect(system).toContain('The original passages and any derived claim conditions take precedence');
+    expect(system).toContain('Teach adopted knowledge, reasoning, and cases directly');
+    expect(system).toContain('“教材指出”“教材中提到”“书中说”“根据提供的资料”');
+    expect(system).toContain('sourceRefs, sourceBindings, or textParts.sourceRef, outside spoken text');
+    expect(system).toContain("comparing named authors' views, analyzing original wording, or explaining a particular standard's scope");
+    expect(system).toContain('Do not turn an attributed view or a scoped rule into a universal conclusion');
+    expectAuthoredTextSegments(generated, mode === 'section' ? { pages: [response] } : response);
+    expect(aiCall).toHaveBeenCalledOnce();
+  });
+
+  it('assigns one telling to a shared textbook story while preserving different applications and distinct cases', async () => {
+    const firstAuthoring = caseAuthoring();
+    firstAuthoring.nodes = [firstAuthoring.nodes[0]];
+    const secondAuthoring = caseAuthoring();
+    const newPoint = 'assimilation';
+    secondAuthoring.knowledge[0].knowledgePointId = newPoint;
+    secondAuthoring.knowledge[0].authoring.examples[0].id = 'shared-story-other-point';
+    secondAuthoring.knowledge[0].authoring.examples[0].purpose = '分析原有认识参与解释新信息的方式';
+    secondAuthoring.examplePlans[0] = { ...secondAuthoring.examplePlans[0], knowledgePointId: newPoint,
+      selectedExampleIds: ['shared-story-other-point', 'map-story'] };
+    secondAuthoring.nodes = secondAuthoring.nodes.slice(0, 2).map((node, index) => ({ ...node,
+      id: `application-${index + 1}`, knowledgePointIds: [newPoint],
+      ...(index === 0 ? { exampleIds: ['shared-story-other-point'], content: '进一步解释原有鱼的形象怎样用于理解新信息。' } : {}),
+    }));
+    const thirdAuthoring = caseAuthoring();
+    thirdAuthoring.nodes = [thirdAuthoring.nodes[0]];
+    thirdAuthoring.knowledge[0].authoring.examples[0].sources = thirdAuthoring.knowledge[0].authoring.examples[0].sources
+      .map((source) => ({ ...source, revisionId: 'another-version' }));
+    const pages = [firstAuthoring, secondAuthoring, thirdAuthoring].map((authoring, index) => ({
+      outline: { ...outline(), id: `story-page-${index + 1}`, order: index,
+        teachingBrief: { ...outline().teachingBrief!, authoring } }, content: content(),
+    }));
+    const aiCall = vi.fn().mockResolvedValue(JSON.stringify({ pages: pages.map(({ outline: page }) => ({
+      pageId: page.id, segments: [{ text: '解释本页新关系。', semanticIds: [`${page.id}:teaching`] }],
+    })) }));
+    await generateTeachingSectionNarration({ sectionId: 'shared-story', pages,
+      requirements: { requirement: '连续解释故事的不同作用' }, aiCall });
+    const prompt = readNarrationPrompt(aiCall.mock.calls[0][1]);
+    const [first, second, third] = prompt.pages.map((page: { requiredCaseApplications: unknown[] }) => page.requiredCaseApplications);
+    expect(first).toHaveLength(1);
+    expect(first[0]).toMatchObject({ storyDelivery: 'introduce' });
+    expect(second).toHaveLength(2);
+    expect(second[0]).toMatchObject({ storyDelivery: 'apply-established',
+      introducedAt: { pageId: 'story-page-1', applicationId: 'construction:fish-story' },
+      caseRef: 'assimilation:shared-story-other-point', nodeIds: ['application-1'] });
+    const reused = prompt.teachingAuthoring.cases.find((item: { caseRef: string }) => item.caseRef === second[0].caseRef);
+    expect(reused).not.toHaveProperty('purpose');
+    expect(reused.factsRefs.map((ref: string) => prompt.teachingAuthoring.texts[ref]))
+      .toEqual(secondAuthoring.knowledge[0].authoring.examples[0].facts);
+    expect(prompt.teachingAuthoring.texts[prompt.teachingAuthoring.explanationNodes.find((node: { id: string }) => node.id === 'application-1').bodyRef])
+      .toBe('进一步解释原有鱼的形象怎样用于理解新信息。');
+    // A different story in the same paragraph is a new telling, as is a
+    // separately adopted version. Neither is silently removed as repetition.
+    expect(second[1]).toMatchObject({ storyDelivery: 'introduce', caseRef: 'assimilation:map-story' });
+    expect(third[0]).toMatchObject({ storyDelivery: 'introduce' });
+    expect(pages[1].outline.teachingBrief?.authoring).toEqual(secondAuthoring);
+    expect(aiCall).toHaveBeenCalledOnce();
+  });
+
+  it('keeps a constructed candidate’s facts on split pages and does not infer reuse from an unrelated candidate', async () => {
+    const authoring = caseAuthoring();
+    authoring.nodes = [authoring.nodes[0]];
+    authoring.knowledge[0].authoring.examples[0].kind = 'constructed';
+    authoring.knowledge[0].authoring.examples[0].sources = [];
+    const otherAuthoring = structuredClone(authoring);
+    otherAuthoring.knowledge[0].authoring.examples[0].id = 'other-scenario';
+    otherAuthoring.examplePlans[0].selectedExampleIds = ['other-scenario'];
+    otherAuthoring.nodes[0].exampleIds = ['other-scenario'];
+    const pages = [authoring, authoring, otherAuthoring].map((value, index) => ({
+      outline: { ...outline(), id: `constructed-page-${index + 1}`, order: index,
+        teachingBrief: { ...outline().teachingBrief!, authoring: value } }, content: content(),
+    }));
+    const aiCall = vi.fn().mockResolvedValue(JSON.stringify({ pages: pages.map(({ outline: page }) => ({
+      pageId: page.id, segments: [{ text: '解释当前情境。', semanticIds: [`${page.id}:teaching`] }],
+    })) }));
+    await generateTeachingSectionNarration({ sectionId: 'split-scenario', pages,
+      requirements: { requirement: '分页面讲清自编情境' }, aiCall });
+    const cases = readNarrationPrompt(aiCall.mock.calls[0][1]).pages.map((page: {
+      requiredCaseApplications: Array<{ facts: string; storyDelivery: string }>,
+    }) => page.requiredCaseApplications[0]);
+    expect(cases.map((item: { storyDelivery: string }) => item.storyDelivery)).toEqual([
+      'introduce', 'apply-established', 'introduce',
+    ]);
+    const catalog = readNarrationPrompt(aiCall.mock.calls[0][1]).teachingAuthoring;
+    expect(catalog.cases).toHaveLength(2);
+    expect(cases[0]).toMatchObject({ caseRef: 'construction:fish-story' });
+    expect(cases[1]).toMatchObject({ caseRef: 'construction:fish-story' });
+    expect(catalog.cases[0].factsRefs.map((ref: string) => catalog.texts[ref])).toEqual(authoring.knowledge[0].authoring.examples[0].facts);
+    expect(aiCall).toHaveBeenCalledOnce();
+  });
+
+  it('retains a textbook case identity and original facts on its continuation without adopting candidates owned by another page', async () => {
+    const authoring = caseAuthoring();
+    authoring.nodes = [{ ...authoring.nodes[0], id: 'fish-deepening',
+      content: '分析小鱼已有形象与青蛙描述之间的对应，不虚构小鱼后来纠正认识。' }];
+    const page: SceneOutline = { ...outline(), id: 'page-b', order: 1,
+      teachingBrief: { ...outline().teachingBrief!, authoring } };
+    const aiCall = vi.fn().mockResolvedValue(JSON.stringify({ pages: [{ pageId: page.id,
+      segments: [{ text: '接着分析小鱼的想象，它保留了熟悉的鱼尾。', semanticIds: ['page-b:teaching'] }] }] }));
+    await generateTeachingSectionNarration({ sectionId: 'continuation', pages: [{ outline: page, content: content() }],
+      requirements: { requirement: '继续解释教材故事' }, aiCall });
+    const adoptedCases = readNarrationPrompt(aiCall.mock.calls[0][1]).pages[0].requiredCaseApplications;
+    expect(adoptedCases).toHaveLength(1);
+    expect(adoptedCases[0]).toMatchObject({ id: 'construction:fish-story', nodeIds: ['fish-deepening'],
+      caseRef: 'construction:fish-story' });
+    const catalog = readNarrationPrompt(aiCall.mock.calls[0][1]).teachingAuthoring;
+    expect(catalog.texts[catalog.explanationNodes[0].bodyRef]).toBe(authoring.nodes[0].content);
+    expect(catalog.cases[0].factsRefs.map((ref: string) => catalog.texts[ref]).join('\n')).toBe('青蛙向小鱼描述牛。\n小鱼想象的牛保留了鱼的形象。');
+    expect(aiCall).toHaveBeenCalledOnce();
+  });
+
+  it('keeps same-named case identities from different knowledge points separate', async () => {
+    const authoring = caseAuthoring();
+    authoring.nodes = [{ ...authoring.nodes[0], exampleIds: ['example-1'] },
+      { ...authoring.nodes[1], knowledgePointIds: ['transfer'], exampleIds: ['example-1'] }];
+    authoring.examplePlans = ['construction', 'transfer'].map((knowledgePointId) => ({
+      knowledgePointId, mode: 'textbook', selectedExampleIds: ['example-1'], rationale: '采用当前知识点的教材案例。',
+    }));
+    const original = authoring.knowledge[0].authoring;
+    authoring.knowledge = [
+      { knowledgePointId: 'construction', authoring: { ...original,
+        examples: [{ ...original.examples[0], id: 'example-1' }] } },
+      { knowledgePointId: 'transfer', authoring: { ...original,
+        examples: [{ ...original.examples[1], id: 'example-1' }] } },
+    ];
+    const page: SceneOutline = { ...outline(), teachingBrief: { ...outline().teachingBrief!, authoring } };
+    const aiCall = vi.fn().mockResolvedValue(JSON.stringify(raw('两个例子分别帮助理解各自的知识点。')));
+    await generateTeachingNarration({ outline: page, requirements: { requirement: '解释两个知识点' }, aiCall });
+    const cases = readNarrationPrompt(aiCall.mock.calls[0][1]).requiredCaseApplications;
+    expect(cases.map((item: { id: string }) => item.id)).toEqual(['construction:example-1', 'transfer:example-1']);
+    expect(cases.map((item: { nodeIds: string[] }) => item.nodeIds)).toEqual([['fish-node'], ['map-node']]);
+    const catalog = readNarrationPrompt(aiCall.mock.calls[0][1]).teachingAuthoring;
+    expect(cases.map((item: { caseRef: string }) => catalog.cases.find((candidate: { caseRef: string }) => candidate.caseRef === item.caseRef)
+      .factsRefs.map((ref: string) => catalog.texts[ref]).join('\n'))).toEqual([
+      original.examples[0].facts.join('\n'), original.examples[1].facts.join('\n'),
+    ]);
+    expect(aiCall).toHaveBeenCalledOnce();
+  });
+
+  it.each(['constructed', 'source-gap'] as const)('keeps a case composed directly in the %s blueprint instead of demanding a registered candidate', async (mode) => {
+    const authoring = caseAuthoring();
+    authoring.knowledge[0].authoring.examples = [];
+    authoring.nodes = [{ id: 'direct-case', kind: 'example', provenance: 'constructed',
+      knowledgePointIds: ['construction'], prerequisiteNodeIds: [],
+      content: '设想第一次收到地图的学生，用熟悉路线寻找新地点，再比较哪些原有路线仍适用。' }];
+    authoring.examplePlans = [{ knowledgePointId: 'construction', mode, form: 'everyday',
+      selectedExampleIds: [], rationale: '熟悉路线有助于解释新信息的理解过程。' }];
+    const page: SceneOutline = { ...outline(), teachingBrief: { ...outline().teachingBrief!, authoring } };
+    const aiCall = vi.fn().mockResolvedValue(JSON.stringify(raw(authoring.nodes[0].content)));
+    await generateTeachingNarration({ outline: page, requirements: { requirement: '说明理解过程' }, aiCall });
+    const prompt = readNarrationPrompt(aiCall.mock.calls[0][1]);
+    expect(prompt.requiredCaseApplications).toEqual([expect.objectContaining({ id: 'direct-case', nodeIds: ['direct-case'] })]);
+    expect(prompt.teachingAuthoring.explanationNodes[0].provenance).toBe('constructed');
+    expect(prompt.teachingAuthoring.texts[prompt.teachingAuthoring.explanationNodes[0].bodyRef]).toBe(authoring.nodes[0].content);
+    expect(prompt.page.authoring.examplePlans[0].mode).toBe(mode);
+    expect(aiCall).toHaveBeenCalledOnce();
+  });
+
+  it('honors an explicit no-example decision instead of reviving a legacy example', async () => {
+    const authoring = caseAuthoring();
+    authoring.nodes = [{ ...authoring.nodes[2] }];
+    authoring.examplePlans = [{ knowledgePointId: 'construction', mode: 'none', selectedExampleIds: [],
+      rationale: '当前页面只解释已建立关系的一个条件，无需新案例。' }];
+    const page: SceneOutline = { ...outline(), teachingBrief: { ...outline().teachingBrief!, authoring,
+      examples: ['旧版追加的领域示例'] } };
+    const aiCall = vi.fn().mockResolvedValue(JSON.stringify(raw('这一条件限定了建议的适用情况。')));
+    await generateTeachingNarration({ outline: page, requirements: { requirement: '解释条件' }, aiCall });
+    const prompt = readNarrationPrompt(aiCall.mock.calls[0][1]);
+    expect(prompt.requiredCaseApplications).toEqual([]);
+    expect(prompt.examples).toBeUndefined();
+    expect(aiCall.mock.calls[0][1]).not.toContain('旧版追加的领域示例');
+    expect(aiCall).toHaveBeenCalledOnce();
+  });
+
   it('authors only a missing source insertion and locks existing causal reasoning and the other page', async () => {
     const first = { ...outline(), knowledgePointIds: ['collaboration'] };
     const second = { ...outline(), id: 'page-b', order: 1, knowledgePointIds: ['other'] };
@@ -122,6 +567,11 @@ describe('independent first-pass teaching narration', () => {
       sourceRef: 'source-list-1-item-1' }] }]);
     expect(prompt.pages[0].lockedNarration).toEqual(firstDraft);
     expect(aiCall.mock.calls[0][0]).toContain('do not return, rewrite, replace, summarize or delete');
+    expect(aiCall.mock.calls[0][0]).toContain('Teach the added knowledge directly, without source prefaces');
+    expect(aiCall.mock.calls[0][0]).toContain('“教材指出”“教材中提到”“书中说”“根据提供的资料”');
+    expect(aiCall.mock.calls[0][0]).toContain('textParts.sourceRef and other metadata, outside spoken text');
+    expect(aiCall.mock.calls[0][0]).toContain('comparing named authors’ views, analyzing original wording or explaining a particular standard’s scope');
+    expect(aiCall.mock.calls[0][0]).toContain('preserve its viewpoint and applicability limits');
   });
 
   it('rejects an invalid insertion schema without requesting or adopting a whole-page rewrite', async () => {
@@ -188,7 +638,7 @@ describe('independent first-pass teaching narration', () => {
     expect(wire.pages[0].originalTeachingSources).not.toHaveProperty('originalSources');
     expect(prompt.pages[0].originalTeachingSources.authoritativeAnchors).toEqual([{ id: 'source-quote-1', text: definition }]);
     expect(aiCall.mock.calls[0][0]).toContain('Do not expand condensed slide labels into an invented definition');
-    expect(aiCall.mock.calls[0][0]).toContain('retain the source defining or qualifying wording once');
+    expect(aiCall.mock.calls[0][0]).toContain('Retain the source defining or qualifying wording once');
     expect(aiCall.mock.calls[0][0]).toContain('Do not read whole source paragraphs');
     expect(generated.pages[0]?.segments[0]?.text).toContain(definition);
     expect(generated.pages[0]?.segments[0]?.text).toContain('先比较由老师挑选和按随机规则抽取的区别。');
@@ -262,7 +712,7 @@ describe('independent first-pass teaching narration', () => {
       expect(prompt.pages[0].originalTeachingSources.originalSources[0].passages[0].text).toBe(originalPassage);
       expect(prompt.pages[0].originalTeachingSources.authoritativeAnchors.map((anchor: { text: string }) => anchor.text))
         .toEqual(labels.map((label) => `${label}。`));
-      expect(prompt.requiredOutputShape.pages[0].segments[0].textParts[1].sourceRef).toBe(`source-list-1-item-${index + 1}`);
+      expect(prompt.requiredOutputShape.pages[0].segments[0].textParts[0].sourceRef).toBe(`source-list-1-item-${index + 1}`);
       const speech = result.pages[0]!.segments.map((segment) => segment.text);
       expect(speech.join('\n')).toContain(labels[index]);
       expect(speech.join('\n')).not.toContain(labels[1 - index]);
@@ -342,7 +792,7 @@ describe('independent first-pass teaching narration', () => {
     const prompt = readNarrationPrompt(aiCall.mock.calls[0][1]);
     expect(prompt.sourceAuthoringDuties).toEqual([{ text: `${labels[1]}。`, availableReferences: [{
       pageId: later.id, sourceRef: 'source-list-1-item-2' }] }]);
-    expect(prompt.requiredOutputShape.segments[0].textParts[1].sourceRef).toBe('source-list-1-item-2');
+    expect(prompt.requiredOutputShape.segments[0].textParts[0].sourceRef).toBe('source-list-1-item-2');
     expect(generated.segments[0]?.text).toContain(labels[1]);
     expect(generated.segments[0]?.text).not.toContain(labels[0]);
   });
@@ -367,8 +817,8 @@ describe('independent first-pass teaching narration', () => {
     const generated = await generateTeachingSectionNarration(input);
     expect(aiCall).toHaveBeenCalledTimes(1);
     const system = aiCall.mock.calls[0][0];
-    expect(system).toContain('Canonical source-definition-N and source-list-N-item-M references must preserve the complete supplied defining sentence or condition unchanged');
-    expect(system).toContain('A quote may select an unchanged contiguous excerpt');
+    expect(system).toContain('Canonical source-definition-N and source-list-N-item-M slots preserve the complete supplied defining sentence or condition');
+    expect(system).toContain('quote selecting an unchanged contiguous excerpt');
     expect(system).not.toContain('For a meaning or definition reference, you may');
     expect(system).toContain('Do not output both text and textParts for one segment');
     expect(readNarrationPrompt(aiCall.mock.calls[0][1]).sourceAuthoringDuties).toEqual([{ text: definition,
@@ -409,7 +859,7 @@ describe('independent first-pass teaching narration', () => {
             sectionPath: ['任务支持'] }, sourceSequences: [{ anchorSourceBlockId: 'task-support', kind: 'ordered-steps',
             steps: [{ label, sourceBlockId: 'support-condition', excerpt: sourceDescription }] }] }] }, aiCall });
     expect(aiCall).toHaveBeenCalledOnce();
-    expect(aiCall.mock.calls[0][0]).toContain('A quote may select an unchanged contiguous excerpt');
+    expect(aiCall.mock.calls[0][0]).toContain('quote selecting an unchanged contiguous excerpt');
     const prompt = readNarrationPrompt(aiCall.mock.calls[0][1]);
     expect(prompt.pages[0].originalTeachingSources.authoritativeAnchors)
       .toContainEqual({ id: 'source-list-1-item-1-meaning', text: sourceDescription });
@@ -467,7 +917,7 @@ describe('independent first-pass teaching narration', () => {
       .toContainEqual({ id: 'source-list-1-item-1-meaning', text: sourceDescription });
     expect(aiCall.mock.calls[0][0]).toContain('Teach their essential mechanism, scope and necessary conditions');
     expect(aiCall.mock.calls[0][0]).toContain('The adopted examples in stableTeachingMaterials and examples are part');
-    expect(prompt.requiredOutputShape.pages[0].segments[0].textParts[2].text).not.toMatch(/^。/u);
+    expect(prompt.requiredOutputShape.pages[0].segments[0].textParts).toEqual([{ sourceRef: 'source-list-1-item-1' }]);
   });
 
   it('keeps identically named duties from independent source lists separate', async () => {
@@ -604,9 +1054,9 @@ describe('independent first-pass teaching narration', () => {
     });
     const prompt = readNarrationPrompt(aiCall.mock.calls[0][1]);
     expect(prompt.pages[0].actualSlide.elements[0].table.rows).toEqual([
-      { rowIndex: 0, cells: [{ columnIndex: 0, text: '模式' }] },
-      { rowIndex: 1, cells: [{ columnIndex: 0, text: '交付作品' }] },
-      { rowIndex: 2, cells: [{ columnIndex: 0, text: '收集证据' }] },
+      { rowIndex: 0, cells: [{ columnIndex: 0, cellId: 'head', text: '模式' }] },
+      { rowIndex: 1, cells: [{ columnIndex: 0, cellId: 'case-a', text: '交付作品' }] },
+      { rowIndex: 2, cells: [{ columnIndex: 0, cellId: 'case-b', text: '收集证据' }] },
     ]);
     expect(prompt.visualCueExamples.tableRowReturn.anchors.map((anchor: { target: { selector: { rowIndex: number } } }) => anchor.target.selector.rowIndex))
       .toEqual([1, 2, 1, 2]);
@@ -672,8 +1122,8 @@ describe('independent first-pass teaching narration', () => {
     expect(aiCall.mock.calls[0][0]).toContain('spotlight that continues across sentences');
     expect(aiCall.mock.calls[0][0]).toContain('Choose spotlight for sustained explanation of text');
     expect(aiCall.mock.calls[0][0]).toContain('repeat the row-specific cues at each correction sentence');
-    expect(aiCall.mock.calls[0][0]).toContain('the teacher must still say the actual process steps');
-    expect(aiCall.mock.calls[0][0]).toContain('finish the example comparison before returning to each misconception');
+    expect(aiCall.mock.calls[0][0]).toContain('the teacher must still explain actual process steps');
+    expect(aiCall.mock.calls[0][0]).toContain('finish that comparison before explaining its application boundary');
     expect(aiCall.mock.calls[0][0]).toContain('Never join successive case comparisons or misconception corrections with semicolons');
     expect(aiCall.mock.calls[0][0]).toContain('multi-target laser only to trace an explicit order');
     expect(aiCall.mock.calls[0][0]).toContain('A comparison of prose blocks or table rows is not a laser path');
@@ -858,7 +1308,7 @@ describe('independent first-pass teaching narration', () => {
 
     const system = aiCall.mock.calls[0][0] as string;
     const prompt = readNarrationPrompt(aiCall.mock.calls[0][1]);
-    expect(system).toContain('previousSectionQuizFocus only as the skill checked');
+    expect(system).toContain('Legacy previousSectionTakeaways and previousSectionQuizFocus describe the planned scope');
     expect(system).toContain('let the current page end with the concrete reason the next idea is needed');
     expect(prompt.pages[0].deliveryContext).toMatchObject({ sectionPosition: 'section-first' });
     expect(prompt.pages[0].continuityContract).toMatchObject({
@@ -1027,7 +1477,7 @@ describe('independent first-pass teaching narration', () => {
     });
     expect(aiCall).toHaveBeenCalledOnce();
     expect(aiCall.mock.calls[0][0]).toContain('read verbatim by TTS');
-    expect(aiCall.mock.calls[0][0]).toContain('Teaching-plan fields and slide text supply knowledge');
+    expect(aiCall.mock.calls[0][0]).toContain('Original adopted evidence supplies knowledge');
     expect(aiCall.mock.calls[0][0]).toContain('常见混淆：把探究式当自由看资料');
     expect(aiCall.mock.calls[0][0]).toContain('Do not use a Chinese or ASCII colon in spoken text');
     expect(aiCall.mock.calls[0][0]).toContain('Answer in Chinese');
@@ -1179,6 +1629,46 @@ describe('independent first-pass teaching narration', () => {
     expect(result.actions.filter((action) => action.type === 'speech')).toHaveLength(2);
   });
 
+  it('prefers compiled one-to-many content bindings over accidental text matches without changing speech', () => {
+    const slide = content();
+    slide.elements.push({ ...content('自信回答仍需查证').elements[0], id: 'compiled-a' },
+      { ...content('记录必须相关').elements[0], id: 'compiled-b' });
+    slide.contentBindings = [
+      { sourceContentId: 'page-a:visible-1', elementId: 'removed-draft' },
+      { sourceContentId: 'page-a:visible-1', elementId: 'compiled-a' },
+      { sourceContentId: 'page-a:visible-1', elementId: 'compiled-b' },
+    ];
+    const narration = normalizeTeachingNarration(raw(undefined, true), outline());
+    const result = compileTeachingNarrationActions({ outline: outline(), content: slide, narration });
+    expect(result.issues).toEqual([]);
+    expect(result.actions[0]).toMatchObject({ type: 'spotlight', elementId: 'compiled-a' });
+    expect(result.actions.filter((action) => action.type === 'speech'))
+      .toEqual([{ id: 'page-a:speech-1', type: 'speech', text: raw().segments[0].text }]);
+  });
+
+  it('uses compiled table-cell selectors for semantic cues while explicit targets retain their own selector', () => {
+    const slide: GeneratedSlideContent = { elements: [
+      { id: 'comparison', type: 'table', left: 20, top: 120, width: 800, height: 120, rotate: 0,
+        outline: { width: 1, color: '#ddd', style: 'solid' }, colWidths: [0.5, 0.5], cellMinHeight: 40,
+        data: [[{ id: 'claim', text: '自信回答', rowspan: 1, colspan: 1 },
+          { id: 'evidence', text: '相关记录', rowspan: 1, colspan: 1 }]] },
+    ], contentBindings: [{ sourceContentId: 'page-a:visible-1', elementId: 'comparison', selector: { cellId: 'evidence' } }] };
+    const narration = normalizeTeachingNarration({ segments: [{ text: '先看相关记录，再看自信回答。',
+      semanticIds: ['page-a:visible-1'], anchors: [
+        { semanticId: 'page-a:visible-1', quote: '相关记录', visualCue: { type: 'spotlight', necessity: 'helpful' } },
+        { semanticId: 'page-a:visible-1', quote: '自信回答', visualCue: { type: 'spotlight', necessity: 'helpful',
+          target: { elementId: 'comparison', selector: { cellId: 'claim' } } } },
+      ] }] }, outline());
+    const result = compileTeachingNarrationActions({ outline: outline(), content: slide, narration });
+    expect(result.issues).toEqual([]);
+    expect(result.actions.filter((action) => action.type === 'spotlight')).toEqual([
+      expect.objectContaining({ elementId: 'comparison', selector: { cellId: 'evidence' } }),
+      expect.objectContaining({ elementId: 'comparison', selector: { cellId: 'claim' } }),
+    ]);
+    expect(result.actions.filter((action) => action.type === 'speech')[0])
+      .toMatchObject({ text: '先看相关记录，再看自信回答。' });
+  });
+
   it('binds repeated attention to the same object at each authored phrase instead of only its first mention', () => {
     const slide = content();
     slide.elements[0].id = 'page-a:visible-1';
@@ -1238,17 +1728,21 @@ describe('independent first-pass teaching narration', () => {
     expect(transport).toHaveBeenCalledOnce();
   });
 
-  it('restores semantic identity across the real baseline ID replacement boundary', async () => {
+  it('keeps authored semantic identity and restores legacy remapped drafts', async () => {
     const { generateSceneContent } = await import('./scene-generator');
     const raw = content('画面实际采用的改写句子');
     raw.elements[0].id = 'page-a:visible-1';
     let captured = '';
     const aiCall = withTeachingSlideGuidance(vi.fn().mockResolvedValue(JSON.stringify(raw)), outline(), (response) => { captured = response; });
     const generated = await generateSceneContent(outline(), aiCall) as GeneratedSlideContent;
-    expect(generated.elements[0].id).not.toBe('page-a:visible-1');
+    expect(generated.elements[0].id).toBe('page-a:visible-1');
     const restored = restoreTeachingSemanticElementIds(generated, captured, outline());
     expect(restored.elements[0].id).toBe('page-a:visible-1');
     expect({ ...restored.elements[0], id: generated.elements[0].id }).toEqual(generated.elements[0]);
+    const legacy = { ...generated, elements: generated.elements.map((element) => ({ ...element, id: 'legacy-rendered-id' })) };
+    const restoredLegacy = restoreTeachingSemanticElementIds(legacy, captured, outline());
+    expect(restoredLegacy.elements[0].id).toBe('page-a:visible-1');
+    expect({ ...restoredLegacy.elements[0], id: 'legacy-rendered-id' }).toEqual(legacy.elements[0]);
   });
 
   it('does not restore missing, changed or ambiguous semantic identities', () => {
@@ -1278,6 +1772,30 @@ describe('independent first-pass teaching narration', () => {
     expect(call.mock.calls[0][0]).toContain('textbook original example, teaching adaptation, and AI supplement');
     expect(call.mock.calls[0][0]).toContain('opening page of a standalone AI course resource');
     expect(call.mock.calls[0][0]).toContain('abstract definition alone is not an adequate knowledge entry');
+  });
+
+  it.each(['local', 'canonical', 'legacy'] as const)('uses only one source of prose in the native wrapper with a %s catalog', async (contract) => {
+    const authoring = caseAuthoring();
+    const canonical = authoring.knowledge.map((point) => ({ id: point.knowledgePointId,
+      authoring: { ...point.authoring, readingContract: 'source-blocks-v1' as const } }));
+    if (contract === 'local') authoring.knowledge[0].authoring.readingContract = 'source-blocks-v1';
+    const oldCopy = '旧口播副本不得重复传给模型';
+    const page: SceneOutline = { ...outline(), knowledgePointIds: ['construction'],
+      teachingBrief: { ...outline().teachingBrief!, authoring, examples: [oldCopy],
+        teachingPlan: { ...outline().teachingBrief!.teachingPlan!, narrationFocus: [oldCopy], purpose: oldCopy } } };
+    const call = vi.fn().mockResolvedValue('slide');
+    await withTeachingSlideGuidance(call, page, undefined, contract === 'canonical' ? canonical : [])('native schema', 'page input');
+    const contractInput = JSON.parse(call.mock.calls[0][1].split('Shared page contract:\n')[1]!);
+    expect(contractInput.visibleStatements).toEqual(buildTeachingNarrationSemantics(page).visible);
+    expect(contractInput.entryPoint).toEqual(page.teachingBrief!.teachingPlan!.entryPoint);
+    if (contract === 'legacy') expect(call.mock.calls[0][1]).toContain(oldCopy);
+    else {
+      expect(call.mock.calls[0][1]).not.toContain(oldCopy);
+      expect(contractInput).not.toHaveProperty('understanding');
+      expect(contractInput).not.toHaveProperty('oralOnly');
+      expect(contractInput).not.toHaveProperty('examples');
+    }
+    expect(call).toHaveBeenCalledOnce();
   });
 
   it('preserves the single visual operation without reinserting native long-prose instructions', async () => {

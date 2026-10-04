@@ -2,8 +2,9 @@ import { describe, expect, it } from 'vitest';
 import type { PPTElement } from '@openmaic/dsl';
 import type { GeneratedSlideContent, SceneOutline } from '@/lib/openmaic/types/generation';
 import type { FigureSequenceContract } from '@/lib/textbook/course-visual-binding';
+import { PPT_PAGE_PLANNING_VERSION } from '@/lib/course-design/ppt-page-planning-contract';
 import {
-  findSourceContentIssues, findSectionSourceContentIssues, sourceSequenceSlideContent, sourceSequenceTeachingResponsibilities,
+  canonicalSourceClausesForOutline, findSourceContentIssues, findSectionSourceContentIssues, sourceSequenceSlideContent, sourceSequenceTeachingResponsibilities,
   restoreSourceContentCheckpoint, SOURCE_CONTENT_RECOVERY_POLICY,
   type SourceContentRecoveryCheckpoint,
 } from './source-content-acceptance';
@@ -25,10 +26,51 @@ const tableContent = (clauses: string[]): GeneratedSlideContent => ({ elements: 
 ] } as unknown as GeneratedSlideContent);
 
 describe('complete source content acceptance', () => {
+  it('keeps cross-knowledge native source duties in first-draft, section, and actual content checks', () => {
+    const source: FigureSequenceContract = { ...contract, coveragePolicy: 'authored-scope', required: false,
+      orderedSteps: labels.map((label, index) => ({ label, sourceBlockId: `step-${index}` })) };
+    const outline = page('application', [labels[0]!]);
+    outline.knowledgePointIds = ['application-knowledge'];
+    outline.teachingBrief = { schemaVersion: 1, pptPlanningVersion: PPT_PAGE_PLANNING_VERSION,
+      explanation: '', examples: [], conditions: [], evidence: [], assessmentFocus: '',
+      teachingPlan: { purpose: '', priorKnowledge: '', learnerQuestion: '', takeaway: '',
+        newContent: labels[0]!, visibleContent: [labels[0]!], reasoningSteps: [], narrationFocus: [],
+        sourceSequenceUses: [{ resourceId: source.resourceId, coverage: 'selected', sourceStepIds: ['step-0'] }] } };
+    const responsibilities = sourceSequenceTeachingResponsibilities([outline], source);
+    expect(responsibilities.targets).toEqual([outline]);
+    expect(responsibilities.owners).toEqual([{ label: labels[0], owner: outline }]);
+    const original = { outline, content: textContent(labels[0]!) };
+    expect(findSourceContentIssues([original], [source])).toEqual([]);
+    expect(findSectionSourceContentIssues([outline], [original], [source])).toEqual([]);
+    const lost = { outline, content: textContent('教学建议') };
+    expect(findSourceContentIssues([lost], [source])[0]?.missingCanonicalLabels).toEqual([labels[0]]);
+    expect(findSourceContentIssues([lost], [source], { visibleOnly: true })[0]?.missingCanonicalLabels).toEqual([labels[0]]);
+    expect(findSectionSourceContentIssues([outline], [lost], [source])[0]?.missingCanonicalLabels).toEqual([labels[0]]);
+    expect(outline.knowledgePointIds).toEqual(['application-knowledge']);
+
+    delete outline.teachingBrief.pptPlanningVersion;
+    expect(sourceSequenceTeachingResponsibilities([outline], source)).toEqual({ targets: [], owners: [] });
+    expect(findSourceContentIssues([lost], [source])).toEqual([]);
+    outline.teachingBrief.pptPlanningVersion = PPT_PAGE_PLANNING_VERSION;
+    outline.teachingBrief.teachingPlan!.sourceSequenceUses![0]!.sourceStepIds = ['invalid-step'];
+    expect(sourceSequenceTeachingResponsibilities([outline], source)).toEqual({ targets: [], owners: [] });
+    expect(findSourceContentIssues([lost], [source])).toEqual([]);
+  });
+
   const anchoredLabels = ['创设情境', '进行“抛锚”', '自主探索', '拓展延伸', '讨论交流', '效果评价'];
   const anchoredContract: FigureSequenceContract = { ...contract, sequenceSemantics: 'ordered-steps',
     orderedSteps: anchoredLabels.map((label) => ({ label })) };
   const equivalentFlow = '流程包括创设情境→抛锚→自主探索→拓展延伸→讨论交流→效果评价。';
+
+  it('uses actual spoken content rather than compatibility prose to prove source coverage', () => {
+    const outline = page('spoken', ['教学建议']);
+    outline.teachingBrief = { schemaVersion: 1, manuscript: { sectionId: 'ai-section', segmentIds: ['body'] },
+      explanation: labels.join('。'), examples: [], conditions: [], evidence: [], assessmentFocus: '' };
+    expect(canonicalSourceClausesForOutline(outline)).toEqual(['教学建议']);
+    const actual = { outline, content: textContent('教学建议') };
+    expect(findSourceContentIssues([actual], [contract]).length).toBeGreaterThan(0);
+    expect(findSourceContentIssues([{ ...actual, speech: labels }], [contract])).toEqual([]);
+  });
 
   it('accepts a source-derived quoted action abbreviation in visible content and actual speech', () => {
     const outline = page('anchored', anchoredLabels);

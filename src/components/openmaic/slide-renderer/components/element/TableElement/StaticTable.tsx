@@ -3,7 +3,7 @@
 import { useMemo } from 'react';
 import type { PPTTableElement } from '@openmaic/dsl';
 import { getTableSubThemeColor } from '@openmaic/lib/utils/element';
-import { getTextStyle, formatText, getHiddenCells } from './tableUtils';
+import { getTextStyle, formatText, tableCellLayout } from './tableUtils';
 
 interface StaticTableProps {
   elementInfo: PPTTableElement;
@@ -16,7 +16,7 @@ interface StaticTableProps {
 export function StaticTable({ elementInfo }: StaticTableProps) {
   const { width, data, colWidths, cellMinHeight, outline, theme } = elementInfo;
 
-  const hiddenCells = useMemo(() => getHiddenCells(data), [data]);
+  const cellRows = useMemo(() => tableCellLayout(data, colWidths.length), [data, colWidths.length]);
 
   const [subThemeDark, subThemeLight] = useMemo(() => {
     if (!theme) return ['', ''];
@@ -43,7 +43,7 @@ export function StaticTable({ elementInfo }: StaticTableProps) {
     if (!theme) return undefined;
 
     const rowCount = data.length;
-    const colCount = data[0]?.length ?? 0;
+    const colCount = colWidths.length;
 
     // Row header (first row) gets theme color
     if (theme.rowHeader && rowIdx === 0) return theme.color;
@@ -86,12 +86,10 @@ export function StaticTable({ elementInfo }: StaticTableProps) {
         ))}
       </colgroup>
       <tbody>
-        {data.map((row, rowIdx) => (
+        {cellRows.map((row, rowIdx) => (
           <tr key={rowIdx} data-slide-row-index={rowIdx} style={{ height: `${cellMinHeight}px` }}>
-            {row.map((cell, colIdx) => {
-              if (hiddenCells.has(`${rowIdx}_${colIdx}`)) return null;
-
-              const bgColor = getCellBg(rowIdx, colIdx, cell.style?.backcolor);
+            {row.map(({ cell, columnIndex }) => {
+              const bgColor = getCellBg(rowIdx, columnIndex, cell.style?.backcolor);
               const headerColor = getHeaderTextColor(rowIdx);
               const textStyle = getTextStyle(cell.style);
 

@@ -101,6 +101,9 @@ export function formatFatalCourseDesignError(error: unknown): string {
   if (alreadyFormatted) return alreadyFormatted;
   if (chainMessages.includes(FATAL_CONFIG_MESSAGE)) return FATAL_CONFIG_MESSAGE;
   if (chainMessages.includes(INTERRUPTED_STREAM_MESSAGE)) return INTERRUPTED_STREAM_MESSAGE;
+  if (chain.some(isInvalidGeneratedOutput) && messages.includes('小节口播无法编译')) {
+    return `当前课程阶段首稿无法编译为可执行页面，生成已停止；已保存的讲稿和此前完成的内容均已保留。具体原因：${messages.slice(0, 1_000)}`;
+  }
   if (chain.some(isInvalidGeneratedOutput)) {
     const detail = [...chainMessages].reverse().find(Boolean) ?? "本阶段输出结构不完整";
     const categories = messages.includes("教学蓝图") ? [

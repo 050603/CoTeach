@@ -713,11 +713,11 @@ export function isActivityTimingCorrectionCloser(options: {
 /** Compact first-draft guidance; never used to request a corrected narration. */
 export function formatTtsParagraphBudgets(plan: TtsTimingPlan): string {
   const labels = { introduction: '引入', explanation: '解释', example: '例子', feedback: '反馈' };
-  return '以下是首次讲稿的内容分配参考，可按教学内容量灵活调整段落时长与文字量，不要求各段分别落在±10%内；知识讲授阶段总时长才是最终时长约束。'
+  return '以下是首次讲稿的内容分配参考，可按理解需要灵活调整段落时长与文字量，不要求各段分别落在±10%内；页面、小节及阶段总时长也仅供参考。优先讲清应教知识、案例前提和推理，必要超时允许，不为命中时间删减、加速或填充。'
     + (plan.paragraphBudgets ?? []).map((part) =>
     `${labels[part.role]}：${part.targetDurationSec} 秒，参考 ${part.targetUnits} ${part.unit}`,
   ).join('；') + (plan.unit === 'latin-word' ? '。英文参考词按约1.5音节/单位折算，技术长词与字母缩写应预留更多时长。' : '')
     + (plan.unit === 'mixed-unit' && plan.latinReferenceWordCjkUnits !== undefined
-      ? `。mixed-unit 为中文等价单位：每个中文或其他可发音字符计1单位；每个英文参考词（约1.5音节）计${plan.latinReferenceWordCjkUnits.toFixed(3)}单位，长词按音节折算。将中英文等价单位相加后遵守同一总量预算，不能把英文词直接当作1个中文字。`
+      ? `。mixed-unit 为中文等价单位：每个中文或其他可发音字符计1单位；每个英文参考词（约1.5音节）计${plan.latinReferenceWordCjkUnits.toFixed(3)}单位，长词按音节折算。将中英文等价单位相加后估计整体时长，不能把英文词直接当作1个中文字。`
       : '');
 }

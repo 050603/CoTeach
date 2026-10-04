@@ -33,4 +33,38 @@ describe('explicit replacement of failed design authoring', () => {
   it('does not reset stages that failed before a provider request', () => {
     expect(failedCourseDesignAuthoringSteps({ aiDurationAttempt: { attemptsStarted: 0 } }, [])).toEqual([]);
   });
+
+  it('replaces only the last failed spoken section and preserves earlier legacy raw responses', () => {
+    const saved = { spokenSections: [
+      { step: 'design-authoring:spoken-section:1', state: { complete: true, rawResponse: 'accepted first section' } },
+      { step: 'course-design-attempt:spoken-section:1', state: { attemptsStarted: 1 } },
+      { step: 'design-authoring:spoken-section:2', state: { complete: true, rawResponse: 'failed second section' } },
+      { step: 'course-design-attempt:spoken-section:2', state: { attemptsStarted: 1 } },
+    ] };
+    const original = structuredClone(saved);
+    expect(failedCourseDesignAuthoringSteps(saved, [])).toEqual([
+      'design-authoring:spoken-section:2', 'course-design-attempt:spoken-section:2', 'course-design:spoken-section:2',
+    ]);
+    expect(saved).toEqual(original);
+  });
+
+  it('preserves every compiled spoken section when a later stage fails', () => {
+    const saved = { spokenSections: [
+      { step: 'design-authoring:spoken-section:1', state: { rawResponse: 'accepted' } },
+      { step: 'course-design:spoken-section:1', state: { status: 'validated' } },
+    ] };
+    expect(failedCourseDesignAuthoringSteps(saved, [])).toEqual([]);
+    expect(failedCourseDesignAuthoringSteps({ ...saved, teachingBlueprint: { status: 'validated' } }, [])).toEqual([]);
+  });
+
+  it('replaces the interrupted section attempt while retaining earlier compiled receipts', () => {
+    expect(failedCourseDesignAuthoringSteps({ spokenSections: [
+      { step: 'design-authoring:spoken-section:1', state: { rawResponse: 'accepted' } },
+      { step: 'course-design:spoken-section:1', state: { status: 'validated' } },
+      { step: 'course-design-attempt:spoken-section:2', state: { attemptsStarted: 1 } },
+      { step: 'course-design-attempt:spoken-section:3', state: { attemptsStarted: 0 } },
+    ] }, [])).toEqual([
+      'design-authoring:spoken-section:2', 'course-design-attempt:spoken-section:2', 'course-design:spoken-section:2',
+    ]);
+  });
 });

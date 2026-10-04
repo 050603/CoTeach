@@ -4,6 +4,7 @@ import type { Scene } from '@openmaic/lib/types/stage';
 import type { FigureSequenceContract } from '@/lib/textbook/course-visual-binding';
 import { fingerprintGenerationValue, fingerprintSceneOutline, type SceneStageCheckpointSnapshot } from './page-checkpoints';
 import { fingerprintCourseFinalizationRequest, restoreCourseFinalizationCheckpoint, restoreCompletedTestLessonContext, restoreOrGenerateFinalizedClassroom, type PersistedCourseGenerationRequest } from './job-runner';
+import type { TeachingManuscript } from '@/lib/course-design/teaching-manuscript';
 
 const original = [
   { id: 'a', type: 'slide', title: 'A', description: 'Explain A', keyPoints: [], order: 0, targetDurationSec: 120 },
@@ -17,6 +18,76 @@ const expanded: SceneOutline[] = [
 const request = { courseId: 'isolated', courseTitle: 'Course', requirement: 'Confirmed input', sceneOutlines: original, enableTTS: true } as PersistedCourseGenerationRequest;
 const generated = { stage: { id: 'classroom' }, scenes: expanded.map((outline) => ({ id: outline.id, outlineId: outline.id, actions: [{ id: `${outline.id}:speech`, type: 'speech', text: '讲解', audioUrl: `/audio/${outline.id}.wav` }] })), assetContext: { outlines: expanded } };
 const checkpoint = (inputFingerprint: string) => ({ schemaVersion: 1, inputFingerprint, generated, split: { studentClassroomId: 'classroom', studentScenes: generated.scenes, teacherScenes: [] }, assetsCompletedAt: 'legacy-incorrect-completed-marker' });
+
+describe('canonical speech identity at finalization recovery', () => {
+  const manuscripts: TeachingManuscript[] = [{ sectionId: 'spoken-section', segments: [{ id: 'paragraph', text: '已确认的完整口播。' }] }];
+  const spokenOutlines: SceneOutline[] = original.map((outline) => ({ ...outline,
+    teachingBrief: { schemaVersion: 1, manuscript: { sectionId: 'spoken-section', segmentIds: ['paragraph'] },
+      explanation: '', examples: [], conditions: [], evidence: [], assessmentFocus: '', reviewItems: [] },
+  }));
+  const spokenRequest = { ...request, sceneOutlines: spokenOutlines };
+  const spokenGenerated = { ...generated, assetContext: { outlines: spokenOutlines },
+    scenes: spokenOutlines.map((outline) => ({ id: outline.id, outlineId: outline.id,
+      actions: [{ id: 'paragraph', type: 'speech', text: '已确认的完整口播。', audioUrl: '/accepted.wav' }] })) };
+  const identity = fingerprintGenerationValue({ manuscripts });
+  const saved = () => ({ schemaVersion: 1, inputFingerprint: fingerprintCourseFinalizationRequest(spokenRequest),
+    sourceContextFingerprint: identity, generated: spokenGenerated });
+
+  it('restores an exact canonical speech identity and retains accepted audio without authoring', async () => {
+    const checkpoint = saved();
+    const author = vi.fn();
+    const result = await restoreOrGenerateFinalizedClassroom({ checkpoint, request: spokenRequest,
+      preparedOutlines: spokenOutlines, sourceContextFingerprint: identity, teachingManuscripts: manuscripts, generate: author });
+    expect(author).not.toHaveBeenCalled();
+    expect(result.restoredFinalization).toBe(checkpoint);
+    expect(result.sourceContextFingerprint).toBe(identity);
+    expect(result.generated.scenes[0]?.actions?.[0]).toMatchObject({ audioUrl: '/accepted.wav' });
+  });
+
+  it('does not revive old speech when only canonical text changes beneath stable outline references', async () => {
+    const checkpoint = saved();
+    const nextManuscripts = [{ ...manuscripts[0]!, segments: [{ id: 'paragraph', text: '教师已修订的完整口播。' }] }];
+    const nextIdentity = fingerprintGenerationValue({ manuscripts: nextManuscripts });
+    const nextGenerated = { ...spokenGenerated, scenes: spokenGenerated.scenes.map((scene) => ({ ...scene,
+      actions: [{ id: 'paragraph', type: 'speech', text: '教师已修订的完整口播。' }] })) };
+    const author = vi.fn(async () => nextGenerated as never);
+    const result = await restoreOrGenerateFinalizedClassroom({ checkpoint, request: spokenRequest,
+      preparedOutlines: spokenOutlines, sourceContextFingerprint: nextIdentity, teachingManuscripts: nextManuscripts, generate: author });
+    expect(author).toHaveBeenCalledOnce();
+    expect(result.restoredFinalization).toBeNull();
+    expect(result.sourceContextFingerprint).toBe(nextIdentity);
+    expect(result.generated.scenes[0]?.actions?.[0]).not.toHaveProperty('audioUrl');
+    expect(checkpoint.generated).toBe(spokenGenerated);
+  });
+
+  it('requires an explicit canonical identity on a spoken checkpoint even when the submitted request matches', async () => {
+    const checkpoint = { schemaVersion: 1, inputFingerprint: fingerprintCourseFinalizationRequest(spokenRequest), generated: spokenGenerated };
+    const author = vi.fn(async () => spokenGenerated as never);
+    const result = await restoreOrGenerateFinalizedClassroom({ checkpoint, request: spokenRequest,
+      preparedOutlines: spokenOutlines, sourceContextFingerprint: identity, teachingManuscripts: manuscripts, generate: author });
+    expect(result.restoredFinalization).toBeNull();
+    expect(author).toHaveBeenCalledOnce();
+  });
+
+  it.each([0, 1])('resolves page %i references before reuse or another generation call, including quiz scope', async (index) => {
+    const invalid = structuredClone(spokenOutlines);
+    invalid[index]!.teachingBrief!.manuscript!.segmentIds = ['missing-paragraph'];
+    const author = vi.fn();
+    await expect(restoreOrGenerateFinalizedClassroom({ checkpoint: saved(), request: { ...spokenRequest, sceneOutlines: invalid },
+      preparedOutlines: invalid, sourceContextFingerprint: identity, teachingManuscripts: manuscripts, generate: author }))
+      .rejects.toThrow('不存在的讲稿段落 missing-paragraph');
+    expect(author).not.toHaveBeenCalled();
+  });
+
+  it('does not introduce source quality invalidation for legacy completed courses', async () => {
+    const legacy = { ...checkpoint(fingerprintCourseFinalizationRequest(request)), sourceContextFingerprint: 'old-source' };
+    const author = vi.fn();
+    const result = await restoreOrGenerateFinalizedClassroom({ checkpoint: legacy, request,
+      preparedOutlines: expanded, sourceContextFingerprint: 'current-source', teachingManuscripts: [], generate: author });
+    expect(result.restoredFinalization).toBe(legacy);
+    expect(author).not.toHaveBeenCalled();
+  });
+});
 
 describe('finalization recovery after compiled page expansion', () => {
   it('authorizes original trial context only for the linked completed lesson and all its adopted pages', () => {

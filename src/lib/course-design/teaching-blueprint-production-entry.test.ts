@@ -1,14 +1,14 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { Course, CourseContent } from '@/lib/session/types';
 import type { CourseEvidenceSnapshot } from '@/lib/textbook/course-evidence-types';
-import { hasCurrentTeachingBrief } from '@/lib/openmaic/generation/teaching-enhancement';
 import { buildTeachingNarrationSemantics } from '@/lib/openmaic/generation/teaching-narration';
 import { scopeCourseTextbookFigures } from '@/lib/textbook/figure-use';
 import { prepareTeachingBlueprintInput, restoreTeachingBlueprintRepairSource, type QuickDesignRequest } from './job-runner';
 import { applyReviewedOutlinesToTeachingBlueprint, generateTeachingBlueprint,
   revalidateStoredTeachingBlueprint, teachingBlueprintToOutlines,
   teachingBlueprintContentFingerprint, teachingBlueprintInputFingerprint,
-  validateTeachingBlueprintBudget, type TeachingBlueprintInput, type TeachingBlueprintValidation } from './teaching-blueprint';
+  validateTeachingBlueprintBudget, TEACHING_BLUEPRINT_COMPILED_BRIEF_VERSION,
+  type TeachingBlueprintInput, type TeachingBlueprintValidation } from './teaching-blueprint';
 
 // Only immutable source storage is isolated. Input preparation, first-writing
 // prompts, validation, compilation, confirmation and saved reuse are real.
@@ -97,6 +97,8 @@ function firstResponse(input: TeachingBlueprintInput) {
     assessmentFocus: ['理解副本更新与读取如何遵守一致性规则'],
     understandingCriteria: { goals: ['能解释缓存一致性的基本含义'],
       answerEssentials: [definition, boundary], misconceptions: ['把立即更新当成唯一实现方式'],
+      basis: [{ id: 'explain-consistency', operation: 'explain', answerRelation: 'source-statement',
+        claimRefs: [], nodeIds: ['meaning', 'reasoning', 'oral-boundary'] }],
       supportingUnitIds: ['unit'] },
   }] };
 }
@@ -193,7 +195,8 @@ describe('production prepared input through independent PPT authoring and confir
       expect(slide.keyPoints).toEqual(display);
       expect(slide.teachingBrief?.teachingPlan?.presentationContent).toEqual(display);
       expect(slide.teachingBrief?.teachingPlan?.visibleContent).toEqual(display);
-      expect(hasCurrentTeachingBrief(slide)).toBe(true);
+      expect(slide.teachingBrief?.designVersion).toBe(TEACHING_BLUEPRINT_COMPILED_BRIEF_VERSION);
+      expect(slide.teachingBrief?.authoring?.nodes).toEqual(originalNodes);
       [definition, mechanism, boundary].forEach((text) => expect(slide.teachingBrief?.explanation).toContain(text));
       expect(slide.teachingBrief?.evidence.map((entry) => entry.quote)).toEqual([definition, mechanism, boundary]);
       expect(slide.teachingBrief?.conditions).toEqual([boundary]);

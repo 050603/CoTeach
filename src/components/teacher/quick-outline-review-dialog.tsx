@@ -37,6 +37,9 @@ export function QuickOutlineReviewDialog({
   const displayedOutlines = readOnly ? initialOutlines : outlines;
   const blockingCount = countBlockingOutlines(outlines);
   const sectionSummaries = useMemo(() => {
+    const nodesBySection = new Map(blueprint?.sections.filter((section) => section.contentMode === "spoken")
+      .map((section) => [section.id, new Map(section.units.flatMap((unit) => unit.explanationNodes ?? [])
+        .map((node) => [node.id, node.content]))]));
     const groups = new Map<string, SceneOutline[]>();
     for (const outline of displayedOutlines) {
       const key = outline.lectureSectionId || outline.parentActivityId || outline.activityId || "course";
@@ -55,13 +58,20 @@ export function QuickOutlineReviewDialog({
           && teaching.length > 0
           && pages.every((page) => (page.targetDurationSec ?? page.estimatedDuration ?? 0) > 0),
         minutes: Math.max(1, Math.round(pages.reduce((sum, page) => sum + (page.targetDurationSec ?? page.estimatedDuration ?? 0), 0) / 60)),
-        mainline: teaching.flatMap((page) => page.teachingBrief?.teachingPlan?.newContent ? [page.teachingBrief.teachingPlan.newContent] : []),
+        mainline: teaching.flatMap((page) => {
+          const manuscript = page.teachingBrief?.manuscript;
+          if (manuscript) return manuscript.segmentIds.flatMap((id) => {
+            const text = nodesBySection.get(manuscript.sectionId)?.get(id);
+            return text ? [text] : [];
+          });
+          return page.teachingBrief?.teachingPlan?.newContent ? [page.teachingBrief.teachingPlan.newContent] : [];
+        }),
         reasoning: teaching.flatMap((page) => page.teachingBrief?.teachingPlan?.reasoningSteps ?? []),
         examples: [...new Set(teaching.flatMap((page) => page.teachingBrief?.examples ?? []))],
         criteria,
       };
     });
-  }, [displayedOutlines]);
+  }, [displayedOutlines, blueprint]);
 
   useEffect(() => {
     const previousOverflow = document.body.style.overflow;

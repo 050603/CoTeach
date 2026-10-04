@@ -12,9 +12,10 @@ import {
   findKnowledgeSourceSequenceIssues,
 } from './course-visual-binding';
 import type { TeachingBlueprint } from '@/lib/session/types';
-import { teachingBlueprintToOutlines } from '@/lib/course-design/teaching-blueprint';
+import { applyReviewedOutlinesToTeachingBlueprint, teachingBlueprintToOutlines } from '@/lib/course-design/teaching-blueprint';
 import realFirstDraft from './__fixtures__/teaching-methods-first-draft.json';
 import { compactSourceSequenceText, findSourceSequenceLabelPosition, hasSourceSequenceLabel } from './source-sequence-label';
+import { PPT_PAGE_PLANNING_VERSION } from '@/lib/course-design/ppt-page-planning-contract';
 
 const pages: SceneOutline[] = [
   {
@@ -72,6 +73,62 @@ function sequenceBlueprint(labels: readonly string[]): TeachingBlueprint {
     }],
   };
 }
+
+it.each([undefined, '比较教材图中的实际差异'])('preserves the native source image and authored rationale through teacher confirmation (%s)', (rationale) => {
+  const blueprint = sequenceBlueprint(['观察真实过程']);
+  const section = blueprint.sections[0]!;
+  section.contentMode = 'spoken';
+  section.pptPlanningVersion = PPT_PAGE_PLANNING_VERSION;
+  section.pages[0]!.resourceNeeds = [{ kind: 'source-image', assetId: resource.id, required: true, purpose: '观察教材中的真实过程' }];
+  section.pages[0]!.visualRelationship = { kind: 'statement', description: '观察真实过程', readingOrder: ['观察真实过程'],
+    ...(rationale ? { rationale } : {}) };
+  const originalNodes = structuredClone(section.units);
+  let adopted = blueprint;
+  for (let pass = 0; pass < 3; pass++) {
+    const outlines = bindRequiredTextbookFiguresToOutlines(teachingBlueprintToOutlines(adopted, ''), [resource]);
+    const expected = structuredClone(outlines[0]!.visualIntent);
+    expect(expected?.rationale).toBe(rationale);
+    expect(expected?.resourceRefs).toMatchObject([{ resourceId: resource.id, kind: 'source-image', required: true }]);
+    adopted = applyReviewedOutlinesToTeachingBlueprint(adopted, outlines);
+    const compiled = teachingBlueprintToOutlines(adopted, '');
+    expect(compiled[0]!.visualIntent).toEqual(expected);
+    expect(compiled[0]!.suggestedImageIds).toEqual(outlines[0]!.suggestedImageIds);
+    expect(compiled[0]!.keyPoints).toEqual(outlines[0]!.keyPoints);
+    expect(adopted.sections[0]!.units).toEqual(originalNodes);
+  }
+});
+
+it('keeps native cross-knowledge selected facts in blueprint and outline acceptance', () => {
+  const contract = { resourceId: 'book-a-flow', required: false, coveragePolicy: 'authored-scope' as const,
+    knowledgePointIds: ['source-owner'], scope: 'knowledge-point' as const,
+    orderedSteps: ['观察', '猜想', '验证'].map((label, index) => ({ label, sourceBlockId: `a${index}` })) };
+  const blueprint = sequenceBlueprint(['本页选讲观察。']);
+  const section = blueprint.sections[0]!;
+  section.pptPlanningVersion = PPT_PAGE_PLANNING_VERSION;
+  section.pages[0]!.sourceSequenceUses = [{ resourceId: contract.resourceId,
+    coverage: 'selected', sourceStepIds: ['a0'] }];
+  expect(findBlueprintFigureSequenceIssues(blueprint, [contract])).toEqual([]);
+  const page: SceneOutline = { ...pages[0]!, description: '本页选讲观察。', keyPoints: ['观察'],
+    teachingBrief: { ...authoredBrief('本页选讲观察。'), pptPlanningVersion: PPT_PAGE_PLANNING_VERSION } };
+  page.teachingBrief!.teachingPlan!.sourceSequenceUses = section.pages[0]!.sourceSequenceUses;
+  expect(() => assertSourceSequencesInOutlines([page], [contract])).not.toThrow();
+  expect(section.pages[0]!.knowledgePointIds).toEqual(['kp-1']);
+
+  section.pages[0]!.keyPoints = ['活动说明'];
+  section.units[0]!.explanationNodes![0]!.content = '活动说明';
+  expect(findBlueprintFigureSequenceIssues(blueprint, [contract])[0]?.missingCanonicalLabels).toEqual(['观察']);
+  page.description = '活动说明';
+  page.keyPoints = ['活动说明'];
+  page.teachingBrief!.explanation = '活动说明';
+  page.teachingBrief!.teachingPlan = { ...authoredBrief('活动说明').teachingPlan!,
+    sourceSequenceUses: section.pages[0]!.sourceSequenceUses };
+  expect(() => assertSourceSequencesInOutlines([page], [contract])).toThrow('遗漏教材步骤：观察');
+
+  delete section.pptPlanningVersion;
+  delete page.teachingBrief!.pptPlanningVersion;
+  expect(findBlueprintFigureSequenceIssues(blueprint, [contract])[0]?.detail).toContain('缺少承接');
+  expect(() => assertSourceSequencesInOutlines([page], [contract])).toThrow('缺少知识讲解页');
+});
 
 it('uses the same actual selected textbook framework in blueprints and compiled outlines', () => {
   const sourceA = { resourceId: 'book-a-flow', required: false, coveragePolicy: 'authored-scope' as const,
@@ -369,7 +426,7 @@ describe('required textbook figure binding', () => {
       .toContain('活动评价');
   });
 
-  it('rejects complete raw unit text when canonical items disappear from the executable page', () => {
+  it('requires canonical list labels in actual visible or owned page content instead of unused unit text', () => {
     const labels = [
       '发挥身体认知的主体性,让学生亲身参与学习活动',
       '让学生学习的思维和过程变得直观可视',
@@ -394,12 +451,15 @@ describe('required textbook figure binding', () => {
     expect(() => assertSourceSequencesInOutlines(teachingBlueprintToOutlines(blueprint, ''), contracts))
       .toThrow('遗漏教材条目');
 
-    // Required definitions take precedence over similar keyPoints. Fixing
-    // only the raw page text must not hide the incomplete compiled content.
+    // This contract checks list labels, not their definitions. The real
+    // visible list can supply those names without forcing natural narration
+    // to repeat every heading verbatim. Definition completeness is separate.
+    const spoken = unit.explanationNodes![0]!.content;
     page.keyPoints = [`具身认知的教学设计原则：${labels.join('，')}。`];
-    expect(issues()).toContain(labels[0]);
+    expect(findBlueprintFigureSequenceIssues(blueprint, contracts)).toEqual([]);
     expect(() => assertSourceSequencesInOutlines(teachingBlueprintToOutlines(blueprint, ''), contracts))
-      .toThrow('遗漏教材条目');
+      .not.toThrow();
+    expect(unit.explanationNodes![0]!.content).toBe(spoken);
 
     unit.explanationNodes![0]!.content = page.keyPoints[0]!;
     expect(findBlueprintFigureSequenceIssues(blueprint, contracts)).toEqual([]);

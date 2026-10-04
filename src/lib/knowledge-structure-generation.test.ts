@@ -7,11 +7,14 @@ import {
   generateReviewedKnowledgeStructure,
   findKnowledgeSourceSequenceIssues,
   KNOWLEDGE_STRUCTURE_POLICY_VERSION,
+  KNOWLEDGE_STRUCTURE_COMPATIBLE_POLICY_VERSIONS,
   parseKnowledgeStructureJson,
 } from "@/lib/knowledge-structure-generation";
 import type { GenerateInput } from "@/lib/llm/types";
-import { buildKnowledgeGraphPrompt } from "@/lib/llm/prompts";
+import { buildAuthoritativeCourseBasisPrompt, buildKnowledgeGraphPrompt,
+  buildLessonOutlinePrompt, buildTeachingOutlinePrompt } from "@/lib/llm/prompts";
 import type { CourseEvidenceSnapshot } from "@/lib/textbook/course-evidence-types";
+import { buildAuthoringExcerptCatalog } from '@/lib/course-design/knowledge-authoring';
 
 const input: GenerateInput = {
   name: "自然语言处理",
@@ -55,6 +58,368 @@ const orderedTextbookEvidence: CourseEvidenceSnapshot = {
 };
 
 describe("reviewed knowledge structure generation", () => {
+  it.each(['knowledge-v8', undefined])('keeps fresh scope planning independent of a reported %s authoring shape', async (version) => {
+    const raw = JSON.stringify({ ...candidate, ...(version ? { authoringContract: version } : {}),
+      knowledgePoints: candidate.knowledgePoints.map((point) => ({ ...point,
+        authoring: { claims: [{ id: 'invented', kind: 'derived', text: '上游预写的完整讲解' }],
+          examples: [{ id: 'story', kind: 'constructed', title: '上游故事' }] },
+      })),
+    });
+    const aiCall = vi.fn().mockResolvedValue(raw);
+    const onCandidate = vi.fn();
+    const result = await generateKnowledgeStructureOnce(input, {}, { aiCall, onCandidate });
+    expect(aiCall).toHaveBeenCalledOnce();
+    expect(onCandidate).toHaveBeenCalledWith({ rawResponse: raw, attempt: 1 });
+    expect(result.knowledgeScopePlan?.policyVersion).toBe(KNOWLEDGE_STRUCTURE_POLICY_VERSION);
+    for (const [index, point] of result.knowledgePoints.entries()) {
+      expect(point).not.toHaveProperty('authoring');
+      expect(point.description).toBe(candidate.knowledgePoints[index]!.description);
+      expect(point.keyInfo).toBe(point.description);
+      expect(point.masteryBoundary).toBe(candidate.knowledgePoints[index]!.masteryBoundary);
+    }
+    const prerequisite = result.knowledgeGraph?.nodes.find((node) => node.instructionalRole === 'prerequisite');
+    expect(prerequisite?.keyInfo).toBe(candidate.knowledgeGraph.nodes.find((node) => node.instructionalRole === 'prerequisite')!.keyInfo);
+    const replay = await generateKnowledgeStructureOnce(input, {}, {
+      initialResponse: raw, responseContract: 'knowledge-plan-v1', aiCall,
+    });
+    expect(replay.knowledgePoints).toEqual(result.knowledgePoints);
+    expect(replay.knowledgeScopePlan?.policyVersion).toBe(KNOWLEDGE_STRUCTURE_POLICY_VERSION);
+    expect(aiCall).toHaveBeenCalledOnce();
+  });
+
+  it('replays a planning response with its explicit scope identity and no second request', async () => {
+    const response = JSON.stringify({ ...candidate, authoringContract: 'knowledge-plan-v1' });
+    const aiCall = vi.fn();
+    const result = await generateKnowledgeStructureOnce(input, {}, { initialResponse: response, aiCall });
+    expect(result.knowledgeScopePlan?.policyVersion).toBe(KNOWLEDGE_STRUCTURE_POLICY_VERSION);
+    expect(result.knowledgePoints[0]?.description).toBe(candidate.knowledgePoints[0]!.description);
+    expect(result.knowledgePoints[0]).not.toHaveProperty('authoring');
+    expect(aiCall).not.toHaveBeenCalled();
+  });
+
+  it('replays paid v7 excerpt duties and original conditions while restoring v6 raw unchanged', async () => {
+    const sentences = ['分类是按给定属性分组的操作。', '在标记清晰或附有记录时，可以按给定标签读取分组。'];
+    const evidence: CourseEvidenceSnapshot = { ...orderedTextbookEvidence, items: [{
+      ...orderedTextbookEvidence.items[0]!, id: 'sort',
+      source: { ...orderedTextbookEvidence.items[0]!.source, sourceBlockId: 'classification', quote: sentences.join('') },
+    }] };
+    const catalog = buildAuthoringExcerptCatalog(evidence);
+    const refs = sentences.map((sentence) => ({ evidenceItemId: 'sort', sourceBlockId: 'classification',
+      excerptId: catalog.sourceBlocks[0]!.excerpts.find((excerpt) => excerpt.text === sentence)!.excerptId }));
+    const raw = JSON.stringify({ authoringContract: 'knowledge-v7', knowledgePoints: [{
+      id: 'sort', name: '分类操作', description: '只有标签清晰才能读取所有信息', evidenceItemIds: ['sort'],
+      authoring: { claims: [{ id: 'meaning', kind: 'textbook', excerptRefs: refs,
+        authoritativeExcerpts: [{ excerptRef: refs[0], role: 'definition' }],
+        logicalConditions: ['标记清晰或附有记录', '标签必须始终清晰'] }],
+        learningTasks: [{ claimIds: ['meaning'], operation: 'explain' }] },
+    }], knowledgeGraph: { nodes: [], edges: [] } });
+    const aiCall = vi.fn().mockResolvedValue(raw);
+    const result = await generateKnowledgeStructureOnce(input, { textbookEvidence: evidence }, { initialResponse: raw, aiCall });
+    expect(result.knowledgePoints[0]).toMatchObject({ description: '围绕“分类操作”完成所选陈述的解释任务。',
+      authoring: { claims: [{ text: sentences.join('\n'), logicalConditions: ['标记清晰或附有记录'],
+        authoritativeExcerpts: [{ excerptRef: refs[0], role: 'definition' }] }] } });
+    expect(result.knowledgePoints[0]?.authoring?.diagnostics?.join('\n')).toContain('不将生成概括当作教材必要条件');
+    const restored = await generateKnowledgeStructureOnce(input, { textbookEvidence: evidence }, { initialResponse: raw, aiCall });
+    expect(restored.knowledgePoints).toEqual(result.knowledgePoints);
+    const legacy = JSON.parse(raw);
+    legacy.authoringContract = 'knowledge-v6';
+    delete legacy.knowledgePoints[0].authoring.claims[0].authoritativeExcerpts;
+    const old = await generateKnowledgeStructureOnce(input, { textbookEvidence: evidence }, {
+      initialResponse: JSON.stringify(legacy), aiCall,
+    });
+    expect(old.knowledgePoints[0]?.authoring?.claims[0]?.logicalConditions)
+      .toEqual(['标记清晰或附有记录', '标签必须始终清晰']);
+    expect(old.knowledgePoints[0]?.authoring?.claims[0]).not.toHaveProperty('authoritativeExcerpts');
+    expect(aiCall).not.toHaveBeenCalled();
+  });
+
+  it('replays paid v6 learning actions as legacy display fields without importing an answer-shaped summary', async () => {
+    const sourceText = '在指定温度下加入适量催化剂，反应可能更快达到终点。';
+    const strongerAnswer = '只有加入催化剂才能使所有反应达到终点。';
+    const evidence: CourseEvidenceSnapshot = { ...orderedTextbookEvidence, items: [{
+      ...orderedTextbookEvidence.items[0]!, id: 'reaction', content: strongerAnswer,
+      source: { ...orderedTextbookEvidence.items[0]!.source, sourceBlockId: 'effect', quote: sourceText },
+    }] };
+    const ref = { evidenceItemId: 'reaction', sourceBlockId: 'effect',
+      excerptId: buildAuthoringExcerptCatalog(evidence).evidenceItems[0]!.blocks[0]!.wholeBlockExcerptId };
+    const response = JSON.stringify({ authoringContract: 'knowledge-v6', knowledgePoints: [{
+      id: 'reaction', name: '反应条件', description: strongerAnswer, keyInfo: strongerAnswer,
+      masteryBoundary: `说明为什么${strongerAnswer}`, evidenceItemIds: ['reaction'],
+      authoring: { claims: [{ id: 'effect', kind: 'textbook', excerptRefs: [ref] }],
+        learningTasks: [{ claimIds: ['effect'], operation: 'explain' }, { claimIds: ['effect'], operation: 'apply' }] },
+    }], knowledgeGraph: { nodes: [{ id: 'reaction', description: strongerAnswer }], edges: [] } });
+    const aiCall = vi.fn().mockResolvedValue(response);
+    const context = { textbookEvidence: evidence };
+    const result = await generateKnowledgeStructureOnce(input, context, { initialResponse: response, aiCall });
+    const point = result.knowledgePoints[0]!;
+    expect(point).toMatchObject({
+      description: '围绕“反应条件”完成所选陈述的解释、应用任务。',
+      keyInfo: '理解所选陈述及其条件，完成解释、应用。',
+      masteryBoundary: '能够依据所选陈述及给定情境解释、应用“反应条件”。',
+      authoring: { learningTasks: [{ claimIds: ['effect'], operation: 'explain' }, { claimIds: ['effect'], operation: 'apply' }] },
+    });
+    expect(point.authoring?.claims[0]?.text).toBe(sourceText);
+    expect([point.description, point.keyInfo, point.masteryBoundary].join('\n')).not.toContain(strongerAnswer);
+    expect([point.description, point.keyInfo, point.masteryBoundary].join('\n')).not.toContain(sourceText);
+    expect(result.knowledgeGraph?.nodes.find((node) => node.id === point.id)).toMatchObject({
+      description: point.description, keyInfo: point.keyInfo, masteryBoundary: point.masteryBoundary,
+    });
+    const restored = await generateKnowledgeStructureOnce(input, context, { initialResponse: response, aiCall });
+    expect(restored.knowledgePoints).toEqual(result.knowledgePoints);
+    expect(aiCall).not.toHaveBeenCalled();
+    const old = await generateKnowledgeStructureOnce(input, context, {
+      initialResponse: response.replace('knowledge-v6', 'knowledge-v5'), aiCall,
+    });
+    expect(old.knowledgePoints[0]).toMatchObject({ description: strongerAnswer, keyInfo: strongerAnswer,
+      masteryBoundary: `说明为什么${strongerAnswer}` });
+    expect(aiCall).not.toHaveBeenCalled();
+  });
+
+  it('replays paid v5 factual identity without treating current planning responsibilities as sources', async () => {
+    const sourceText = '在适用条件下，过滤材料通常有利于减少液体中的悬浮颗粒。';
+    const upstreamAnswer = '过滤材料是去除全部杂质的唯一必要办法。';
+    const evidence: CourseEvidenceSnapshot = { ...orderedTextbookEvidence,
+      mappings: [{ sourceKnowledgePointId: 'teacher-filter', sourceKnowledgePointName: '过滤材料的作用',
+        status: 'direct', evidenceItemIds: ['filtration'], rationale: '相关原文' }], items: [{
+      ...orderedTextbookEvidence.items[0]!, id: 'filtration',
+      content: upstreamAnswer,
+      source: { ...orderedTextbookEvidence.items[0]!.source, sourceBlockId: 'filter-definition', quote: sourceText },
+    }] };
+    const catalog = buildAuthoringExcerptCatalog(evidence);
+    const response = JSON.stringify({ authoringContract: 'knowledge-v5', knowledgePoints: [{
+      id: 'filter', name: '过滤材料的作用', sourceKnowledgePointIds: ['teacher-filter'], evidenceItemIds: ['filtration'],
+      authoring: { claims: [{ id: 'effect', kind: 'textbook',
+        excerptRefs: [{ evidenceItemId: 'filtration', sourceBlockId: 'filter-definition',
+          excerptId: catalog.evidenceItems[0]!.blocks[0]!.wholeBlockExcerptId }] }] },
+    }], knowledgeGraph: { nodes: [], edges: [] } });
+    const context = { textbookEvidence: evidence,
+      teacherKnowledgePoints: [{ id: 'teacher-filter', name: '过滤材料的作用', description: upstreamAnswer }] };
+    const aiCall = vi.fn().mockResolvedValue(response);
+    const generated = await generateKnowledgeStructureOnce(input, context, { initialResponse: response, aiCall });
+    const prompt = buildKnowledgeGraphPrompt(input, context).user;
+    const responsibilities = JSON.parse(prompt.split('教学职责目录：')[1]!.split('\n')[0]!);
+    expect(responsibilities).toEqual([{ id: 'teacher-filter', name: '过滤材料的作用', teachingResponsibility: upstreamAnswer }]);
+    expect(responsibilities[0]).not.toHaveProperty('description');
+    expect(prompt.indexOf('任务与规划输入')).toBeLessThan(prompt.indexOf('事实依据与原文选择目录'));
+    expect(generated.knowledgePoints[0]?.description).not.toBe(upstreamAnswer);
+    expect(generated.knowledgePoints[0]?.keyInfo).not.toBe(upstreamAnswer);
+    expect(generated.knowledgePoints[0]?.authoring?.claims).toEqual([{
+      id: 'effect', kind: 'textbook', text: sourceText,
+      excerptRefs: [{ evidenceItemId: 'filtration', sourceBlockId: 'filter-definition',
+        excerptId: catalog.evidenceItems[0]!.blocks[0]!.wholeBlockExcerptId }],
+      sources: [{ evidenceItemId: 'filtration', sourceBlockIds: ['filter-definition'], quote: sourceText,
+        textbookId: 'book', revisionId: 'main' }],
+    }]);
+    const restored = await generateKnowledgeStructureOnce(input, context, { initialResponse: response, aiCall });
+    expect(restored.knowledgePoints).toEqual(generated.knowledgePoints);
+    expect(aiCall).not.toHaveBeenCalled();
+    const older = await generateKnowledgeStructureOnce(input, context, {
+      initialResponse: response.replace('knowledge-v5', 'knowledge-v4'), aiCall,
+    });
+    expect(older.knowledgePoints[0]?.description).toBe(upstreamAnswer);
+    expect(aiCall).not.toHaveBeenCalled();
+  });
+
+  it('replays paid v2 conditional claims and concrete cases without another request', async () => {
+    const sourcePoint = { id: 'source-classification', name: '分类判据', description: '明确判据对分类结果的影响' };
+    const logicalConditions = ['当前对象执行预先配置的尺寸判据'];
+    const objectAndTask = '一台分拣装置要把两种指定尺寸的物体分到各自位置。';
+    const actions = ['输入第一件物体', '观察分类位置', '输入第二件物体', '观察分类位置'];
+    const raw = JSON.stringify({ authoringContract: 'knowledge-v2', knowledgePoints: [{
+      id: 'classification', name: '分类判据与结果', description: '解释明确的判据如何影响分类结果',
+      sourceKnowledgePointIds: ['source-classification'], authoring: {
+        claims: [{ id: 'configured-rule', kind: 'derived', text: '在所述配置下，装置按尺寸判据分类。',
+          logicalConditions, teachingScope: '本课以这台装置的两种尺寸任务解释分类', basisClaimIds: [], sources: [] }],
+        examples: [{ id: 'sorter', kind: 'constructed', title: '一次分拣任务', facts: [], explanation: '',
+          objectAndTask, assumptions: ['已配置两种尺寸判据'], actions,
+          outcome: '两件物体分别进入对应位置。', conceptMapping: '所配置的判据决定本次分拣结果。',
+          claimIds: ['configured-rule'], sources: [] }],
+      },
+    }], knowledgeGraph: { nodes: [], edges: [] } });
+    const modelCall = vi.fn().mockResolvedValue(raw);
+    const context = { teacherKnowledgePoints: [sourcePoint] };
+    const generated = await generateKnowledgeStructureOnce(input, context, { initialResponse: raw, modelCall });
+    const authoring = generated.knowledgePoints[0]?.authoring;
+    expect(authoring?.claims[0]).toMatchObject({ logicalConditions,
+      teachingScope: '本课以这台装置的两种尺寸任务解释分类', basisClaimIds: [] });
+    expect(authoring?.examples[0]).toMatchObject({ objectAndTask, actions,
+      outcome: '两件物体分别进入对应位置。', claimIds: ['configured-rule'], facts: [] });
+    expect(generated.knowledgePoints[0]?.sourceKnowledgePointIds).toEqual(['source-classification']);
+    const restored = await generateKnowledgeStructureOnce(input, context, { initialResponse: raw, modelCall });
+    expect(restored.knowledgePoints[0]?.authoring).toEqual(authoring);
+    expect(modelCall).not.toHaveBeenCalled();
+    expect(buildKnowledgeGraphPrompt(input, context).user).toContain('authoringContract=knowledge-plan-v1');
+    expect(KNOWLEDGE_STRUCTURE_COMPATIBLE_POLICY_VERSIONS).toEqual([
+      KNOWLEDGE_STRUCTURE_POLICY_VERSION,
+      'textbook-evidence-mapping-v17-source-block-readings',
+      'textbook-evidence-mapping-v16-authoritative-excerpt-duties',
+      'textbook-evidence-mapping-v15-reference-learning-intents',
+      'textbook-evidence-mapping-v14-planning-facts-separated',
+      'textbook-evidence-mapping-v13-case-element-correspondence',
+      'textbook-evidence-mapping-v12-immutable-excerpt-authoring',
+      'textbook-evidence-mapping-v11-conditional-case-authoring',
+      'textbook-evidence-mapping-v10-source-bound-authoring',
+      'textbook-evidence-mapping-v9-single-authoring',
+      'textbook-evidence-mapping-v8-complete-source-sequences',
+    ]);
+  });
+
+  it('replays paid v4 case-element correspondences without another request or an extra case explanation', async () => {
+    const context = { teacherKnowledgePoints: [{ id: 'control', name: '条件与输出', description: '观察装置在有效条件下的输出' }] };
+    const correspondence = { claimId: 'update', claimPhrase: '有效读数', caseElement: { field: 'actions', index: 0 } };
+    const response = JSON.stringify({ authoringContract: 'knowledge-v4', knowledgePoints: [{
+      id: 'control', name: '条件与输出', description: '从指定装置的两次操作理解成立前提', sourceKnowledgePointIds: ['control'],
+      authoring: { claims: [{ id: 'update', kind: 'derived', text: '本次装置收到有效读数并完成比较后更新输出。',
+        logicalConditions: ['有效读数已经取得', '本次比较已经完成'], sources: [] }], examples: [{
+        id: 'controller', kind: 'constructed', title: '补齐输入后完成比较', purpose: '演示取得事实后再执行比较的过程',
+        objectAndTask: '操作员让已配置装置按目标值更新输出。', assumptions: ['目标值已设定'],
+        actions: ['补齐有效读数', '与目标值比较'], outcome: '装置按本次配置更新输出。',
+        correspondences: [correspondence],
+      }] },
+    }], knowledgeGraph: { nodes: [], edges: [] } });
+    const modelCall = vi.fn().mockResolvedValue(response);
+    const generated = await generateKnowledgeStructureOnce(input, context, { initialResponse: response, modelCall });
+    expect(generated.knowledgePoints[0]?.authoring?.examples[0]).toMatchObject({
+      explanation: '', actions: ['补齐有效读数', '与目标值比较'], correspondences: [correspondence],
+    });
+    expect(generated.knowledgePoints[0]?.authoring?.examples[0]?.conceptMapping).toBeUndefined();
+    expect(generated.knowledgePoints[0]?.authoring?.examples[0]?.claimIds).toBeUndefined();
+    expect(generated.knowledgePoints[0]?.authoring?.claims[0]?.logicalConditions)
+      .toEqual(['有效读数已经取得', '本次比较已经完成']);
+    const restored = await generateKnowledgeStructureOnce(input, context, { initialResponse: response, modelCall });
+    expect(restored.knowledgePoints[0]?.authoring).toEqual(generated.knowledgePoints[0]?.authoring);
+    expect(restored.knowledgeScopePlan?.decisions[0]?.targetKnowledgePointIds).toEqual(['control']);
+    expect(modelCall).not.toHaveBeenCalled();
+  });
+
+  it('replays paid v3 immutable textbook claims and cross-paragraph cases without another request', async () => {
+    const definition = '表征方式为处理任务提供可以操作的知识形式。';
+    const facts = ['装置只有按颜色分类的规则，输入是一组指定物体。', '执行这组规则后，物体进入各自的颜色位置。'];
+    const source = { ...orderedTextbookEvidence.items[0]!.source, sourceBlockId: 'definition', quote: definition };
+    const evidence: CourseEvidenceSnapshot = { ...orderedTextbookEvidence,
+      mappings: [{ sourceKnowledgePointId: 'representation', sourceKnowledgePointName: '知识表征',
+        status: 'direct', evidenceItemIds: ['representation-evidence'], rationale: '相关原文' }],
+      items: [{ ...orderedTextbookEvidence.items[0]!, id: 'representation-evidence', source,
+        content: '生成索引不应成为定义', completeSourceBlocks: facts.map((content, index) => ({
+          sourceBlockId: `case-${index}`, content, source: { ...source, sourceBlockId: `case-${index}`,
+            sourceBlockPosition: 20 + index, quote: undefined },
+        })), sourceContext: { policyVersion: 1, status: 'complete',
+          sourceBlockIds: ['definition', 'case-0', 'case-1'] } }],
+    };
+    const catalog = buildAuthoringExcerptCatalog(evidence);
+    const ref = (sourceBlockId: string) => ({ evidenceItemId: 'representation-evidence', sourceBlockId,
+      excerptId: catalog.evidenceItems[0]!.blocks.find((block) => block.sourceBlockId === sourceBlockId)!.wholeBlockExcerptId });
+    const response = JSON.stringify({ authoringContract: 'knowledge-v3', data: {
+      knowledgePoints: [{ id: 'representation', name: '知识表征', evidenceItemIds: ['representation-evidence'],
+        sourceKnowledgePointIds: ['representation'], description: '比较表示与处理任务之间的关系',
+        keyInfo: '说明不同任务怎样使用各自的知识形式', authoring: {
+          claims: [{ id: 'definition', kind: 'textbook', excerptRefs: [ref('definition')], logicalConditions: [] }],
+          examples: [{ id: 'sorter', kind: 'textbook', title: '一次分类过程', purpose: '说明表示的应用',
+            factRefs: [ref('case-0'), ref('case-1')], explanation: '所述颜色规则服务于这次分类任务。', claimIds: ['definition'] }],
+          exampleCoverage: [{ revisionId: 'main', status: 'complete', evidenceItemIds: ['representation-evidence'] }],
+        } }], knowledgeGraph: { nodes: [], edges: [] },
+    } });
+    const modelCall = vi.fn().mockResolvedValue(response);
+    const context = { textbookEvidence: evidence, teacherKnowledgePoints: [
+      { id: 'representation', name: '知识表征', description: '理解表征方式' },
+    ] };
+    const generated = await generateKnowledgeStructureOnce(input, context, { initialResponse: response, modelCall });
+    const authoring = generated.knowledgePoints[0]?.authoring;
+    expect(authoring?.claims).toEqual([{ id: 'definition', kind: 'textbook', text: definition,
+      excerptRefs: [ref('definition')], logicalConditions: [], sources: [{ evidenceItemId: 'representation-evidence',
+        sourceBlockIds: ['definition'], quote: definition, textbookId: 'book', revisionId: 'main' }] }]);
+    expect(authoring?.examples[0]).toMatchObject({ kind: 'textbook', facts, factRefs: [ref('case-0'), ref('case-1')],
+      explanation: '所述颜色规则服务于这次分类任务。', claimIds: ['definition'] });
+    expect(authoring?.examples[0]?.sources.map((binding) => binding.quote)).toEqual(facts);
+    expect(authoring?.diagnostics).toBeUndefined();
+    expect(generated.knowledgeScopePlan?.decisions[0]?.targetKnowledgePointIds).toEqual(['representation']);
+    const prompt = buildKnowledgeGraphPrompt(input, context).user;
+    expect(prompt).toContain(definition);
+    const restored = await generateKnowledgeStructureOnce(input, context, { initialResponse: response, modelCall });
+    expect(restored.knowledgePoints[0]?.authoring).toEqual(authoring);
+    expect(modelCall).not.toHaveBeenCalled();
+  });
+
+  it('requests only scope and source planning while retaining prerequisite diagnostic content', () => {
+    const prompt = buildKnowledgeGraphPrompt(input, { teachingCapacity: {
+      durationRangeMin: 5, durationRangeMax: 6, planningDurationMin: 5,
+      durationSource: 'resource-package', assessmentReserveMin: 1, explanationAndActivityMin: 4,
+    } }).user;
+    const schema = JSON.parse(prompt.slice(prompt.lastIndexOf('仅返回 JSON：') + '仅返回 JSON：'.length));
+    expect(schema.authoringContract).toBe('knowledge-plan-v1');
+    expect(schema.knowledgePoints[0]).toHaveProperty('description');
+    expect(schema.knowledgePoints[0]).toHaveProperty('masteryBoundary');
+    expect(schema.knowledgePoints[0]).not.toHaveProperty('authoring');
+    expect(schema.knowledgePoints[0]).not.toHaveProperty('keyInfo');
+    expect(schema.knowledgeGraph.nodes[0]).toMatchObject({ instructionalRole: 'prerequisite',
+      description: expect.any(String), keyInfo: expect.any(String), priorKnowledgeEvidence: expect.any(String),
+      diagnosticBoundary: expect.any(String) });
+    expect(prompt).toContain('不是教材定义、事实结论或题目答案');
+    expect(prompt).not.toContain('authoringExcerptCatalog');
+    expect(prompt).not.toContain('learningTasks');
+    expect(prompt).toContain('知识讲授参考时长：原规划 5 分钟');
+    expect(prompt).toContain('完整教学可超出参考总课时');
+  });
+
+  it('treats teaching time as reference in resource entry points while retaining nominal allocation contracts', () => {
+    const basis = buildAuthoritativeCourseBasisPrompt(input);
+    const teaching = buildTeachingOutlinePrompt(input).user;
+    const resources = buildLessonOutlinePrompt(input).user;
+    for (const prompt of [basis, teaching, resources]) {
+      expect(prompt).toContain('允许超出参考时间');
+      expect(prompt).not.toContain('内容深度、练习数量和成果复杂度必须与总课时匹配');
+      expect(prompt).not.toContain('必须先按知识讲授预算选择能讲清的目标');
+    }
+    expect(teaching).toContain('各模块 durationMin 合计必须等于该总时长');
+    expect(resources).toContain('每个父模块的 targetDurationSec 合计必须等于父级 durationMin×60');
+    expect(resources).toContain('预算只作节奏参考');
+    expect(resources).toContain('不为贴近预算删减必授内容、加快朗读或凑字数');
+    expect(resources).not.toContain('让讲稿贴近模型预算');
+  });
+
+  it('replays paid v1 provenance and all case candidates without another request', async () => {
+    const definition = '学习者结合已有经验主动建构对新信息的理解。';
+    const cases = ['青蛙描述牛有四条腿和角。', '小鱼想象了一条带腿和角的鱼。', '孩子把第一次看到的鲸鱼归入熟悉的鱼类。'];
+    const evidence: CourseEvidenceSnapshot = { ...orderedTextbookEvidence,
+      mappings: [{ sourceKnowledgePointId: 'source', sourceKnowledgePointName: '主动建构',
+        status: 'direct', evidenceItemIds: ['constructivism'], rationale: '相关原文' }],
+      items: [{ ...orderedTextbookEvidence.items[0]!, id: 'constructivism', title: '主动建构',
+        content: definition, source: { ...orderedTextbookEvidence.items[0]!.source,
+          sourceBlockId: 'definition', sourceBlockPosition: 10, quote: definition, sectionId: 'topic' },
+        completeSourceBlocks: cases.map((content, index) => ({ sourceBlockId: `case-${index}`, content })),
+        sourceContext: { policyVersion: 1, status: 'complete', sectionId: 'topic',
+          sourceBlockIds: ['definition', 'case-0', 'case-1', 'case-2'] },
+      }],
+    };
+    const source = (quote: string, sourceBlockIds: string[]) => ({ evidenceItemId: 'constructivism', sourceBlockIds, quote });
+    const response = JSON.stringify({ authoringContract: 'knowledge-v1', knowledgePoints: [{
+      id: 'active', name: '主动建构', evidenceItemIds: ['constructivism'],
+      keyInfo: '已有经验影响新信息的理解。', authoring: {
+        claims: [{ id: 'meaning', kind: 'textbook', text: definition, sources: [source(definition, ['definition'])] },
+          { id: 'suggestion', kind: 'textbook', text: '这种方法只适合技能初期。', sources: [source(definition, ['definition'])] }],
+        examples: [{ id: 'fish', kind: 'textbook', title: '小鱼想象牛', purpose: '解释已有经验的作用',
+          facts: cases.slice(0, 2), explanation: '小鱼借熟悉形象理解新的描述。',
+          sources: [source(cases.slice(0, 2).join('\n'), ['case-0', 'case-1'])] },
+          { id: 'whale', kind: 'textbook', title: '孩子认识鲸鱼', purpose: '比较旧分类与新观察',
+            facts: [cases[2]], explanation: '先用已有分类理解陌生动物。', sources: [source(cases[2], ['case-2'])] }],
+        exampleCoverage: [{ revisionId: 'main', status: 'complete', evidenceItemIds: ['constructivism'] }],
+      },
+    }], knowledgeGraph: { nodes: [], edges: [] } });
+    const modelCall = vi.fn().mockResolvedValue(response);
+    const context = { textbookEvidence: evidence };
+    const result = await generateKnowledgeStructureOnce(input, context, { initialResponse: response, modelCall });
+    expect(modelCall).not.toHaveBeenCalled();
+    expect(result.knowledgePoints[0]?.authoring?.claims.map((claim) => claim.kind)).toEqual(['textbook', 'derived']);
+    expect(result.knowledgePoints[0]?.authoring?.examples.map((example) => example.id)).toEqual(['fish', 'whale']);
+    expect(result.knowledgePoints[0]?.authoring?.examples[0]?.facts).toEqual(cases.slice(0, 2));
+    expect(result.knowledgePoints[0]?.authoring?.exampleCoverage[0]?.status).toBe('complete');
+    const prompt = buildKnowledgeGraphPrompt(input, context).user;
+    expect(prompt).toContain(cases[1]);
+    const restored = await generateKnowledgeStructureOnce(input, context, { initialResponse: response, modelCall });
+    expect(restored.knowledgePoints[0]?.authoring).toEqual(result.knowledgePoints[0]?.authoring);
+    expect(modelCall).not.toHaveBeenCalled();
+  });
+
   it('rejects a five-stage knowledge description when the adopted source contains six', () => {
     const evidence: CourseEvidenceSnapshot = { ...orderedTextbookEvidence, items: [{
       ...orderedTextbookEvidence.items[0]!, id: 'project-evidence',
@@ -95,7 +460,7 @@ describe("reviewed knowledge structure generation", () => {
       sequenceSemantics: 'ordered-steps', orderedSteps: evidence.items[0].sourceSequences![0].steps,
     }]);
     expect(findKnowledgeSourceSequenceIssues(result.knowledgePoints, evidence)).toEqual([]);
-    expect(modelCall.mock.calls[0][0][1].content).toContain('description 和 keyInfo 是准确的课程知识摘要');
+    expect(modelCall.mock.calls[0][0][1].content).toContain('本次仅生成知识规划');
   });
 
   it.each([
@@ -670,7 +1035,7 @@ describe("reviewed knowledge structure generation", () => {
     );
     expect(result.knowledgePoints.every((point) => point.sourceKnowledgePointIds?.length === 5)).toBe(true);
     expect(result.knowledgePoints.map((point) => point.keyInfo)).toEqual(
-      compiledPoints.map((point) => point.keyInfo),
+      compiledPoints.map((point) => point.description),
     );
     expect(result.knowledgePoints.flatMap((point) => point.sourceKnowledgePointIds ?? []))
       .toEqual(teacherKnowledgePoints.map((point) => point.id));

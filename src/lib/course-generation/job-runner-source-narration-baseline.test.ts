@@ -2,9 +2,14 @@ import { describe, expect, it, vi } from 'vitest';
 import type { GeneratedSlideContent, SceneOutline } from '@/lib/openmaic/types/generation';
 import type { Scene } from '@/lib/openmaic/types/stage';
 import type { FigureSequenceContract } from '@/lib/textbook/course-visual-binding';
-import { fingerprintSceneOutline, type SceneStageCheckpointSnapshot } from './page-checkpoints';
+import type { KnowledgePoint } from '@/lib/session/types';
+import type { KnowledgeAuthoring } from '@/lib/course-design/knowledge-authoring';
+import { formatCourseEvidenceContext, type CourseEvidenceSnapshot } from '@/lib/textbook/course-evidence-types';
+import { buildFirstPassTeachingInput } from '@/lib/openmaic/generation/first-pass-authoring';
+import { fingerprintGenerationValue, fingerprintSceneOutline, type SceneStageCheckpointSnapshot } from './page-checkpoints';
 import {
-  createSourceNarrationBaselineCheckpoint, fingerprintCourseFinalizationRequest,
+  buildCourseGenerationKnowledgeContext, createSourceNarrationBaselineCheckpoint, fingerprintCourseFinalizationRequest,
+  restoreCompletedTestLessonContext,
   restoreOrGenerateFinalizedClassroom, restoreSourceNarrationBaselineCheckpoint, restoreSourceNarrationBaselineStage,
   sourceNarrationBaselineInputFingerprints,
   type PersistedCourseGenerationRequest,
@@ -57,8 +62,127 @@ function fixture(options: { sameSection?: boolean; sameNarrationFingerprint?: bo
   const baseline = createSourceNarrationBaselineCheckpoint({ finalization, request: actualRequest, preparedOutlines: actualOutlines,
     stageCheckpoints: stages, sourceContextFingerprint });
   if (!baseline) throw new Error('Fixture must be a complete identity-checked baseline');
-  return { finalization, baseline, stages };
+  return { finalization, baseline, stages, actualRequest };
 }
+
+function authoringFixture(): KnowledgeAuthoring {
+  return {
+    claims: [{ id: 'source', kind: 'textbook', text: '处理对象决定所需的表示形式。', sources: [] },
+      { id: 'application', kind: 'derived', text: '当前程序的具名字段接口要求记录按相应字段提供。',
+        logicalConditions: ['当前程序只接收具名字段'], basisClaimIds: ['source'], sources: [] },
+      { id: 'unused', kind: 'derived', text: '未采用概括不能增加当前页的讲授职责。', sources: [] }],
+    examples: [{ id: 'record', kind: 'constructed', title: '输入一条记录', purpose: '说明具体接口要求',
+      facts: [], explanation: '旧案例解释副本', objectAndTask: '把一条记录交给当前程序处理',
+      assumptions: ['当前程序只接收具名字段'], actions: ['按接口字段提供同一条完整记录'], outcome: '程序收到所需输入',
+      correspondences: [{ claimId: 'application', claimPhrase: '具名字段接口',
+        caseElement: { field: 'actions', index: 0 } }], sources: [] }],
+    exampleCoverage: [],
+  };
+}
+
+describe('separate production teaching knowledge and immutable source adoption', () => {
+  it('preserves empty and absent adoption fields without adding authoring to their identity', () => {
+    const points = [{ id: 'empty', evidenceItemIds: [], authoring: authoringFixture() },
+      { id: 'legacy', authoring: authoringFixture() }, { id: 'adopted', evidenceItemIds: ['original'] }];
+    const before = JSON.stringify(points);
+    const context = buildCourseGenerationKnowledgeContext(points);
+    expect(context.sourceKnowledgePoints).toEqual([{ id: 'empty', evidenceItemIds: [] },
+      { id: 'legacy' }, { id: 'adopted', evidenceItemIds: ['original'] }]);
+    expect(context.sourceKnowledgePoints![0]!.evidenceItemIds).not.toBe(points[0]!.evidenceItemIds);
+    expect(context.teachingAuthoringKnowledge!.map((point) => point.id)).toEqual(['empty', 'legacy']);
+    expect(context.teachingAuthoringKnowledge![0]).not.toHaveProperty('evidenceItemIds');
+    expect(JSON.stringify(points)).toBe(before);
+    expect(buildCourseGenerationKnowledgeContext(undefined)).toEqual({ sourceKnowledgePoints: undefined,
+      teachingAuthoringKnowledge: undefined });
+  });
+
+  it('resolves actual prior claim and case dependencies without expanding current page duties', () => {
+    const prior = authoringFixture();
+    const empty: KnowledgeAuthoring = { claims: [], examples: [], exampleCoverage: [] };
+    const points: Array<Pick<KnowledgePoint, 'id' | 'evidenceItemIds' | 'authoring'>> = [
+      { id: 'prior', evidenceItemIds: ['original'], authoring: prior },
+      { id: 'current', evidenceItemIds: [], authoring: empty },
+      { id: 'unrelated', authoring: authoringFixture() },
+    ];
+    const current: SceneOutline = { ...outline, knowledgePointIds: ['current'], teachingBrief: {
+      schemaVersion: 1, explanation: '兼容副本', examples: [], conditions: [], evidence: [], assessmentFocus: '判断输入条件',
+      teachingPlan: { purpose: '使用已建立的接口条件作判断', priorKnowledge: '已理解当前程序的接口',
+        newContent: '兼容副本', learnerQuestion: '怎样判断这次输入', reasoningSteps: [], takeaway: '兼容概括',
+        visibleContent: [], narrationFocus: [], introduces: ['current-analysis'] },
+      understandingCriteria: { goals: ['根据给定接口判断输入'], answerEssentials: [], misconceptions: [], supportingUnitIds: [],
+        basis: [{ id: 'application-goal', goal: '根据给定接口判断输入', nodeIds: ['prior-analysis'],
+          claimRefs: [{ knowledgePointId: 'prior', claimId: 'application' }],
+          exampleRefs: [{ knowledgePointId: 'prior', exampleId: 'record' }] }] },
+      authoring: { knowledge: [{ knowledgePointId: 'current', authoring: empty }], examplePlans: [],
+        nodes: [{ id: 'current-analysis', kind: 'mechanism', content: '本页只说明新增判断。',
+          knowledgePointIds: ['current'], prerequisiteNodeIds: ['prior-analysis'], provenance: 'derived', claimRefs: [], quoteDuties: [] }],
+        basisNodes: [{ id: 'prior-analysis', kind: 'relation', content: '此前依据具体接口解释过输入条件。',
+          knowledgePointIds: ['prior'], prerequisiteNodeIds: [], provenance: 'derived',
+          claimRefs: [{ knowledgePointId: 'prior', claimId: 'application' }], quoteDuties: [] }],
+      },
+    } };
+    const context = buildCourseGenerationKnowledgeContext(points);
+    const requestBody = buildFirstPassTeachingInput([current], context.teachingAuthoringKnowledge);
+    expect(requestBody.catalog.statements.map((claim) => [claim.knowledgePointId, claim.claimId]))
+      .toEqual([['prior', 'application'], ['prior', 'source']]);
+    expect(requestBody.catalog.cases[0]).toMatchObject({ knowledgePointId: 'prior', exampleId: 'record',
+      claimRefs: [{ knowledgePointId: 'prior', claimId: 'application' }] });
+    expect(requestBody.catalog.texts[requestBody.catalog.cases[0]!.assumptionsRefs![0]!]).toBe(prior.examples[0]!.assumptions![0]);
+    expect(requestBody.catalog.basisNodes![0]).toMatchObject({ id: 'prior-analysis', quoteDuties: [] });
+    expect(requestBody.catalog.explanationNodes.map((node) => node.id)).toEqual(['current-analysis']);
+    expect(requestBody.pages.get(current.id)).toMatchObject({ nodeDuties: [{ nodeId: 'current-analysis', role: 'introduce' }],
+      examplePlans: [], caseRefs: [] });
+    expect(current.knowledgePointIds).toEqual(['current']);
+    expect(context.sourceKnowledgePoints![1]).toEqual({ id: 'current', evidenceItemIds: [] });
+    expect(JSON.stringify(requestBody.catalog)).not.toContain('未采用概括');
+    expect(JSON.stringify(requestBody.catalog)).not.toContain('旧案例解释副本');
+  });
+
+  it.each(['source-fingerprint', 'legacy-source-witness'] as const)(
+    'keeps completed trial speech and audio promotion through %s after authoring is supplied separately', (sourceProof) => {
+      const { finalization, stages, actualRequest } = fixture({ sameSection: true });
+      const trialOutlines = finalization.generated.assetContext.outlines;
+      const points = trialOutlines.map((page) => ({ id: page.knowledgePointIds![0]!,
+        evidenceItemIds: ['original'], authoring: authoringFixture() }));
+      const context = buildCourseGenerationKnowledgeContext(points);
+      const sourceEvidence: CourseEvidenceSnapshot = { schemaVersion: 2, version: 1, fingerprint: 'immutable-book',
+        createdAt: '2026-10-02T00:00:00Z', retrievalMode: 'hybrid', warnings: [],
+        selections: [{ revisionId: 'rev', primary: true, sectionIds: [] }],
+        items: [{ id: 'original', kind: 'source-block', title: '原文', content: completeClauses,
+          source: { textbookId: 'book', textbookTitle: '教材', revisionId: 'rev', revisionVersion: 1,
+            sectionPath: ['项目学习'], sourceBlockId: 'block', quote: completeClauses } }],
+        mappings: points.map((point) => ({ sourceKnowledgePointId: point.id, sourceKnowledgePointName: point.id,
+          status: 'direct', evidenceItemIds: ['original'], rationale: '原已采用段落' })),
+      };
+      const sources = { sourceEvidence, sourceKnowledgePoints: context.sourceKnowledgePoints, sourceSequenceContracts: [contract] };
+      const oldShape = { ...sources, sourceKnowledgePoints: points.map((point) => ({ id: point.id,
+        evidenceItemIds: [...point.evidenceItemIds] })) };
+      expect(fingerprintGenerationValue(sources)).toBe(fingerprintGenerationValue(oldShape));
+      const target = { sectionId: trialOutlines[0]!.lectureSectionId!, sectionTitle: '已完成试课',
+        sceneOutlineIds: trialOutlines.map((page) => page.id), durationSeconds: 200 };
+      const promotedRequest: PersistedCourseGenerationRequest = { ...actualRequest,
+        generationScope: 'full-course', knowledgePoints: sources.sourceKnowledgePoints,
+        teachingSourceContext: formatCourseEvidenceContext(sourceEvidence) };
+      const oldNarrationFingerprint = fingerprintGenerationValue('old-completed-trial-section');
+      const priorStages = stages.map((stage) => stage.stage === 'narration'
+        ? { ...stage, inputFingerprint: oldNarrationFingerprint } : stage);
+      const result = restoreCompletedTestLessonContext({ request: promotedRequest, classroomId: 'classroom',
+        run: { scope: 'test-lesson', status: 'completed', testLesson: target, fullOutlineCount: 4,
+          generatedOutlineIds: trialOutlines.map((page) => page.id) }, sources,
+        authoringHistory: [{ request: { ...promotedRequest, generationScope: 'test-lesson', testLesson: target },
+          stages: priorStages }],
+        finalization: { ...finalization, generated: { ...finalization.generated, id: 'classroom',
+          assetContext: { outlines: trialOutlines, ...(sourceProof === 'source-fingerprint'
+            ? { narrationSourceFingerprint: fingerprintGenerationValue(oldShape) } : {}) } } },
+      });
+      expect(result?.narrationStages).toEqual(priorStages.filter((stage) => stage.stage === 'narration'));
+      expect(result?.narrationBaseline?.scenes).toEqual(finalization.generated.scenes);
+      expect(result?.narrationBaseline?.scenes[0]!.actions![0]).toMatchObject({ text: explanation, audioUrl: '/original-reflection.wav' });
+      expect(result?.narrationBaseline?.narrationInputFingerprints).toEqual({
+        'reflection-section': [oldNarrationFingerprint],
+      });
+    });
+});
 
 describe('immutable source narration baseline recovery', () => {
   it('restores original narration and media despite source-content differences without an intermediate baseline capture', async () => {

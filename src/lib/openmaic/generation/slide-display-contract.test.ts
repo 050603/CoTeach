@@ -10,7 +10,7 @@ const outline = fixture.outline as unknown as SceneOutline;
 let compiled: GeneratedSlideContent;
 beforeAll(async () => {
   const result = await generateOpenMaicBaselineContent(outline, async () => fixture.response, {
-    componentAuthoring: true, slideAuthoring: 'native', textMeasure: measureAuthoredSlideText,
+    visualProjection: false, componentAuthoring: true, slideAuthoring: 'native', textMeasure: measureAuthoredSlideText,
   });
   if (!result || !('elements' in result)) throw new Error('Expected fixture to compile');
   compiled = result;
@@ -54,7 +54,7 @@ function verifiedProjectionFixture() {
   return { page, content };
 }
 
-describe('shared adopted slide display acceptance', () => {
+describe('saved placement/projection display acceptance (legacy fixture replay)', () => {
   it('accepts host-verified short prose only through its readable mapped native elements', () => {
     const { page, content } = verifiedProjectionFixture();
     const before = structuredClone(page);
@@ -265,7 +265,7 @@ describe('shared adopted slide display acceptance', () => {
     raw.components[1].color = '#475569';
     raw.components[2].color = '#00FF00';
     const result = await generateOpenMaicBaselineContent(outline, async () => JSON.stringify(raw), {
-      componentAuthoring: true, slideAuthoring: 'native', textMeasure: measureAuthoredSlideText,
+      visualProjection: false, componentAuthoring: true, slideAuthoring: 'native', textMeasure: measureAuthoredSlideText,
     });
     if (!result || !('elements' in result)) throw new Error('Expected fixture to compile');
     expect(body(result, outline.title).defaultColor).toBe('#1E40AF');

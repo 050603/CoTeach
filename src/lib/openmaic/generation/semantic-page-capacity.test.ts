@@ -21,6 +21,74 @@ function outline(keyPoints: string[], patch: Partial<SceneOutline> = {}): SceneO
 }
 
 describe('semantic page capacity', () => {
+  it('measures restored native diagrams without promoting an unselected source explanation into a mandatory caption', async () => {
+    const annotation = '这些完整条件仍必须在讲授与来源中保留，不能因为分页删掉。'.repeat(25);
+    const diagram = { topology: 'branch' as const, annotation,
+      nodes: [{ id: 'check', label: '判断条件' }, { id: 'yes', label: '条件成立' }, { id: 'no', label: '条件不成立' }],
+      edges: [{ from: 'check', to: 'yes' }, { from: 'check', to: 'no' }] };
+    const page = outline(['观察条件成立与不成立的两条真实路径。'], {
+      visualIntent: { representation: 'native-diagram', observationGoal: '观察条件成立与不成立的两条真实路径。', diagram },
+    });
+    const saved = structuredClone(page), measured = vi.fn(measure);
+    const result = await evaluateSemanticPageCapacity(page, { measure: measured,
+      useReferenceLectureTypography: () => true, useRestoredNativeDisplay: () => true });
+    expect(result.groups.find((group) => group.kind === 'diagram')?.visibleText).toBe('');
+    expect(result.measurementNotes).toContainEqual(expect.stringContaining('保留为来源解释'));
+    expect(measured.mock.calls.some(([input]) => input.text === annotation)).toBe(false);
+    expect(measured.mock.calls.some(([input]) => input.text.includes('条件不成立'))).toBe(true);
+    expect(page).toEqual(saved);
+    expect(page.visualIntent!.diagram!.edges).toEqual(diagram.edges);
+  });
+
+  it('still measures an explicitly selected caption in restored native mode', async () => {
+    const annotation = '只有条件成立时执行该分支，否则执行另一条路径。';
+    const page = outline([annotation], { visualIntent: { representation: 'native-diagram', observationGoal: annotation,
+      diagram: { topology: 'branch', annotation,
+        nodes: [{ id: 'check', label: '判断条件' }, { id: 'yes', label: '成立' }, { id: 'no', label: '不成立' }],
+        edges: [{ from: 'check', to: 'yes' }, { from: 'check', to: 'no' }] } } });
+    const measured = vi.fn(measure);
+    const result = await evaluateSemanticPageCapacity(page, { measure: measured,
+      useReferenceLectureTypography: () => true, useRestoredNativeDisplay: () => true });
+    expect(result.groups.find((group) => group.kind === 'diagram')?.visibleText).toBe(annotation);
+    expect(result.measurementNotes).toBeUndefined();
+    expect(measured.mock.calls.some(([input]) => input.text === annotation)).toBe(true);
+  });
+
+  it('retains the historical annotation contract when restored display selection is disabled', async () => {
+    const annotation = '这段历史图示注释按原合同仍然需要计量。';
+    const page = outline(['按顺序观察两步'], { visualIntent: { representation: 'native-diagram', observationGoal: '按顺序观察两步',
+      diagram: { topology: 'sequence', annotation, nodes: [{ id: 'a', label: '第一步' }, { id: 'b', label: '第二步' }] } } });
+    const measured = vi.fn(measure);
+    const result = await evaluateSemanticPageCapacity(page, { measure: measured, useRestoredNativeDisplay: () => false });
+    expect(result.groups.find((group) => group.kind === 'diagram')?.visibleText).toBe(annotation);
+    expect(result.measurementNotes).toBeUndefined();
+    expect(measured.mock.calls.some(([input]) => input.text === annotation)).toBe(true);
+  });
+
+  it('measures spoken pages from display only and distributes IDs without copying or comparing speech', async () => {
+    const display = ['首先观察记录', '随后比较结果'];
+    const page = outline(display, { teachingBrief: { schemaVersion: 1, explanation: '不能读入的旧正文',
+      manuscript: { sectionId: 'section', segmentIds: ['a', 'oral', 'b'] },
+      examples: [], conditions: [], evidence: [], assessmentFocus: '',
+      teachingPlan: { purpose: '', priorKnowledge: '', newContent: '', learnerQuestion: '', reasoningSteps: [],
+        takeaway: '', visibleContent: ['隐藏长正文不能当屏显'], narrationFocus: ['不能补写的讲解提示'],
+        introduces: ['a', 'oral', 'b'], deepens: [], references: [],
+        presentationItems: display.map((text, index) => ({ text, role: 'key-point', nodeIds: [index ? 'b' : 'a'] })),
+        presentationContent: display },
+    } });
+    const nodes = ['a', 'oral', 'b'].map((id) => ({ id, kind: 'concept' as const,
+      // Deliberately matches the wrong display: references, not resemblance, determine ownership.
+      content: display[1]!.repeat(50), prerequisiteNodeIds: [], knowledgePointIds: ['kp'], provenance: 'derived' as const }));
+    const measured = await evaluateSemanticPageCapacity(page, { measure, explanationNodes: nodes });
+    expect(measured.groups.map((group) => group.visibleText)).toEqual(display);
+    expect(measured.groups.map((group) => group.sourceNodeIds)).toEqual([['a', 'oral'], ['b']]);
+    expect(measured.groups.flatMap((group) => group.narrationExpansion)).toEqual([]);
+    const silent = await evaluateSemanticPageCapacity({ ...page, teachingBrief: { ...page.teachingBrief!,
+      manuscript: { sectionId: 'section', segmentIds: [] } } }, { measure, explanationNodes: nodes });
+    expect(silent.groups.flatMap((group) => group.sourceNodeIds)).toEqual([]);
+    expect(silent.groups.flatMap((group) => group.narrationExpansion)).toEqual([]);
+  });
+
   it('measures grouped display paragraphs exactly as the native renderer, without a padded box per claim', async () => {
     const points = Array.from({ length: 10 }, (_, index) => `试验${index + 1}：只有温度与培养时间相同，甲组与乙组的颜色才可比较。`);
     const page = outline(points, { teachingBrief: {
@@ -129,7 +197,7 @@ describe('semantic page capacity', () => {
       { id: 'random', kind: 'concept', content: random, knowledgePointIds: ['sampling'], prerequisiteNodeIds: [], provenance: 'course-source' },
       { id: 'convenience', kind: 'concept', content: convenience, knowledgePointIds: ['sampling'], prerequisiteNodeIds: [], provenance: 'course-source' },
     ] });
-    expect(capacity.planningVersion).toBe('semantic-page-capacity-v2');
+    expect(capacity.planningVersion).toBe('semantic-page-capacity-v3');
     expect(capacity.decision).toBe('fits');
     expect(capacity.layouts.find((layout) => layout.kind === 'full-width' && layout.bodyFontSize === 18)?.fits).toBe(true);
     expect(capacity.selectedLayout).toMatchObject({ kind: 'two-column', bodyFontSize: 18, fits: true });

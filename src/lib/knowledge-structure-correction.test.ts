@@ -34,7 +34,7 @@ describe('knowledge structure keeps a single first draft', () => {
     expect(prompt.user).toContain('"teachingRole":"core-concept"');
     expect(prompt.user).toContain('"parentKnowledgePointId":"source-parent"');
     expect(prompt.user).toContain('不重复生成第二套映射');
-    expect(prompt.user).toContain('"authoringContract": "knowledge-v1"');
+    expect(prompt.user).toContain('"authoringContract": "knowledge-plan-v1"');
   });
 
   it('persists complete rejected text and stops without a second model request', async () => {
