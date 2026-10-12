@@ -430,7 +430,6 @@
       "interactive": "интерактивов",
       "pbl": "проектов"
     },
-    "quizScoreLabel": "Верно {{correct}} из {{total}}",
     "encouragement": {
       "high": "Отлично — вы справились!",
       "mid": "Хорошая работа — продолжайте.",
@@ -458,7 +457,6 @@
     "title": "Тест",
     "subtitle": "Проверьте свои знания",
     "questionsCount": "вопросов",
-    "totalPrefix": "",
     "pointsSuffix": "б.",
     "startQuiz": "Начать тест",
     "multipleChoiceHint": "(Множественный выбор — выберите все правильные ответы)",

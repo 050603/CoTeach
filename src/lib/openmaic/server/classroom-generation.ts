@@ -1775,6 +1775,10 @@ async function generateClassroomInternal(
   const currentPageAuthoringPolicies: PageAuthoringPolicies = { teachingNarrationPolicy: TEACHING_NARRATION_VERSION,
     quizPolicy: QUIZ_GENERATION_POLICY_VERSION, includeCanonicalKnowledge: true };
   const previousPageAuthoringPolicies: PageAuthoringPolicies[] = [{ ...currentPageAuthoringPolicies, legacyManuscriptAnchors: true }, {
+    teachingNarrationPolicy: 'section-continuous-narration-v39-bound-contributions-and-source-relations',
+    quizPolicy: 'grounded-section-quiz-v22-source-relations-and-explicit-premises',
+    includeCanonicalKnowledge: true,
+  }, {
     teachingNarrationPolicy: 'section-continuous-narration-v38-source-excerpt-duties-and-reference-actions',
     quizPolicy: 'grounded-section-quiz-v21-reference-actions-and-source-answer-catalog',
     assessmentPolicy: 'predeclared-understanding-standard-v4-reference-actions',
@@ -1927,7 +1931,11 @@ async function generateClassroomInternal(
         ] : [])];
       const compatiblePageFingerprints = compatiblePageContexts.map(({ progression, quizContext }) =>
         pageFingerprint(safeOutline, actualTaughtContext, quizContext, progression));
-      const historicalCompletedPageInputs = previousPageAuthoringPolicies.flatMap((policies) => [
+      // Completed teaching pages keep their audited source/narration reuse.
+      // A new quiz authoring policy must author its own questions: do not relabel
+      // an older complete quiz, content stage or actions as the current policy.
+      const historicalCompletedPageInputs = previousPageAuthoringPolicies.filter((policies) =>
+        safeOutline.type !== 'quiz' || policies.quizPolicy === QUIZ_GENERATION_POLICY_VERSION).flatMap((policies) => [
         { progression: confirmedProgression, quizContext: prepared.quizNarrationContext }, ...compatiblePageContexts,
       ].map(({ progression, quizContext }) => ({ policies,
         fingerprint: pageFingerprint(safeOutline, actualTaughtContext, quizContext, progression, policies) })));
@@ -2353,6 +2361,8 @@ async function generateClassroomInternal(
           const diagnostics = page.qualityDiagnostics;
           for (const diagnostic of diagnostics ?? []) recordQualityDiagnostic(`${safeOutline.title}：${diagnostic}`);
         }
+      } else if ('questions' in content) {
+        for (const diagnostic of content.qualityDiagnostics ?? []) recordQualityDiagnostic(`${safeOutline.title}：${diagnostic}`);
       }
       if (prepared.contentOnly) return { outline: safeOutline, content, index };
       throwIfAborted(options.signal);

@@ -90,6 +90,26 @@ function state(overrides: Partial<StudentAdaptiveLearningState> = {}): StudentAd
 }
 
 describe("adaptive learning evidence model", () => {
+  it("uses weighted scores and AI-graded fill blanks for knowledge mastery", () => {
+    expect(calculateKnowledgePointAssessmentScores({
+      questions: [
+        { id: "choice", points: 15, knowledgePointIds: ["kp"] },
+        { id: "blank", points: 10, knowledgePointIds: ["kp"] },
+      ],
+      results: [
+        { questionId: "choice", correct: false, earned: 0, status: "incorrect" },
+        { questionId: "blank", correct: null, earned: 8, status: "graded" },
+      ], fallbackKnowledgePointIds: [],
+    })).toEqual([{ knowledgePointId: "kp", correct: 1, total: 2, score: 32 }]);
+  });
+  it("does not decide mastery while an attributed question is pending", () => {
+    expect(calculateKnowledgePointAssessmentScores({
+      questions: [{ id: "q1", points: 15 }, { id: "q2", points: 10 }],
+      results: [{ questionId: "q1", correct: true, earned: 15, status: "correct" },
+        { questionId: "q2", correct: null, earned: 0, status: "pending" }],
+      fallbackKnowledgePointIds: ["kp"],
+    })).toEqual([]);
+  });
   it("calculates mastery separately for each knowledge point in the terminal assessment", () => {
     expect(calculateKnowledgePointAssessmentScores({
       questions: [

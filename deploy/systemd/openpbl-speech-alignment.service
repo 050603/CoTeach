@@ -8,6 +8,13 @@ StartLimitIntervalSec=0
 Type=simple
 WorkingDirectory=/home/lkj/OpenPBL/openPBL
 Environment=OPENPBL_ALIGNMENT_PORT=3004
+# Keep this host's blocked CUDA driver out of both startup and inference.
+# The pinned model, FP32 precision and timestamp validation remain identical.
+Environment=OPENPBL_ALIGNMENT_FORCE_CPU=1
+Environment=CUDA_VISIBLE_DEVICES=-1
+Environment=OMP_NUM_THREADS=8
+Environment=MKL_NUM_THREADS=8
+Environment=OPENBLAS_NUM_THREADS=8
 ExecStart=/home/lkj/OpenPBL/openPBL/scripts/openpbl-production-service.sh run-speech-alignment
 ExecStartPost=/usr/bin/curl --fail --silent --show-error --retry 120 --retry-connrefused --retry-delay 2 --max-time 2 http://127.0.0.1:3004/health/live
 Restart=always

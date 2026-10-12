@@ -20,10 +20,14 @@ export async function GET(
   const { courseId } = await context.params;
   const auth = await authorizeTemplateRequest(request, courseId);
   if (auth instanceof Response) return auth;
+  // A repair may finish while the audit reads persisted resources. Capture
+  // statuses first so that older findings still keep the client polling.
+  const repair = { ...getCourseResourceRepairStatus(courseId) };
+  const syncRepair = { ...getCourseResourceRepairStatus(courseId, "speech-sync") };
   return Response.json({
     ...await auditCourseGeneratedResources(courseId),
-    repair: getCourseResourceRepairStatus(courseId),
-    syncRepair: getCourseResourceRepairStatus(courseId, "speech-sync"),
+    repair,
+    syncRepair,
   });
 }
 
@@ -46,9 +50,13 @@ export async function POST(
     mode,
   );
   after(() => job.completion);
+  const repair = { ...getCourseResourceRepairStatus(courseId, mode) };
+  const syncRepair = mode === "speech-sync"
+    ? { ...repair }
+    : { ...getCourseResourceRepairStatus(courseId, "speech-sync") };
   return Response.json({
     ...await auditCourseGeneratedResources(courseId),
-    repair: job.status,
-    syncRepair: getCourseResourceRepairStatus(courseId, "speech-sync"),
+    repair,
+    syncRepair,
   }, { status: 202 });
 }

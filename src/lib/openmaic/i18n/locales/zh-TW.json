@@ -440,10 +440,12 @@
     "elementCount": "{{count}} 個元素"
   },
   "quiz": {
+    "rawTotalPrefix": "原始滿分",
+    "normalizedScoring": "成績按原始分值換算為百分制",
+    "rawScore": "原始得分 {{score}} / {{total}} 分",
     "title": "課堂小測",
     "subtitle": "檢測你的學習成果",
     "questionsCount": "題",
-    "totalPrefix": "共",
     "pointsSuffix": "分",
     "startQuiz": "開始答題",
     "multipleChoiceHint": "（多選題，請選擇所有正確答案）",
@@ -1575,12 +1577,13 @@
     "error": "課堂碼錯誤，請重試。"
   },
   "classroomComplete": {
+    "quizScorePercent": "小測總成績 {{score}} / 100 分",
+    "quizPending": "小測總成績待完成批閱",
     "encouragement": {
       "high": "太棒了，你答對了！",
       "low": "不錯的開始，回顧一下再試一次。",
       "mid": "做得好，繼續保持！"
     },
-    "quizScoreLabel": "{{correct}} / {{total}} 正確",
     "title": "課程完成",
     "trailLabels": {
       "interactive": "互動",

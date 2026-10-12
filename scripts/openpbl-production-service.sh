@@ -117,6 +117,9 @@ run_app() {
   export UPLOAD_DIR="$PROJECT_ROOT/.openpbl-data/uploads"
   export WHITEBOARD_DATA_DIR="$PROJECT_ROOT/.openpbl-data/whiteboards"
   export CLASSROOM_DATA_DIR="$PROJECT_ROOT/.openpbl-data/classrooms"
+  # The standalone server changes cwd to its immutable release. Alignment
+  # results belong to durable audio, so keep them across release switches.
+  export OPENPBL_SPEECH_ALIGNMENT_CACHE_DIR="${OPENPBL_SPEECH_ALIGNMENT_CACHE_DIR:-$PROJECT_ROOT/.openpbl-data/speech-alignment-cache}"
   export CODE_RUNNER_URL="http://127.0.0.1:$RUNNER_PORT"
   export CODE_RUNNER_TOKEN="$INTERNAL_MONITOR_TOKEN"
 

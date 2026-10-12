@@ -1,33 +1,35 @@
-import type { Scene, SceneType, QuizContent } from '@openmaic/lib/types/stage';
-import { gradeChoiceQuestions } from '@openmaic/lib/quiz/grading';
+import type { Scene, SceneType } from '@openmaic/lib/types/stage';
+import { calculateQuizScore } from '@openmaic/lib/quiz/grading';
+import type { SubmittedState } from '@openmaic/lib/quiz/persistence';
 
 export interface CompleteSummary {
   countsByType: Partial<Record<SceneType, number>>;
-  quiz: { correct: number; total: number; pct: number } | null;
+  quiz: { score: number; total: number; pct?: number; pendingCount: number } | null;
 }
 
-export type AnswerReader = (sceneId: string) => Record<string, string | string[]>;
+export type SubmissionReader = (sceneId: string) => SubmittedState;
 
-export function summarizeScenes(scenes: Scene[], readAnswers: AnswerReader): CompleteSummary {
+export function summarizeScenes(scenes: Scene[], readSubmission: SubmissionReader): CompleteSummary {
   const countsByType: Partial<Record<SceneType, number>> = {};
   for (const scene of scenes) {
     countsByType[scene.type] = (countsByType[scene.type] ?? 0) + 1;
   }
 
-  let correct = 0;
+  let score = 0;
   let total = 0;
+  let pendingCount = 0;
   for (const scene of scenes) {
-    if (scene.type !== 'quiz') continue;
-    const questions = (scene.content as QuizContent).questions ?? [];
-    const answers = readAnswers(scene.id);
-    const results = gradeChoiceQuestions(questions, answers);
-    for (const r of results) {
-      total += 1;
-      if (r.correct === true) correct += 1;
-    }
+    if (scene.content?.type !== 'quiz') continue;
+    const submission = readSubmission(scene.id);
+    const summary = calculateQuizScore(scene.content.questions,
+      submission?.kind === 'reviewing' ? submission.results : []);
+    score += summary.earned;
+    total += summary.possible;
+    pendingCount += summary.pendingCount;
   }
 
-  const quiz = total > 0 ? { correct, total, pct: Math.round((correct / total) * 100) } : null;
+  const quiz = total > 0 ? { score, total, pendingCount,
+    pct: pendingCount ? undefined : Math.round(score / total * 100) } : null;
 
   return { countsByType, quiz };
 }

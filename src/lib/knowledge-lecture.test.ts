@@ -11,7 +11,28 @@ import {
   deriveKnowledgeLectureSectionsFromOutlines,
   knowledgeLectureQuizEstimate,
   organizeKnowledgeLectureOutlines,
+  verifiedKnowledgeLectureOverallScoreRate,
+  verifiedKnowledgeLectureScoreRate,
 } from "./knowledge-lecture";
+
+describe("verified quiz percentages", () => {
+  const attempt = (points: number, earned: number, gradingStatus = "graded") => ({
+    gradingSource: "server", questions: [{ questionId: "q1", points, earned, gradingStatus }],
+  }) as KnowledgeLectureAttempt;
+  it("keeps per-section and full-course scores on the same weighted scale", () => {
+    const attempts = [attempt(35, 35), attempt(45, 0)];
+    expect(verifiedKnowledgeLectureScoreRate(attempts[0])).toBe(100);
+    expect(verifiedKnowledgeLectureOverallScoreRate(attempts)).toBe(43.75);
+  });
+  it("does not turn incomplete or unverified grades into a full score", () => {
+    const pending = attempt(10, 0, "pending");
+    pending.questions.push(attempt(15, 15).questions[0]);
+    pending.questions[1].questionId = "q2";
+    expect(verifiedKnowledgeLectureScoreRate(pending)).toBeUndefined();
+    expect(verifiedKnowledgeLectureOverallScoreRate([pending, attempt(35, 35)])).toBeUndefined();
+    expect(verifiedKnowledgeLectureScoreRate({ ...attempt(35, 35), gradingSource: undefined })).toBeUndefined();
+  });
+});
 
 function outline(
   id: string,

@@ -449,6 +449,8 @@
     }
   },
   "classroomComplete": {
+    "quizScorePercent": "小测总成绩 {{score}} / 100 分",
+    "quizPending": "小测总成绩待完成批阅",
     "title": "课程完成",
     "trailLabels": {
       "slide": "页",
@@ -456,7 +458,6 @@
       "interactive": "互动",
       "pbl": "项目"
     },
-    "quizScoreLabel": "答对 {{correct}} / {{total}}",
     "encouragement": {
       "high": "太棒了，完美发挥！",
       "mid": "表现不错，继续加油！",
@@ -481,10 +482,12 @@
     "elementCount": "{{count}} 个元素"
   },
   "quiz": {
+    "rawTotalPrefix": "原始满分",
+    "normalizedScoring": "成绩按原始分值换算为百分制",
+    "rawScore": "原始得分 {{score}} / {{total}} 分",
     "title": "随堂测验",
     "subtitle": "检测你的学习成果",
     "questionsCount": "道题",
-    "totalPrefix": "共",
     "pointsSuffix": "分",
     "startQuiz": "开始答题",
     "multipleChoiceHint": "（多选题，请选择所有正确答案）",

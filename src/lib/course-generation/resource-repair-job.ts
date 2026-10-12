@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+import { readFile } from "node:fs/promises";
 import { getCourse, updateCourse } from "@/lib/session/server-store";
 import {
   CLASSROOMS_DIR,
@@ -5,7 +7,7 @@ import {
   updatePersistedClassroomScenes,
   updatePersistedClassroomScenesIfRevision,
 } from "@/lib/openmaic/server/classroom-storage";
-import { planClassroomTtsRecovery } from "@/lib/openmaic/server/classroom-asset-recovery";
+import { classroomAudioStoragePath, planClassroomTtsRecovery } from "@/lib/openmaic/server/classroom-asset-recovery";
 import { generateClassroomAssets } from "@/lib/openmaic/server/classroom-asset-generation";
 import {
   findUnresolvedClassroomMedia,
@@ -21,6 +23,12 @@ import { generateAdaptiveBranchResource } from "@/lib/course-generation/job-runn
 import { resolveDurableCourseSceneOutlines } from "@/lib/course-generation/course-resource-outlines";
 import { mapWithConcurrency } from "@openmaic/lib/utils/concurrency";
 import type { SceneOutline } from "@/lib/openmaic/types/generation";
+import type { Action, SpeechAction } from "@/lib/openmaic/types/action";
+import {
+  normalizeSpeechAlignmentLanguage,
+  SPEECH_ALIGNMENT_VERSION,
+} from "@/lib/openmaic/server/speech-alignment";
+import { resolveAlignedSpeechCueRange } from "@/lib/openmaic/generation/speech-cue-boundaries";
 import {
   calibrateGeneratedVisualCues,
   recoverLegacyVisualCueAnchors,
@@ -167,6 +175,47 @@ async function repairCourseResources(courseId: string, baseUrl: string): Promise
   });
 }
 
+function hasCurrentSpeechAlignment(speech: SpeechAction, audioHash: string, language: string): boolean {
+  const alignment = speech.speechAlignment;
+  if (alignment?.status !== "aligned" || alignment.version !== SPEECH_ALIGNMENT_VERSION
+    || alignment.audioHash !== audioHash || alignment.language !== language
+    || alignment.textHash !== createHash("sha256").update(speech.text, "utf8").digest("hex")
+    || !Array.isArray(alignment.spans) || !alignment.spans.length) return false;
+  let previousChar = 0;
+  let previousMs = 0;
+  for (const span of alignment.spans) {
+    if (![span.startChar, span.endChar, span.startMs, span.endMs].every((value) => Number.isSafeInteger(value) && value >= 0)
+      || span.startChar < previousChar || span.endChar <= span.startChar || span.endChar > speech.text.length
+      || span.startMs < previousMs || span.endMs < span.startMs
+      || span.text !== speech.text.slice(span.startChar, span.endChar)
+      || (speech.audioDurationSec && span.endMs > speech.audioDurationSec * 1000 + 1000)) return false;
+    previousChar = span.endChar;
+    previousMs = span.endMs;
+  }
+  return Boolean(resolveAlignedSpeechCueRange(speech.text, alignment.spans, 0, speech.text.length));
+}
+
+/** Keep every unaffected action, including its position and authored metadata. */
+function replaceAffectedVisualCues(actions: Action[], replacements: Action[], affected: ReadonlySet<string>): Action[] {
+  const byId = new Map(replacements.map((action) => [action.id, action]));
+  return actions.flatMap((action) => affected.has(action.id)
+    ? byId.has(action.id) ? [byId.get(action.id)!] : []
+    : [action]);
+}
+
+function affectedVisualCues(actions: Action[], speechIds: ReadonlySet<string>): Map<string, Set<string>> {
+  const affected = new Map<string, Set<string>>();
+  actions.forEach((action, index) => {
+    if (action.type !== "spotlight" && action.type !== "laser") return;
+    const next = actions.slice(index + 1).find((candidate) => candidate.type !== "spotlight" && candidate.type !== "laser");
+    const startId = action.speechId ?? (next?.type === "speech" && next.text.trim() ? next.id : undefined);
+    const endId = action.type === "spotlight" ? action.endSpeechId ?? startId : startId;
+    const related = new Set([startId, endId].filter((id): id is string => Boolean(id && speechIds.has(id))));
+    if (related.size) affected.set(action.id, related);
+  });
+  return affected;
+}
+
 async function repairSpeechSynchronization(
   courseId: string,
   onProgress: (completed: number, total: number, failed: number) => void,
@@ -179,56 +228,105 @@ async function repairSpeechSynchronization(
   if (!classroom) throw new Error("课程课堂文件不存在，无法修复朗读同步");
   const expectedRevision = classroom.revision ?? 0;
   const scenes = structuredClone(classroom.scenes);
-  const bindingIssues: Array<{ sceneId: string; speechId?: string; reason: string }> = [];
+  const targets: Array<{ sceneId: string; speech: SpeechAction; key: string; needsAlignment: boolean; error?: string }> = [];
+  const audioHashes = new Map<string, Promise<string>>();
   for (const scene of scenes) {
-    if (scene.content.type !== "slide") continue;
-    const recovered = recoverLegacyVisualCueAnchors({
-      elements: scene.content.canvas.elements,
-      actions: scene.actions ?? [],
-    });
-    scene.actions = recovered.actions;
-    bindingIssues.push(...recovered.issues.map((issue) => ({ ...issue, sceneId: scene.id })));
+    for (const speech of scene.actions ?? []) {
+      if (speech.type !== "speech" || !speech.text.trim() || !speech.audioUrl) continue;
+      const target = { sceneId: scene.id, speech, key: JSON.stringify([scene.id, speech.id]), needsAlignment: false };
+      try {
+        if (speech.audioInvalidated) throw new Error("讲稿音频已失效，请先修复缺失资源，再重试朗读同步");
+        const audioPath = classroomAudioStoragePath(CLASSROOMS_DIR, speech.audioUrl);
+        if (!audioPath) throw new Error("无法在本机核验讲稿音频，原有对齐已保留");
+        let hash = audioHashes.get(audioPath);
+        if (!hash) {
+          hash = readFile(audioPath).then((bytes) => {
+            if (!bytes.length) throw new Error("讲稿音频为空");
+            return createHash("sha256").update(bytes).digest("hex");
+          });
+          audioHashes.set(audioPath, hash);
+        }
+        const audioHash = await hash;
+        const language = normalizeSpeechAlignmentLanguage(scene.timingPlan?.language);
+        target.needsAlignment = !hasCurrentSpeechAlignment(speech, audioHash, language);
+        if (target.needsAlignment || speech.speechAlignment?.error) targets.push(target);
+      } catch (error) {
+        // An unreadable/opaque asset is not evidence that a saved timeline is
+        // disposable. Report the target without overwriting that alignment.
+        targets.push({ ...target, error: error instanceof Error ? error.message : "无法读取讲稿音频，原有对齐已保留" });
+      }
+    }
   }
-  let failed = 0;
-  const result = await alignClassroomSpeechActions({
-    scenes,
-    classroomId,
-    onProgress: (progress) => {
-      if (progress.status === "failed") failed += 1;
-      onProgress(progress.completed, progress.total, failed);
-    },
+  const total = targets.length;
+  onProgress(0, total, 0);
+  if (!total) return { total: 0, failed: 0 };
+  const unavailable = targets.filter((target) => target.error).length;
+  const actionKeys = new Set(targets.filter((target) => target.needsAlignment && !target.error).map((target) => target.key));
+  let completed = unavailable;
+  let failed = unavailable;
+  onProgress(completed, total, failed);
+  if (actionKeys.size) {
+    await alignClassroomSpeechActions({
+      scenes,
+      classroomId,
+      actionKeys,
+      onProgress: (progress) => {
+        if (progress.status === "failed") failed += 1;
+        completed = unavailable + progress.completed;
+        onProgress(completed, total, failed);
+      },
+    });
+  }
+  const bindingScenes = scenes.flatMap((scene) => {
+    const sceneTargets = targets.filter((target) => target.sceneId === scene.id && !target.error
+      && target.speech.speechAlignment?.status === "aligned");
+    if (!sceneTargets.length || scene.content.type !== "slide") return [];
+    const affected = affectedVisualCues(scene.actions ?? [], new Set(sceneTargets.map((target) => target.speech.id)));
+    return affected.size ? [{ scene, sceneTargets, affected }] : [];
   });
-  for (const issue of bindingIssues) {
-    if (!issue.speechId) continue;
-    const speech = scenes.find((scene) => scene.id === issue.sceneId)?.actions
-      ?.find((action) => action.type === "speech" && action.id === issue.speechId);
-    if (speech?.type !== "speech" || speech.speechAlignment?.status !== "aligned") continue;
-    speech.speechAlignment.error = issue.reason;
-  }
-  const bindingWarningCount = new Set(bindingIssues.flatMap((issue) => (
-    issue.speechId ? [JSON.stringify([issue.sceneId, issue.speechId])] : []
-  ))).size;
-  const reportedFailed = Math.min(result.total, result.failed + bindingWarningCount);
-  onProgress(result.total, result.total, reportedFailed);
-  const outlines = await resolveDurableCourseSceneOutlines(
-    courseId,
-    course.content._openmaicSceneOutlines ?? [],
-  );
+  const outlines = bindingScenes.length ? await resolveDurableCourseSceneOutlines(
+    courseId, course.content._openmaicSceneOutlines ?? [],
+  ) : [];
   const outlineById = new Map(outlines.map((outline) => [outline.id, outline]));
-  for (const scene of scenes) {
-    const outline = outlineById.get(scene.outlineId ?? scene.id);
-    if (!outline || scene.content.type !== "slide") continue;
-    scene.actions = calibrateGeneratedVisualCues({
-      outline: outline as SceneOutline,
-      elements: scene.content.canvas.elements,
-      actions: scene.actions ?? [],
+  for (const { scene, sceneTargets, affected } of bindingScenes) {
+    if (scene.content.type !== "slide") continue;
+    const affectedIds = new Set(affected.keys());
+    const recovered = recoverLegacyVisualCueAnchors({
+      elements: scene.content.canvas.elements, actions: structuredClone(scene.actions ?? []),
     });
+    const issues = recovered.issues.filter((issue) => affectedIds.has(issue.actionId));
+    scene.actions = replaceAffectedVisualCues(scene.actions ?? [], recovered.actions, affectedIds);
+    const outline = outlineById.get(scene.outlineId ?? scene.id);
+    if (outline) {
+      const calibrated = calibrateGeneratedVisualCues({ outline: outline as SceneOutline,
+        elements: scene.content.canvas.elements, actions: structuredClone(scene.actions ?? []) });
+      scene.actions = replaceAffectedVisualCues(scene.actions ?? [], calibrated, affectedIds);
+    }
+    for (const target of sceneTargets) {
+      const cueIds = new Set([...affected].filter(([, speechIds]) => speechIds.has(target.speech.id)).map(([id]) => id));
+      if (!cueIds.size) continue;
+      const issue = issues.find((candidate) => cueIds.has(candidate.actionId));
+      if (issue) target.speech.speechAlignment!.error = issue.reason;
+      else if (!outline) target.speech.speechAlignment!.error = "缺少页面教学大纲，无法校准指示动作";
+      else if ([...cueIds].some((id) => !scene.actions?.some((action) => action.id === id))) {
+        target.speech.speechAlignment!.error = "指示动作未能绑定到有效的讲稿范围";
+      }
+      else delete target.speech.speechAlignment!.error;
+    }
   }
-  await updatePersistedClassroomScenesIfRevision(classroomId, scenes, expectedRevision);
-  if (result.total > 0 && result.aligned === 0) {
+  const reportedFailed = targets.filter((target) => target.error
+    || target.speech.speechAlignment?.status !== "aligned" || target.speech.speechAlignment.error).length;
+  onProgress(total, total, reportedFailed);
+  if (JSON.stringify(scenes) !== JSON.stringify(classroom.scenes)) {
+    await updatePersistedClassroomScenesIfRevision(classroomId, scenes, expectedRevision);
+  }
+  if (reportedFailed === total) {
+    const reason = targets.find((target) => target.error)?.error
+      ?? targets.find((target) => target.speech.speechAlignment?.error)?.speech.speechAlignment?.error;
+    if (reason) throw new Error(reason);
     throw new Error("语音对齐服务未能完成任何讲稿，请检查本机对齐服务后重试");
   }
-  return { total: result.total, failed: reportedFailed };
+  return { total, failed: reportedFailed };
 }
 
 /**
@@ -271,6 +369,7 @@ export function startCourseResourceRepair(
     })
     .catch((error: unknown) => {
       job.status = {
+        ...job.status,
         status: "failed",
         startedAt,
         finishedAt: new Date().toISOString(),

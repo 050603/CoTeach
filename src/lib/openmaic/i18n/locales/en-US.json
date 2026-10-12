@@ -449,6 +449,8 @@
     }
   },
   "classroomComplete": {
+    "quizScorePercent": "Quiz score {{score}} / 100",
+    "quizPending": "Quiz score awaiting completed grading",
     "title": "Course complete",
     "trailLabels": {
       "slide": "pages",
@@ -456,7 +458,6 @@
       "interactive": "interactives",
       "pbl": "projects"
     },
-    "quizScoreLabel": "{{correct}} / {{total}} correct",
     "encouragement": {
       "high": "Outstanding — you nailed it.",
       "mid": "Solid work — keep it up.",
@@ -481,10 +482,12 @@
     "elementCount": "{{count}} elements"
   },
   "quiz": {
+    "rawTotalPrefix": "Maximum raw points",
+    "normalizedScoring": "Scores are converted to a 100-point scale",
+    "rawScore": "Raw points {{score}} / {{total}}",
     "title": "Quiz",
     "subtitle": "Test your knowledge",
     "questionsCount": "questions",
-    "totalPrefix": "",
     "pointsSuffix": "pts",
     "startQuiz": "Start Quiz",
     "multipleChoiceHint": "(Multiple choice — select all correct answers)",

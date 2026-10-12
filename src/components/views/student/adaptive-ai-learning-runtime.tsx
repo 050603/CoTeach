@@ -24,6 +24,7 @@ import type {
   StudentAdaptiveLearningState,
 } from "@/lib/session/types";
 import { readSubmittedState, writeSubmittedResults } from "@openmaic/lib/quiz/persistence";
+import { calculateQuizScore } from "@openmaic/lib/quiz/grading";
 import { deriveClassroomTimingSnapshot } from "@/lib/classroom/timing";
 import { KnowledgeLectureBoard } from "@/components/views/student/knowledge-lecture-board";
 import { toast } from "@/components/ui";
@@ -386,6 +387,7 @@ export function AdaptiveAiLearningRuntime({
                 : question.correct === null ? "graded" as const
                   : question.correct ? "correct" as const : "incorrect" as const,
               earned: question.gradingStatus === "graded" ? question.earned : 0,
+              points: question.points,
               aiComment: question.feedback,
             }));
             writeSubmittedResults(scene.id, authoritativeResults);
@@ -465,13 +467,18 @@ export function AdaptiveAiLearningRuntime({
     const quizQuestions = detail.scene.content?.type === "quiz"
       ? detail.scene.content.questions
       : [];
+    // The server may have replaced local grades while recording this attempt.
+    const verifiedPercentage = detail.scene.content?.type === "quiz"
+      ? calculateQuizScore(quizQuestions, submittedQuiz?.kind === "reviewing" ? submittedQuiz.results : []).percentage
+      : detail.quizScore;
+    const quizScore = verifiedPercentage === undefined ? undefined : Math.round(verifiedPercentage);
     const knowledgePointScores = calculateKnowledgePointAssessmentScores({
       questions: quizQuestions,
-      results: questionResults,
+      results: submittedQuiz?.kind === "reviewing" ? submittedQuiz.results : [],
       fallbackKnowledgePointIds: anchorKnowledgePointIds,
     });
     let evidenceState = adaptiveState;
-    if (typeof detail.quizScore === "number") {
+    if (typeof quizScore === "number") {
       const threshold = plan.thresholds.enrichmentMasteryMin ?? 80;
       const weakKnowledgePointIds = knowledgePointScores
         .filter((item) => item.score < threshold)
@@ -484,7 +491,7 @@ export function AdaptiveAiLearningRuntime({
         evidence: {
           id: `evidence-node-${sceneIdentity.stableSceneId}`,
           source: "node-quiz",
-          score: detail.quizScore,
+          score: quizScore,
           occurredAt: new Date().toISOString(),
           sceneId: sceneIdentity.stableSceneId,
           knowledgePointIds: anchorKnowledgePointIds,
@@ -500,7 +507,7 @@ export function AdaptiveAiLearningRuntime({
     const evaluation = evaluateAdaptiveBranchDecision({
       plan,
       state: evidenceState,
-      nodeQuizScore: detail.quizScore,
+      nodeQuizScore: quizScore,
       anchorKnowledgePointIds,
       completedSceneId: sceneIdentity.stableSceneId,
       runtimeSceneId: sceneIdentity.runtimeSceneId,

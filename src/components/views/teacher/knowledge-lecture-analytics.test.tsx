@@ -26,6 +26,18 @@ const course = {
   },
 } as unknown as Course;
 
+it("weights the teacher's overall quiz average by authored points", () => {
+  const weighted = structuredClone(course);
+  weighted.stages = [];
+  const attempts = weighted.aiLearningProgress!.student.knowledgeLectureAttempts!;
+  attempts[0].questions[0].points = 35;
+  attempts[0].questions[0].earned = 35;
+  attempts[1].questions[0].points = 45;
+  attempts[1].questions[0].earned = 0;
+  render(<KnowledgeLectureAnalytics course={weighted} showSectionSummaryChart={false} />);
+  expect(screen.getByText("班级均分 44分")).toBeInTheDocument();
+});
+
 it("renders both real Recharts series and recovers when a hidden chart becomes visible or resizes", async () => {
   let width = 0;
   const rect = () => ({ width, height: width ? 224 : 0, top: 0, left: 0, right: width, bottom: 224, x: 0, y: 0, toJSON() {} });

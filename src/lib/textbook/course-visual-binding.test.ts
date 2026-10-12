@@ -333,6 +333,91 @@ describe('required textbook figure binding', () => {
       .toContain('辅助顺序图未完整保留教材的 3 个步骤');
   });
 
+  describe('embodied framework labels and paginated principle counts', () => {
+    const stageLabels = ['前期分析阶段', '核心要素设计阶段', '教学过程实施阶段', '教学评价阶段'];
+    const shortStages = ['前期分析', '核心要素设计', '教学过程实施', '教学评价'];
+    const orderedSteps = stageLabels.map((label) => ({ label }));
+    const principleLabels = [
+      '发挥身体认知的主体性，让学生亲身参与学习活动',
+      '让学生学习的思维和过程变得直观可视',
+      '创设多维的物理环境和教学情境',
+      '注重身心环境交互学习活动的设计',
+      '注重教学目标、资源、交互过程的动态生成性',
+    ];
+    const principleSteps = principleLabels.map((label) => ({ label }));
+    const firstGroup = { statements: [
+      '两条原则：让身体真正参与学习活动，让抽象内容与思考过程看得见',
+      ...principleLabels.slice(0, 2),
+    ] };
+    const secondGroup = { statements: [
+      '三条原则：环境设计、身心环境交互与动态生成',
+      ...principleLabels.slice(2),
+    ] };
+
+    it('accepts the complete four-stage framework with generic suffixes omitted in text and diagrams', () => {
+      expect(inspectFigureSequence({ orderedSteps, statements: [shortStages.join('→')],
+        diagramLabels: shortStages, requireCompleteText: true })).toEqual([]);
+      const contract = { resourceId: 'embodied-four-stage-framework', required: true,
+        knowledgePointIds: ['kp-1'], scope: 'knowledge-point' as const, orderedSteps };
+      const blueprint = sequenceBlueprint(shortStages);
+      blueprint.sections[0]!.pages[0]!.sourceSequenceUses = [{ resourceId: contract.resourceId, coverage: 'complete' }];
+      expect(findBlueprintFigureSequenceIssues(blueprint, [contract])).toEqual([]);
+      expect(() => assertSourceSequencesInOutlines(teachingBlueprintToOutlines(blueprint, ''), [contract])).not.toThrow();
+    });
+
+    it('still reports a missing stage or a shortened core action after accepting generic suffix omissions', () => {
+      for (const { shown, missing } of [
+        { shown: shortStages.slice(0, 3), missing: '教学评价阶段' },
+        { shown: ['前期分析', '核心要素', '教学过程实施', '教学评价'], missing: '核心要素设计阶段' },
+        { shown: ['前期分析', '核心要素设计', '教学过程', '教学评价'], missing: '教学过程实施阶段' },
+      ]) {
+        expect(inspectFigureSequence({ orderedSteps, statements: [shown.join('→')],
+          diagramLabels: shown, requireCompleteText: true })).toContain(`遗漏教材步骤：${missing}`);
+      }
+      // Short generic labels cannot turn bare actions into source-licensed stage names.
+      expect(hasSourceSequenceLabel('设计', '设计阶段')).toBe(false);
+      expect(hasSourceSequenceLabel('评价', '教学评价阶段')).toBe(false);
+    });
+
+    it('retains the four-stage order in both abbreviated narration and abbreviated diagrams', () => {
+      const reversed = ['前期分析', '教学过程实施', '核心要素设计', '教学评价'];
+      expect(inspectFigureSequence({ orderedSteps, statements: [reversed.join('→')],
+        diagramLabels: shortStages, requireCompleteText: true }))
+        .toContain('正文流程未保留教材的 4 个步骤顺序');
+      expect(inspectFigureSequence({ orderedSteps, statements: [shortStages.join('→')],
+        diagramLabels: reversed, requireCompleteText: true }))
+        .toContain('辅助顺序图未保留教材的 4 个步骤顺序');
+    });
+
+    it('accepts local two-plus-three principle headings only when independent groups complete the source list', () => {
+      expect(inspectFigureSequence({ orderedSteps: principleSteps, statements: [],
+        contentGroups: [firstGroup, secondGroup], sequenceSemantics: 'enumerated-items', requireCompleteText: true }))
+        .toEqual([]);
+    });
+
+    it('rejects a whole-list assertion and a local heading that claims more principles than its group teaches', () => {
+      for (const { heading, claimed } of [
+        { heading: '本清单只有两条原则。', claimed: 2 },
+        { heading: '两条主要原则：身体参与与思维可视', claimed: 2 },
+        { heading: '两条原则：身体参与与思维可视构成完整清单', claimed: 2 },
+        { heading: '三条原则：让身体参与学习，让思考过程看得见', claimed: 3 },
+      ]) {
+        expect(inspectFigureSequence({ orderedSteps: principleSteps, statements: [],
+          contentGroups: [{ statements: [heading, ...principleLabels.slice(0, 2)] }, secondGroup],
+          sequenceSemantics: 'enumerated-items', requireCompleteText: true }))
+          .toContain(`写成 ${claimed} 条，教材正文清单为 5 条`);
+      }
+    });
+
+    it('does not let a matching local heading conceal a principle omitted from the remaining groups', () => {
+      const problems = inspectFigureSequence({ orderedSteps: principleSteps, statements: [],
+        contentGroups: [firstGroup, { statements: principleLabels.slice(2, 4) }],
+        sequenceSemantics: 'enumerated-items', requireCompleteText: true });
+      expect(problems).toContain(`遗漏教材条目：${principleLabels[4]}`);
+      expect(problems).toContain('写成 2 条，教材正文清单为 5 条');
+    });
+  });
+
   it.each(['式', '型', '法'])('keeps a licensed action separate from a later %s method name in text and knowledge summaries', (suffix) => {
     const orderedSteps = ['观察', '进行“归纳”', '验证'].map((label, index) => ({ label, sourceBlockId: `step-${index}` }));
     const statements = ['流程是观察、归纳、验证。',

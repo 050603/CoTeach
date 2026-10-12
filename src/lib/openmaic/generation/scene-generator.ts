@@ -113,6 +113,7 @@ function withInteractiveActivityContract(aiCall: AICallFn): AICallFn {
   return (system, user, images) => aiCall(system, `${user}\n\n${contract}`, images);
 }
 import { compileAuthoredQuizQuestions, selectQuizFormats } from '@openmaic/lib/quiz/quality';
+import { validateQuizQuestionDrafts } from '@openmaic/lib/quiz/authoring-evidence';
 import { SECTION_QUIZ_FORMATS } from './terminal-mastery-assessment-policy';
 import { normalizeWhiteboardActionLifecycle } from './whiteboard-action-lifecycle';
 import { normalizeWhiteboardActionLayout } from './whiteboard-layout';
@@ -1100,7 +1101,7 @@ export async function generateLegacyCustomizedSlideContent(
  */
 type PlannedQuizQuestionType = NonNullable<SceneOutline['quizConfig']>['questionTypes'][number];
 
-export const QUIZ_GENERATION_POLICY_VERSION = 'grounded-section-quiz-v22-source-relations-and-explicit-premises';
+export const QUIZ_GENERATION_POLICY_VERSION = 'grounded-section-quiz-v23-misconception-first-diagnostic-items';
 
 export function objectiveQuestionRequiresWrittenExplanation(stem: string): boolean {
   const value = stem.replace(/\s+/g, ' ').trim();
@@ -1273,7 +1274,8 @@ async function generateQuizContent(
       throw new Error(`Quiz "${outline.title}" returned invalid questions: ${error instanceof Error ? error.message : String(error)}`);
     }
     const unitMap = outline.assessmentUnitMap ?? [];
-    return { questions: questions.map((question) => {
+    const qualityDiagnostics = validateQuizQuestionDrafts(generatedQuestions, outline.knowledgePointIds ?? []);
+    return { ...(qualityDiagnostics.length ? { qualityDiagnostics } : {}), questions: questions.map((question) => {
       if (question.teachingUnitIds?.length) return question;
       const mapped = unitMap.filter((unit) => unit.knowledgePointIds.some((id) => question.knowledgePointIds?.includes(id)))
         .map((unit) => unit.unitId);

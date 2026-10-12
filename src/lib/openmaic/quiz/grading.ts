@@ -5,7 +5,47 @@ export interface QuestionResult {
   correct: boolean | null;
   status: 'correct' | 'incorrect' | 'graded' | 'pending';
   earned: number;
+  /** Retained for embedded quizzes whose scene does not expose its questions. */
+  points?: number;
   aiComment?: string;
+}
+
+export interface QuizScore {
+  earned: number;
+  possible: number;
+  gradedCount: number;
+  pendingCount: number;
+  /** Unrounded percentage; absent until every question has a valid grade. */
+  percentage?: number;
+}
+
+/** Authored points, rather than correct-answer counts, define every quiz score. */
+export function calculateQuizScore(
+  questions: ReadonlyArray<{ id: string; points?: number }>,
+  results: ReadonlyArray<Pick<QuestionResult, 'questionId' | 'status' | 'earned'>>,
+): QuizScore {
+  const byId = new Map(results.map((result) => [result.questionId, result]));
+  const score: QuizScore = { earned: 0, possible: 0, gradedCount: 0, pendingCount: 0 };
+  for (const question of questions) {
+    const points = question.points ?? 1;
+    const result = byId.get(question.id);
+    if (!Number.isFinite(points) || points <= 0) {
+      score.pendingCount += 1;
+      continue;
+    }
+    score.possible += points;
+    if (!result || !['correct', 'incorrect', 'graded'].includes(result.status)
+      || !Number.isFinite(result.earned) || result.earned < 0 || result.earned > points) {
+      score.pendingCount += 1;
+      continue;
+    }
+    score.earned += result.earned;
+    score.gradedCount += 1;
+  }
+  if (score.possible > 0 && score.pendingCount === 0) {
+    score.percentage = score.earned / score.possible * 100;
+  }
+  return score;
 }
 
 export function arraysEqual(a: string[], b: string[]): boolean {

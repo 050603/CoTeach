@@ -58,7 +58,9 @@ AI 模式复用 AI 服务设置中的默认语言模型及连接配置。第一�
 
 `scripts/setup-speech-alignment.py` 建立独立的 `.openpbl-runtime/speech-alignment-venv`，安装 `deploy/speech-alignment-requirements.txt` 固定的运行版本，并下载固定提交的 `Qwen3-ForcedAligner-0.6B` 到 `.openpbl-runtime/speech-alignment-models`。服务启动后完全离线，只监听 `127.0.0.1:3004`，不经 Nginx 暴露；输入限制为本机音频绝对路径、原讲稿和模型支持的语言，音频统一解码为 16 kHz 单声道且不得超过五分钟。
 
-生产 TITAN Xp 使用 PyTorch CUDA 11.8 wheel 中与 `sm_61` 二进制兼容的 Pascal `sm_60` 内核、普通 attention 和 FP32。安装校验会执行真实 FP32 CUDA 运算并加载固定模型；CUDA 不可用、wheel 不支持当前架构或模型加载失败时自动改用 CPU。推理严格单并发，应用侧按音频内容、讲稿、语言和对齐版本写入 `.openpbl-data/speech-alignment-cache`。可用 `OPENPBL_ALIGNMENT_FORCE_CPU=1` 强制 CPU，或用 `OPENPBL_SPEECH_ALIGNMENT_CACHE_DIR` 更换缓存目录。
+当前宿主机的 CUDA 驱动出现无法被 SIGKILL 终止的锁等待，异常捕获不能处理这种阻塞；反复重启只会留下更多阻塞进程。生产服务模板因此设置 `OPENPBL_ALIGNMENT_FORCE_CPU=1`、隐藏 CUDA 设备并限制 CPU 推理为八线程，保留同一固定模型、普通 attention 和 FP32 精度。CPU 模式在设备选择阶段不探测 CUDA，避免启动再次卡在驱动上。恢复 GPU 推理须先由宿主机维护解除驱动阻塞，再移除相应环境覆盖并执行真实模型验收；不要依靠重启循环恢复。
+
+可选的 TITAN Xp GPU 路径使用 PyTorch CUDA 11.8 wheel 中与 `sm_61` 二进制兼容的 Pascal `sm_60` 内核。安装校验会执行真实 FP32 CUDA 运算并加载固定模型；可抛出的 CUDA 异常、wheel 不支持当前架构或模型加载失败时自动改用 CPU。推理严格单并发，应用侧按音频内容、讲稿、语言和对齐版本写入 `.openpbl-data/speech-alignment-cache`。可用 `OPENPBL_SPEECH_ALIGNMENT_CACHE_DIR` 更换缓存目录。应用对可重试技术故障最多请求三次，并以同一总超时守护请求、响应读取和退避；同步修复仅处理未完成或指纹失效的语音，保留已验证的时间线。
 
 真实课程验收使用 `pnpm exec tsx scripts/evaluate-speech-alignment.ts <人工标注.json> --no-cache`。JSON 包含 `audioPath`、原始 `text`、可选 `language`，以及至少 20 个 `{ "quote", "occurrence", "expectedStartMs" }` 人工听音标注。命令输出每个触发误差、P95、推理耗时和实时率；P95 超过 300 毫秒时以失败状态退出。
 

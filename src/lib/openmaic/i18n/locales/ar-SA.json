@@ -430,7 +430,6 @@
       "interactive": "تفاعلات",
       "pbl": "مشاريع"
     },
-    "quizScoreLabel": "{{correct}} / {{total}} صحيحة",
     "encouragement": {
       "high": "ممتاز — أبدعت!",
       "mid": "عمل جيد — استمر.",
@@ -458,7 +457,6 @@
     "title": "اختبار",
     "subtitle": "اختبر معلوماتك",
     "questionsCount": "أسئلة",
-    "totalPrefix": "",
     "pointsSuffix": "نقاط",
     "startQuiz": "بدء الاختبار",
     "multipleChoiceHint": "(اختيار متعدد — حدد جميع الإجابات الصحيحة)",

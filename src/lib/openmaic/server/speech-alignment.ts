@@ -2,6 +2,8 @@ import { createHash, randomUUID } from 'node:crypto';
 import { createReadStream } from 'node:fs';
 import { mkdir, readFile, rename, stat, unlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
+import { setTimeout as waitForRetry } from 'node:timers/promises';
+import { Agent, fetch as undiciFetch } from 'undici';
 
 export const SPEECH_ALIGNMENT_MODEL = 'Qwen/Qwen3-ForcedAligner-0.6B';
 export const SPEECH_ALIGNMENT_MODEL_REVISION = 'c7cbfc2048c462b0d63a45797104fc9db3ad62b7';
@@ -9,6 +11,8 @@ export const SPEECH_ALIGNMENT_VERSION = `qwen3-forced-aligner-0.6b:${SPEECH_ALIG
 export const DEFAULT_SPEECH_ALIGNMENT_URL = 'http://127.0.0.1:3004';
 
 const DEFAULT_TIMEOUT_MS = 10 * 60 * 1000;
+const MAX_REQUEST_ATTEMPTS = 3;
+const RETRY_DELAY_MS = 1_000;
 const MAX_CACHE_BYTES = 5 * 1024 * 1024;
 const SUPPORTED_LANGUAGES = new Set([
   'Chinese', 'Cantonese', 'English', 'German', 'Spanish', 'French',
@@ -93,6 +97,7 @@ export class SpeechAlignmentError extends Error {
 }
 
 const inFlight = new Map<string, Promise<SpeechAlignmentResult>>();
+let alignmentDispatcher: Agent | undefined;
 
 export function normalizeSpeechAlignmentLanguage(language = 'Chinese'): string {
   const trimmed = language.trim();
@@ -288,7 +293,7 @@ async function requestAlignment(
   const serviceUrl = validatedServiceUrl(
     input.serviceUrl ?? process.env.OPENPBL_SPEECH_ALIGNMENT_URL ?? DEFAULT_SPEECH_ALIGNMENT_URL,
   );
-  const fetchImpl = input.fetchImpl ?? fetch;
+  const fetchImpl = input.fetchImpl ?? (undiciFetch as unknown as typeof fetch);
   const timeoutMs = input.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   if (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0) {
     throw new SpeechAlignmentError('INVALID_INPUT', 'Invalid speech alignment timeout.', false);
@@ -296,46 +301,62 @@ async function requestAlignment(
   const timeoutSignal = AbortSignal.timeout(timeoutMs);
   const signal = input.signal ? AbortSignal.any([input.signal, timeoutSignal]) : timeoutSignal;
 
-  let response: Response;
-  try {
-    response = await fetchImpl(new URL('/align', serviceUrl), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        audioPath: path.resolve(input.audioPath),
-        text: input.text,
-        language: fingerprints.language,
-      }),
-      signal,
-    });
-  } catch (error) {
-    if (input.signal?.aborted) throw input.signal.reason ?? error;
-    throw new SpeechAlignmentError(
-      'SERVICE_UNAVAILABLE',
-      'Speech alignment service is unavailable.',
-      true,
-      { cause: error },
-    );
-  }
-
-  const body = await response.json().catch(() => null) as unknown;
-  if (!response.ok) {
-    const serviceCode = isRecord(body) && typeof body.error === 'string' ? body.error : '';
-    if (response.status === 503 || serviceCode === 'SERVICE_BUSY') {
-      throw new SpeechAlignmentError('SERVICE_BUSY', 'Speech alignment service is busy.', true);
+  const request: RequestInit & { dispatcher?: Agent } = {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      audioPath: path.resolve(input.audioPath),
+      text: input.text,
+      language: fingerprints.language,
+    }),
+    signal,
+    // CPU inference may take longer than Undici's default five-minute header
+    // timeout. One total deadline above bounds requests, body reads and backoff.
+    ...(!input.fetchImpl ? { dispatcher: alignmentDispatcher ??= new Agent({ headersTimeout: 0, bodyTimeout: 0 }) } : {}),
+  };
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      signal.throwIfAborted();
+      let response: Response;
+      let body: unknown;
+      try {
+        response = await fetchImpl(new URL('/align', serviceUrl), request);
+        body = await response.json().catch((error: unknown) => {
+          if (error instanceof SyntaxError) return null;
+          throw error;
+        });
+      } catch (error) {
+        throw new SpeechAlignmentError('SERVICE_UNAVAILABLE', 'Speech alignment service is unavailable.', true, { cause: error });
+      }
+      if (!response.ok) {
+        const serviceCode = isRecord(body) && typeof body.error === 'string' ? body.error : '';
+        if (response.status === 503 || serviceCode === 'SERVICE_BUSY') {
+          throw new SpeechAlignmentError('SERVICE_BUSY', 'Speech alignment service is busy.', true);
+        }
+        if (response.status === 422 && [
+          'UNMAPPABLE_TOKEN', 'INVALID_SOURCE_RANGES', 'INVALID_TIMESTAMPS',
+        ].includes(serviceCode)) {
+          throw new SpeechAlignmentError('INVALID_SPANS', `Speech alignment failed: ${serviceCode}`, false);
+        }
+        throw new SpeechAlignmentError(
+          'ALIGNMENT_REJECTED',
+          `Speech alignment failed${serviceCode ? `: ${serviceCode}` : '.'}`,
+          response.status >= 500,
+        );
+      }
+      return validateResult(body, { text: input.text, ...fingerprints });
+    } catch (error) {
+      if (input.signal?.aborted) throw input.signal.reason ?? error;
+      if (signal.aborted || attempt + 1 >= MAX_REQUEST_ATTEMPTS
+        || !(error instanceof SpeechAlignmentError) || !error.retryable) throw error;
+      try {
+        await waitForRetry(RETRY_DELAY_MS * 2 ** attempt, undefined, { signal });
+      } catch (waitError) {
+        if (input.signal?.aborted) throw input.signal.reason ?? waitError;
+        throw error;
+      }
     }
-    if (response.status === 422 && [
-      'UNMAPPABLE_TOKEN', 'INVALID_SOURCE_RANGES', 'INVALID_TIMESTAMPS',
-    ].includes(serviceCode)) {
-      throw new SpeechAlignmentError('INVALID_SPANS', `Speech alignment failed: ${serviceCode}`, false);
-    }
-    throw new SpeechAlignmentError(
-      'ALIGNMENT_REJECTED',
-      `Speech alignment failed${serviceCode ? `: ${serviceCode}` : '.'}`,
-      response.status >= 500,
-    );
   }
-  return validateResult(body, { text: input.text, ...fingerprints });
 }
 
 /**

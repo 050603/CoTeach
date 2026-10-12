@@ -163,11 +163,86 @@ describe("final course resource audit", () => {
     expect(audit.issues).toContainEqual(expect.objectContaining({
       type: "speech-sync",
       title: "概念讲解",
-      detail: expect.stringContaining("尚未建立字幕与动作的音频时间线"),
+      detail: "1 段语音尚未完成精确时间对齐，音频可播放，相关字幕使用近似定位",
     }));
   });
 
-  it("reports a precise timeline whose visual binding could not be repaired", async () => {
+  it.each([
+    { name: "no visual cue", cues: [], affected: 0 },
+    { name: "a cue bound to another aligned speech", cues: [
+      { id: "other-cue", type: "spotlight", elementId: "concept", speechId: "speech-good", speechAnchor: { quote: "概念" } },
+    ], affected: 0 },
+    { name: "an offset-only cue bound to the failed speech", cues: [
+      { id: "offset-cue", type: "spotlight", elementId: "note", speechId: "speech-failed", speechOffsetMs: 1000, endSpeechOffsetMs: 2000 },
+    ], affected: 0 },
+    { name: "a start anchor bound to the failed speech", cues: [
+      { id: "start-cue", type: "spotlight", elementId: "note", speechId: "speech-failed", speechAnchor: { quote: "缩写" } },
+    ], affected: 1 },
+    { name: "an end anchor bound to the failed speech", cues: [
+      { id: "end-cue", type: "spotlight", elementId: "note", speechId: "speech-good", endSpeechId: "speech-failed", endSpeechAnchor: { quote: "缩写" } },
+    ], affected: 1 },
+    { name: "a laser waypoint anchor bound to the failed speech", cues: [
+      { id: "laser-cue", type: "laser", elementId: "note", speechId: "speech-failed", speechOffsetMs: 0, waypoints: [{ elementId: "note", speechAnchor: { quote: "缩写" } }] },
+    ], affected: 1 },
+    { name: "multiple anchors in one cue alongside unaffected cues", cues: [
+      { id: "other-cue", type: "spotlight", elementId: "concept", speechId: "speech-good", speechAnchor: { quote: "概念" } },
+      { id: "offset-cue", type: "laser", elementId: "note", speechId: "speech-failed", speechOffsetMs: 1000, waypoints: [{ elementId: "note", speechOffsetMs: 2000 }] },
+      { id: "anchored-cue", type: "spotlight", elementId: "note", speechId: "speech-failed", speechAnchor: { quote: "缩写" }, endSpeechAnchor: { quote: "缩写" } },
+    ], affected: 1 },
+  ])("limits failed alignment effects to associated semantic cues: $name", async ({ cues, affected }) => {
+    getCourse.mockResolvedValue({
+      id: "course-1", aiLearningClassroomId: "classroom-1", content: { _openmaicSceneOutlines: [] },
+    } as unknown as Course);
+    readClassroom.mockResolvedValue({
+      id: "classroom-1", createdAt: "2026-08-17T00:00:00.000Z", stage: {},
+      scenes: [{
+        id: "scene-1", title: "概念讲解", type: "slide", order: 0,
+        actions: [...cues, {
+          id: "speech-good", type: "speech", text: "请观察这个概念。", audioUrl: "/good.mp3",
+          speechAlignment: { status: "aligned", spans: [] },
+        }, {
+          id: "speech-failed", type: "speech", text: "请注意缩写。", audioUrl: "/note.mp3",
+          speechAlignment: { status: "failed", spans: [], error: "Speech alignment service is busy." },
+        }],
+      }],
+    } as unknown as PersistedClassroomData);
+
+    const { auditCourseGeneratedResources } = await import("./resource-audit-server");
+    const audit = await auditCourseGeneratedResources("course-1");
+    expect(audit.issues.filter((issue) => issue.type === "speech-sync")).toEqual([{
+      id: "speech-sync:scene-1", type: "speech-sync", title: "概念讲解",
+      detail: `1 段语音对齐失败，音频可播放，相关字幕使用近似定位${affected ? `；${affected} 处关联指示动作暂无法按音频同步` : ""}`,
+    }]);
+  });
+
+  it("retains both failed and pending narration diagnoses without exposing service errors", async () => {
+    getCourse.mockResolvedValue({
+      id: "course-1", aiLearningClassroomId: "classroom-1", content: { _openmaicSceneOutlines: [] },
+    } as unknown as Course);
+    readClassroom.mockResolvedValue({
+      id: "classroom-1", createdAt: "2026-08-17T00:00:00.000Z", stage: {},
+      scenes: [{
+        id: "scene-1", title: "概念讲解", type: "slide", order: 0,
+        actions: [{
+          id: "speech-failed", type: "speech", text: "第一段。", audioUrl: "/first.mp3",
+          speechAlignment: { status: "failed", spans: [], error: "Speech alignment service is busy." },
+        }, {
+          id: "speech-pending", type: "speech", text: "第二段。", audioUrl: "/second.mp3",
+          speechAlignment: { status: "pending", spans: [] },
+        }],
+      }],
+    } as unknown as PersistedClassroomData);
+
+    const { auditCourseGeneratedResources } = await import("./resource-audit-server");
+    const audit = await auditCourseGeneratedResources("course-1");
+    expect(audit.issues.find((issue) => issue.type === "speech-sync")?.detail)
+      .toBe("1 段语音对齐失败，另有 1 段尚未完成精确时间对齐，音频可播放，相关字幕使用近似定位");
+  });
+
+  it.each([
+    { error: "讲稿中找不到与页面目标可靠对应的词句，自动指示已停用", detail: "讲稿中找不到与页面目标可靠对应的词句，自动指示已停用" },
+    { error: "Visual cue binding failed.", detail: "部分指示动作未能与讲解词句可靠绑定，自动指示已停用" },
+  ])("reports visual binding errors without exposing internal English: $error", async ({ error, detail }) => {
     getCourse.mockResolvedValue({
       id: "course-1",
       aiLearningClassroomId: "classroom-1",
@@ -193,7 +268,7 @@ describe("final course resource audit", () => {
             textHash: "text",
             audioHash: "audio",
             spans: [{ text: "请", startChar: 0, endChar: 1, startMs: 0, endMs: 100 }],
-            error: "讲稿中找不到与页面目标可靠对应的词句，自动指示已停用",
+            error,
           },
         }],
       }],
@@ -204,7 +279,7 @@ describe("final course resource audit", () => {
 
     expect(audit.issues).toContainEqual(expect.objectContaining({
       type: "speech-sync",
-      detail: "讲稿中找不到与页面目标可靠对应的词句，自动指示已停用",
+      detail,
     }));
   });
 

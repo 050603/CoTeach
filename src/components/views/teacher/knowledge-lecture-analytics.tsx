@@ -12,7 +12,7 @@ import {
   YAxis,
 } from "recharts";
 import { Card, Pill } from "@/components/ui";
-import { aggregateKnowledgePointMastery, firstKnowledgeLectureAttempts, isCurrentAiLearningEntry, knowledgeLectureQuizEstimate, verifiedKnowledgeLectureScoreRate } from "@/lib/knowledge-lecture";
+import { aggregateKnowledgePointMastery, firstKnowledgeLectureAttempts, isCurrentAiLearningEntry, knowledgeLectureQuizEstimate, verifiedKnowledgeLectureOverallScoreRate, verifiedKnowledgeLectureScoreRate } from "@/lib/knowledge-lecture";
 import type { Course, StudentAiProgress } from "@/lib/session/types";
 import { cn } from "@/lib/utils";
 import { inferStageCollectionMode } from "@/lib/system-mode";
@@ -194,9 +194,8 @@ export function KnowledgeLectureAnalytics({
   const answeredStudentIds = Object.entries(currentProgress).flatMap(([studentId, entry]) =>
     firstKnowledgeLectureAttempts(entry).length ? [studentId] : [],
   );
-  const attempts = Object.values(currentProgress).flatMap(firstKnowledgeLectureAttempts);
-  const scoredRates = attempts.flatMap((attempt) => {
-    const rate = verifiedKnowledgeLectureScoreRate(attempt);
+  const scoredRates = Object.values(currentProgress).flatMap((entry) => {
+    const rate = verifiedKnowledgeLectureOverallScoreRate(firstKnowledgeLectureAttempts(entry));
     return rate === undefined ? [] : [rate];
   });
   const averageScore = scoredRates.length ? Math.round(scoredRates.reduce((sum, rate) => sum + rate, 0) / scoredRates.length) : undefined;
@@ -250,7 +249,7 @@ export function KnowledgeLectureAnalytics({
             </ResponsiveContainer>
           </div>
         </div>
-        <p className="mt-2 text-right text-[9px] text-stone-400">小节较多时可横向滑动查看</p>
+        <p className="mt-2 text-right text-[9px] text-stone-400">均分为百分制：实际得分 ÷ 原始满分 × 100；小节较多时可横向滑动查看</p>
         <ul className="sr-only">{sectionChartData.map((item) => <li key={item.id}>{item.fullName}：完成率 {item.completionRate === null ? "暂无数据" : `${item.completionRate}%`}，均分 {item.averageScore === null ? "暂无数据" : `${item.averageScore} 分`}</li>)}</ul>
       </section> : null}
 
@@ -306,7 +305,7 @@ export function KnowledgeLectureAnalytics({
               const selected = section.id === selectedSectionId;
               return (
                 <button aria-expanded={selected} className={cn("w-full rounded-[var(--radius-sm)] border p-3 text-left transition", selected ? "border-[var(--pbl-teacher-border)] bg-[var(--pbl-teacher-soft)] shadow-sm" : "border-stone-200 bg-stone-50/60 hover:border-[var(--pbl-teacher-border)] hover:bg-white")} key={section.id} onClick={() => setSelectedSectionId((current) => current === section.id ? undefined : section.id)} type="button">
-                  <div className="flex items-start justify-between gap-3"><div className="min-w-0"><p className="line-clamp-2 text-xs font-bold leading-5 text-stone-800" title={section.title}>{section.title}</p><p className="mt-1 line-clamp-2 text-[10px] leading-4 text-stone-500">{section.knowledgePointIds.map((id) => course.content.knowledgePoints.find((point) => point.id === id)?.name ?? id).join(" · ")}</p></div><span className="flex shrink-0 items-center gap-1 text-xs font-bold text-[var(--pbl-teacher)]">{average === undefined ? "待作答" : `${average}分`}<ChevronRight className={cn("text-stone-400 transition-transform", selected && "rotate-180 text-[var(--pbl-teacher)]")} size={14} /></span></div>
+                  <div className="flex items-start justify-between gap-3"><div className="min-w-0"><p className="line-clamp-2 text-xs font-bold leading-5 text-stone-800" title={section.title}>{section.title}</p><p className="mt-1 line-clamp-2 text-[10px] leading-4 text-stone-500">{section.knowledgePointIds.map((id) => course.content.knowledgePoints.find((point) => point.id === id)?.name ?? id).join(" · ")}</p></div><span className="flex shrink-0 items-center gap-1 text-xs font-bold text-[var(--pbl-teacher)]">{average === undefined ? sectionAttempts.length ? "待批阅" : "待作答" : `${average}分`}<ChevronRight className={cn("text-stone-400 transition-transform", selected && "rotate-180 text-[var(--pbl-teacher)]")} size={14} /></span></div>
                   <div className="mt-2 flex items-center justify-between text-[10px] font-semibold text-stone-500"><span>{sectionAttempts.length}/{studentCount} 人完成</span><span>{quizEstimate.questionCount} 题 · 预计 {quizEstimate.estimatedMinutes} 分钟</span></div>
                   <p className={cn("mt-2 border-t pt-2 text-right text-[10px] font-bold", selected ? "border-[var(--pbl-teacher-border)] text-[var(--pbl-teacher)]" : "border-stone-200 text-stone-400")}>{selected ? "再次点击收起题目" : "查看本节每道题"}</p>
                 </button>

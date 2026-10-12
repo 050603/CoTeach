@@ -453,6 +453,8 @@ export interface GeneratedSlideContent {
  */
 export interface GeneratedQuizContent {
   questions: QuizQuestion[];
+  /** Authoring evidence diagnostics, never an assertion of semantic quality. */
+  qualityDiagnostics?: string[];
   /** Authored with the questions; the assembler owns learner-controlled gates. */
   phaseNarration?: Array<{ type: 'text'; phase: 'intro' | 'review-guidance' | 'handoff'; content: string }>;
 }

@@ -90,7 +90,7 @@ export function BaseShapeElement({ elementInfo }: BaseShapeElementProps) {
           </svg>
 
           <div
-            className={`shape-text flex flex-col px-2.5 py-2.5 leading-relaxed break-words absolute inset-0 ${
+            className={`shape-text flex flex-col break-words absolute inset-0 ${
               text.align === 'top'
                 ? 'justify-start'
                 : text.align === 'bottom'
@@ -98,7 +98,10 @@ export function BaseShapeElement({ elementInfo }: BaseShapeElementProps) {
                   : 'justify-center'
             }`}
             style={{
-              lineHeight: text.lineHeight,
+              // Slide geometry uses pixels. rem padding grows with the page's
+              // desktop density and changes wrapping compared with the editor.
+              padding: '10px',
+              lineHeight: text.lineHeight ?? 1.5,
               letterSpacing: `${text.wordSpace || 0}px`,
             }}
           >

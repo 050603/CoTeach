@@ -750,7 +750,8 @@ describe('section short-answer quiz contract', () => {
     expect(ai).toHaveBeenCalledTimes(1);
     expect(ai.mock.calls[0][0]).toContain('There is no later model review or rewrite');
     expect(ai.mock.calls[0][0]).toContain('private design card');
-    expect(ai.mock.calls[0][0]).toContain('about one third longer than the shortest');
+    expect(ai.mock.calls[0][0]).toContain('Comparable length is an auxiliary presentation check');
+    expect(ai.mock.calls[0][0]).toContain('concept confusion, condition misuse');
     expect(ai.mock.calls[0][0]).toContain('Do not make a distractor wrong merely by inserting');
   });
 

@@ -2,6 +2,15 @@ import { mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+
+const transport = vi.hoisted(() => ({ fetch: vi.fn(), agent: vi.fn() }));
+vi.mock('undici', () => ({
+  fetch: transport.fetch,
+  Agent: class {
+    constructor(options: unknown) { transport.agent(options); }
+  },
+}));
+
 import {
   SPEECH_ALIGNMENT_MODEL,
   SPEECH_ALIGNMENT_MODEL_REVISION,
@@ -43,6 +52,8 @@ afterEach(async () => {
   const { rm } = await import('node:fs/promises');
   await Promise.all(directories.splice(0).map((directory) => rm(directory, { recursive: true, force: true })));
   vi.unstubAllEnvs();
+  transport.fetch.mockReset();
+  transport.agent.mockClear();
 });
 
 describe('alignSpeechFile', () => {
@@ -116,6 +127,7 @@ describe('alignSpeechFile', () => {
 
     await expect(alignSpeechFile({ audioPath, text: '人工 AI', cacheDir, fetchImpl }))
       .rejects.toMatchObject({ code: 'INVALID_SPANS', retryable: false });
+    expect(fetchImpl).toHaveBeenCalledOnce();
     expect(await readFile(path.join(cacheDir, 'missing'), 'utf8').catch(() => null)).toBeNull();
   });
 
@@ -141,21 +153,80 @@ describe('alignSpeechFile', () => {
     })).rejects.toMatchObject({ code: 'INVALID_SPANS' });
   });
 
-  it('classifies busy, rejected, and unreachable service errors', async () => {
+  it.each([
+    { name: 'busy', response: () => new Response(JSON.stringify({ error: 'SERVICE_BUSY' }), { status: 503 }), code: 'SERVICE_BUSY', retryable: true, attempts: 3 },
+    { name: 'rejected', response: () => new Response(JSON.stringify({ error: 'INVALID_TIMESTAMPS' }), { status: 422 }), code: 'INVALID_SPANS', retryable: false, attempts: 1 },
+    { name: 'unreachable', response: () => { throw new TypeError('connection refused'); }, code: 'SERVICE_UNAVAILABLE', retryable: true, attempts: 3 },
+  ])('classifies $name errors and bounds retry attempts', async ({ response, code, retryable, attempts }) => {
     const { audioPath } = await fixture();
-    const input = { audioPath, text: '人工 AI', cacheDir: false as const };
-    await expect(alignSpeechFile({
-      ...input,
-      fetchImpl: vi.fn(async () => new Response(JSON.stringify({ error: 'SERVICE_BUSY' }), { status: 503 })) as typeof fetch,
-    })).rejects.toMatchObject({ code: 'SERVICE_BUSY', retryable: true });
-    await expect(alignSpeechFile({
-      ...input,
-      fetchImpl: vi.fn(async () => new Response(JSON.stringify({ error: 'INVALID_TIMESTAMPS' }), { status: 422 })) as typeof fetch,
-    })).rejects.toMatchObject({ code: 'INVALID_SPANS', retryable: false });
-    await expect(alignSpeechFile({
-      ...input,
-      fetchImpl: vi.fn(async () => { throw new TypeError('connection refused'); }) as typeof fetch,
-    })).rejects.toMatchObject({ code: 'SERVICE_UNAVAILABLE', retryable: true });
+    const fetchImpl = vi.fn(async () => response()) as typeof fetch;
+    await expect(alignSpeechFile({ audioPath, text: '人工 AI', cacheDir: false, fetchImpl }))
+      .rejects.toMatchObject({ code, retryable });
+    expect(fetchImpl).toHaveBeenCalledTimes(attempts);
+  });
+
+  it.each(['busy', 'unreachable', 'interrupted response'] as const)('recovers from a transient $name failure and caches only the successful alignment', async (failure) => {
+    const { audioPath, cacheDir } = await fixture();
+    const fetchImpl = vi.fn()
+      .mockImplementationOnce(async () => {
+        if (failure === 'unreachable') throw new TypeError('connection refused');
+        if (failure === 'interrupted response') return { json: async () => { throw new TypeError('terminated'); } };
+        return new Response(JSON.stringify({ error: 'SERVICE_BUSY' }), { status: 503 });
+      })
+      .mockResolvedValueOnce(new Response(JSON.stringify(serviceResponse()))) as typeof fetch;
+    const input = { audioPath, text: '人工 AI', cacheDir, fetchImpl };
+
+    const first = alignSpeechFile(input);
+    const second = alignSpeechFile(input);
+    const result = await first;
+    expect(await second).toEqual(result);
+    expect(await alignSpeechFile(input)).toEqual(result);
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+
+  it('stops busy backoff immediately when the caller cancels', async () => {
+    const { audioPath } = await fixture();
+    const controller = new AbortController();
+    const reason = new Error('cancelled by caller');
+    const fetchImpl = vi.fn(async () => new Response(JSON.stringify({ error: 'SERVICE_BUSY' }), { status: 503 })) as typeof fetch;
+    const operation = alignSpeechFile({ audioPath, text: '人工 AI', cacheDir: false, signal: controller.signal, fetchImpl });
+    const rejection = expect(operation).rejects.toBe(reason);
+    await vi.waitFor(() => expect(fetchImpl).toHaveBeenCalledOnce());
+    controller.abort(reason);
+    await rejection;
+    expect(fetchImpl).toHaveBeenCalledOnce();
+  });
+
+  it('uses one deadline for the full retry sequence', async () => {
+    const { audioPath } = await fixture();
+    const fetchImpl = vi.fn(async () => new Response(JSON.stringify({ error: 'SERVICE_BUSY' }), { status: 503 })) as typeof fetch;
+    await expect(alignSpeechFile({ audioPath, text: '人工 AI', cacheDir: false, timeoutMs: 30, fetchImpl }))
+      .rejects.toMatchObject({ code: 'SERVICE_BUSY' });
+    expect(fetchImpl).toHaveBeenCalledOnce();
+    expect(vi.mocked(fetchImpl).mock.calls[0]?.[1]?.signal?.aborted).toBe(true);
+  });
+
+  it('aborts an in-progress request at the deadline without starting another inference', async () => {
+    const { audioPath } = await fixture();
+    const fetchImpl = vi.fn(async (_url: URL | RequestInfo, request?: RequestInit) => new Promise<Response>((_resolve, reject) => {
+      request?.signal?.addEventListener('abort', () => reject(request.signal?.reason), { once: true });
+    })) as typeof fetch;
+    await expect(alignSpeechFile({ audioPath, text: '人工 AI', cacheDir: false, timeoutMs: 30, fetchImpl }))
+      .rejects.toMatchObject({ code: 'SERVICE_UNAVAILABLE' });
+    expect(fetchImpl).toHaveBeenCalledOnce();
+  });
+
+  it('removes shorter transport timeouts while preserving the configured abort deadline', async () => {
+    const { audioPath } = await fixture();
+    const controller = new AbortController();
+    transport.fetch.mockResolvedValueOnce(new Response(JSON.stringify(serviceResponse())));
+    await alignSpeechFile({ audioPath, text: '人工 AI', cacheDir: false, timeoutMs: 600_000, signal: controller.signal });
+    expect(transport.agent).toHaveBeenCalledWith({ headersTimeout: 0, bodyTimeout: 0 });
+    const request = transport.fetch.mock.calls[0]?.[1] as RequestInit & { dispatcher?: unknown };
+    expect(request.dispatcher).toBeDefined();
+    expect(request.signal?.aborted).toBe(false);
+    controller.abort();
+    expect(request.signal?.aborted).toBe(true);
   });
 
   it('rejects non-loopback service origins before making a request', async () => {

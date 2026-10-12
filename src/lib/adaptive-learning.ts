@@ -15,6 +15,7 @@ import type {
 } from "@/lib/session/types";
 import { isKnowledgeStructureReviewCurrent } from "@/lib/knowledge-graph-quality";
 import { deriveCourseEntryPolicy, type CourseEntryPolicy } from "@/lib/course-entry-policy";
+import { calculateQuizScore, type QuestionResult } from "@/lib/openmaic/quiz/grading";
 
 export const MAX_ADAPTIVE_PRETEST_QUESTIONS = 5;
 export const MAX_ADAPTIVE_PRETEST_MINUTES = 5;
@@ -38,30 +39,38 @@ export function deriveMasteryAssessmentSceneIds(
 }
 
 export function calculateKnowledgePointAssessmentScores(input: {
-  questions: ReadonlyArray<{ id: string; knowledgePointIds?: string[] }>;
-  results: ReadonlyArray<{ questionId: string; correct: boolean | null }>;
+  questions: ReadonlyArray<{ id: string; points?: number; knowledgePointIds?: string[] }>;
+  results: ReadonlyArray<{ questionId: string; correct: boolean | null; earned?: number; status?: QuestionResult['status'] }>;
   fallbackKnowledgePointIds: readonly string[];
 }): KnowledgePointAssessmentScore[] {
-  const questionById = new Map(input.questions.map((question) => [question.id, question]));
-  const totals = new Map<string, { correct: number; total: number }>();
-  for (const result of input.results) {
-    if (result.correct === null) continue;
-    const question = questionById.get(result.questionId);
-    const knowledgePointIds = question?.knowledgePointIds?.length
+  const resultById = new Map(input.results.map((result) => [result.questionId, result]));
+  const totals = new Map<string, { correct: number; total: number; earned: number; possible: number; pending: boolean }>();
+  for (const question of input.questions) {
+    const result = resultById.get(question.id);
+    const points = question.points ?? 1;
+    const grade = calculateQuizScore([question], result ? [{
+      questionId: result.questionId,
+      earned: result.earned ?? (result.correct ? points : 0),
+      status: result.status ?? (result.earned !== undefined || result.correct !== null ? "graded" : "pending"),
+    }] : []);
+    const knowledgePointIds = question.knowledgePointIds?.length
       ? question.knowledgePointIds
       : input.fallbackKnowledgePointIds;
     for (const knowledgePointId of new Set(knowledgePointIds)) {
-      const current = totals.get(knowledgePointId) ?? { correct: 0, total: 0 };
-      current.total += 1;
-      if (result.correct) current.correct += 1;
+      const current = totals.get(knowledgePointId) ?? { correct: 0, total: 0, earned: 0, possible: 0, pending: false };
+      current.pending ||= grade.percentage === undefined;
+      current.total += grade.gradedCount;
+      current.earned += grade.earned;
+      current.possible += grade.possible;
+      if (grade.percentage !== undefined && grade.percentage >= 80) current.correct += 1;
       totals.set(knowledgePointId, current);
     }
   }
-  return [...totals.entries()].map(([knowledgePointId, result]) => ({
+  return [...totals.entries()].filter(([, result]) => !result.pending && result.possible > 0).map(([knowledgePointId, result]) => ({
     knowledgePointId,
     correct: result.correct,
     total: result.total,
-    score: Math.round((result.correct / result.total) * 100),
+    score: Math.round((result.earned / result.possible) * 100),
   }));
 }
 

@@ -52,6 +52,9 @@ describe("course resource repair route", () => {
       status: { status: "running", startedAt: "2026-09-21T00:00:00.000Z" },
       completion,
     });
+    mocks.getStatus.mockImplementation((_courseId: string, mode?: string) => ({
+      status: mode === "speech-sync" ? "idle" : "running",
+    }));
 
     const response = await POST(new Request("http://localhost/api/courses/course-1/resource-repair", {
       method: "POST",
@@ -101,5 +104,59 @@ describe("course resource repair route", () => {
     expect(response.status).toBe(404);
     expect(mocks.start).not.toHaveBeenCalled();
     expect(mocks.after).not.toHaveBeenCalled();
+  });
+
+  it.each(["missing-resources", "speech-sync"] as const)("keeps polling when %s completes during a GET audit", async (mode) => {
+    const status = { status: "running", mode, completed: 62, total: 63 };
+    mocks.getStatus.mockImplementation((_courseId: string, requestedMode = "missing-resources") => (
+      requestedMode === mode ? status : { status: "idle", mode: requestedMode }
+    ));
+    mocks.audit.mockImplementationOnce(async () => {
+      status.status = "completed";
+      status.completed = 63;
+      return { classroomId: "classroom-1", issues: [{ id: "speech-sync:old" }] };
+    });
+
+    const request = new Request("http://localhost/api/courses/course-1/resource-repair") as never;
+    const duringCompletion = await GET(request, context);
+    const result = await duringCompletion.json();
+    expect(result.issues).toEqual([{ id: "speech-sync:old" }]);
+    expect(result[mode === "speech-sync" ? "syncRepair" : "repair"])
+      .toMatchObject({ status: "running", completed: 62 });
+    expect(mocks.audit).toHaveBeenCalledOnce();
+
+    mocks.audit.mockResolvedValueOnce({ classroomId: "classroom-1", issues: [] });
+    const afterCompletion = await GET(request, context);
+    const refreshed = await afterCompletion.json();
+    expect(refreshed.issues).toEqual([]);
+    expect(refreshed[mode === "speech-sync" ? "syncRepair" : "repair"])
+      .toMatchObject({ status: "completed", completed: 63 });
+  });
+
+  it.each(["missing-resources", "speech-sync"] as const)("captures the current %s status before a POST audit", async (mode) => {
+    const completion = new Promise<void>(() => undefined);
+    const staleStatus = { status: "running", mode, completed: 0, total: 63 };
+    const currentStatus = { status: "running", mode, completed: 62, total: 63 };
+    mocks.start.mockReturnValue({ started: false, status: staleStatus, completion });
+    mocks.getStatus.mockImplementation((_courseId: string, requestedMode = "missing-resources") => (
+      requestedMode === mode ? currentStatus : { status: "idle", mode: requestedMode }
+    ));
+    mocks.audit.mockImplementationOnce(async () => {
+      currentStatus.status = "completed";
+      currentStatus.completed = 63;
+      return { classroomId: "classroom-1", issues: [{ id: "speech-sync:old" }] };
+    });
+
+    const response = await POST(new Request("http://localhost/api/courses/course-1/resource-repair", {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ mode }),
+    }) as never, context);
+    expect(response.status).toBe(202);
+    const result = await response.json();
+    expect(result.repair).toMatchObject({ status: "running", mode, completed: 62 });
+    if (mode === "speech-sync") expect(result.syncRepair).toMatchObject({ status: "running", completed: 62 });
+    expect(result.issues).toEqual([{ id: "speech-sync:old" }]);
+    expect(mocks.audit).toHaveBeenCalledOnce();
+    expect(mocks.after).toHaveBeenCalledOnce();
+    expect(mocks.after.mock.calls[0]?.[0]()).toBe(completion);
   });
 });

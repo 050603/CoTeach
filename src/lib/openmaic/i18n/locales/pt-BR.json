@@ -430,7 +430,6 @@
       "interactive": "interativas",
       "pbl": "projetos"
     },
-    "quizScoreLabel": "{{correct}} de {{total}} corretas",
     "encouragement": {
       "high": "Excelente — você arrasou!",
       "mid": "Bom trabalho — continue assim.",
@@ -458,7 +457,6 @@
     "title": "Questionário",
     "subtitle": "Teste seu conhecimento",
     "questionsCount": "questões",
-    "totalPrefix": "",
     "pointsSuffix": "pts",
     "startQuiz": "Iniciar Questionário",
     "multipleChoiceHint": "(Múltipla escolha — selecione todas as alternativas corretas)",

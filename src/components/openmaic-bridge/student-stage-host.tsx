@@ -51,6 +51,7 @@ import type { PlaybackSyncState } from '@openmaic/components/stage-experience';
 import { isScenePlaybackExhausted, sceneAutoAdvanceDelayMs } from '@openmaic/lib/playback/scene-completion';
 import { isPlaybackActivityComplete } from '@openmaic/lib/playback/activity-events';
 import { readSubmittedState } from '@openmaic/lib/quiz/persistence';
+import { calculateQuizScore } from '@openmaic/lib/quiz/grading';
 import {
   AI_PROGRESS_COMPLETION_MODEL_VERSION,
   isReliableAiProgress,
@@ -203,8 +204,10 @@ export function shouldTrackStudentLearning(mode: StudentStageHostMode): boolean 
 export function quizScoreForScene(scene: Scene): number | undefined {
   const submitted = readSubmittedState(scene.id);
   if (submitted?.kind !== 'reviewing' || submitted.results.length === 0) return undefined;
-  const correct = submitted.results.filter((result) => result.status === 'correct').length;
-  return Math.round((correct / submitted.results.length) * 100);
+  const questions = scene.content?.type === 'quiz' ? scene.content.questions
+    : submitted.results.map((result) => ({ id: result.questionId, points: result.points }));
+  const { percentage } = calculateQuizScore(questions, submitted.results);
+  return percentage === undefined ? undefined : Math.round(percentage);
 }
 
 export { selectStudentLearningScenes } from '@openmaic/lib/pbl/scene-routing';

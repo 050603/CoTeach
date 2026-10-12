@@ -44,7 +44,7 @@ const CHINESE_COUNT: Record<string, number> = {
 };
 
 /** Match an entire diagram label against spellings licensed by its source.
- * A quoted action may retain its verb without quotes or use the quoted term;
+ * Quoted actions and specific stage names have finite short spellings;
  * arbitrary diagram labels never license removing meaningful verbs. */
 function sourceDiagramLabelKeys(
   diagramLabels: readonly string[],
@@ -229,6 +229,29 @@ function countSpansSeveralGroups(prefix: string): boolean {
   return Boolean(multiple || count > 1);
 }
 
+function isPagedSubsetHeading(input: {
+  sentence: string;
+  match: RegExpMatchArray;
+  group: SequenceContentGroup;
+  groups: readonly SequenceContentGroup[];
+  orderedSteps: readonly { label: string }[];
+}): boolean {
+  const count = CHINESE_COUNT[input.match[1]!] ?? Number(input.match[1]);
+  // Only a bare local heading such as “两条原则：…” can be supplied by its
+  // actual page. Assertions naming the whole list retain the source count.
+  if (count >= input.orderedSteps.length || /(?:基本|主要)/u.test(input.match[0])
+    || /(?:构成|组成|形成|是|为|覆盖|涵盖)[^，,。；;]{0,16}(?:完整|全部|所有|全套|整个|整体|基本)(?:的)?(?:清单|列表|原则|建议|策略|要点|特征|特点)/u.test(input.sentence)
+    || input.sentence.slice(0, input.match.index).trim()
+    || !/^\s*[:：]/u.test(input.sentence.slice(input.match.index! + input.match[0].length))) return false;
+  const localText = input.group.statements.join('\n');
+  const localSteps = input.orderedSteps.filter((step) => hasSourceSequenceLabel(localText, step.label));
+  if (localSteps.length !== count) return false;
+  const otherText = input.groups.filter((group) => group !== input.group)
+    .flatMap((group) => group.statements).join('\n');
+  return input.orderedSteps.filter((step) => !localSteps.includes(step))
+    .every((step) => hasSourceSequenceLabel(otherText, step.label));
+}
+
 function namedStageCountOwner(input: {
   prefix: string;
   group: SequenceContentGroup;
@@ -334,6 +357,8 @@ export function inspectFigureSequence(input: {
       const claims = [...sentence.matchAll(quantity)];
       for (const [index, match] of claims.entries()) {
         if (!countRefersToWholeSequence(sentence, match)
+          || (enumeration && isPagedSubsetHeading({ sentence, match, group, groups,
+            orderedSteps: input.orderedSteps }))
           || !isCountForSequence({ sentence, match, nextMatchIndex: claims[index + 1]?.index,
             group, orderedSteps: input.orderedSteps, relatedSequences: input.relatedSequences ?? [],
             sequenceSemantics: input.sequenceSemantics })) continue;

@@ -4,13 +4,14 @@ import concurrent.futures
 import http.client
 import importlib.util
 import json
+import os
 from pathlib import Path
 import tempfile
 import threading
 import time
 import types
 import unittest
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 
 SPEC = importlib.util.spec_from_file_location(
@@ -211,6 +212,14 @@ class AlignmentRuntimeTests(unittest.TestCase):
         torch.ones.reset_mock()
         self.assertEqual(MODULE.select_torch_device(torch), "cuda:0")
         torch.ones.assert_called_once_with(1, dtype="fp32", device="cuda:0")
+
+    def test_forced_cpu_does_not_touch_a_blocked_cuda_driver(self):
+        cuda = Mock()
+        cuda.is_available.side_effect = AssertionError("CUDA must not be queried in CPU recovery mode")
+        torch = types.SimpleNamespace(cuda=cuda)
+        with patch.dict(os.environ, {"OPENPBL_ALIGNMENT_FORCE_CPU": "1"}):
+            self.assertEqual(MODULE.select_torch_device(torch), "cpu")
+        cuda.is_available.assert_not_called()
 
 
 if __name__ == "__main__":

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { QuizQuestion } from "@openmaic/lib/types/stage";
-import { gradeChoiceQuestions } from "./grading";
+import { calculateQuizScore, gradeChoiceQuestions } from "./grading";
 
 describe("objective quiz grading", () => {
   it("scores choice, judgment, and matching locally while leaving short answers to AI", () => {
@@ -31,5 +31,33 @@ describe("objective quiz grading", () => {
       { questionId: "judge", correct: false, status: "incorrect", earned: 0 },
       { questionId: "matching", correct: true, status: "correct", earned: 20 },
     ]);
+  });
+});
+
+describe("percentage scoring", () => {
+  const questions = [{ id: "choice", points: 15 }, { id: "blank", points: 10 }, { id: "judge", points: 10 }];
+  const results = [
+    { questionId: "choice", status: "correct" as const, earned: 15 },
+    { questionId: "blank", status: "graded" as const, earned: 10 },
+    { questionId: "judge", status: "correct" as const, earned: 10 },
+  ];
+  it("counts AI-graded fill blanks toward a perfect score", () => {
+    expect(calculateQuizScore(questions, results)).toEqual({
+      earned: 35, possible: 35, gradedCount: 3, pendingCount: 0, percentage: 100,
+    });
+  });
+  it("uses authored points and retains partial AI credit", () => {
+    const score = calculateQuizScore(questions, [results[0], { ...results[1], earned: 6 }, { ...results[2], status: "incorrect", earned: 0 }]);
+    expect(score.earned).toBe(21);
+    expect(score.percentage).toBe(60);
+  });
+  it.each(["pending", "missing", "invalid"])("withholds a final score for %s grading", (kind) => {
+    const grades = kind === "missing" ? [results[0], results[2]]
+      : [results[0], { ...results[1], ...(kind === "pending" ? { status: "pending" as const } : { earned: 11 }) }, results[2]];
+    expect(calculateQuizScore(questions, grades)).toEqual({ earned: 25, possible: 35, gradedCount: 2, pendingCount: 1 });
+  });
+  it("ignores stale results and does not count a question twice", () => {
+    expect(calculateQuizScore(questions, [...results, results[0], { questionId: "stale", status: "correct", earned: 100 }]).percentage).toBe(100);
+    expect(calculateQuizScore([], []).percentage).toBeUndefined();
   });
 });

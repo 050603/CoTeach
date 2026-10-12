@@ -77,31 +77,6 @@ export function readSubmittedState(sceneId: string): SubmittedState {
   }
 }
 
-/**
- * Convenience reader for the classroom-complete page: returns the submitted
- * answers if present, else falls back to the in-progress draft so a partial
- * attempt still contributes to the aggregate instead of showing 0/N.
- */
-export function readAnswersForSummary(sceneId: string): QuizAnswers {
-  const rawA = safeGet(ANSWERS_KEY_PREFIX + sceneId);
-  if (rawA) {
-    try {
-      return JSON.parse(rawA) as QuizAnswers;
-    } catch {
-      /* fall through */
-    }
-  }
-  const rawD = safeGet(DRAFT_KEY_PREFIX + sceneId);
-  if (rawD) {
-    try {
-      return JSON.parse(rawD) as QuizAnswers;
-    } catch {
-      /* fall through */
-    }
-  }
-  return {};
-}
-
 /** Called by quiz-view at submit time. */
 export function writeSubmittedAnswers(sceneId: string, answers: QuizAnswers): void {
   safeSet(ANSWERS_KEY_PREFIX + sceneId, JSON.stringify(answers));

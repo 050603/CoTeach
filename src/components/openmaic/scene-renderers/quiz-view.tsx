@@ -20,7 +20,7 @@ import { useI18n } from '@openmaic/lib/hooks/use-i18n';
 import type { QuizQuestion } from '@openmaic/lib/types/stage';
 import { useDraftCache } from '@openmaic/lib/hooks/use-draft-cache';
 import { SpeechButton } from '@openmaic/components/audio/speech-button';
-import { gradeChoiceQuestions, isShortAnswer, type QuestionResult } from '@openmaic/lib/quiz/grading';
+import { calculateQuizScore, gradeChoiceQuestions, isShortAnswer, type QuestionResult } from '@openmaic/lib/quiz/grading';
 import { renderQuizMathText } from '@openmaic/lib/quiz/math-text';
 import {
   draftKey,
@@ -145,9 +145,10 @@ function QuizCover({
           </div>
           <div className="flex items-center gap-2">
             <ClipboardCheck className="size-4 text-[var(--pbl-student)]" aria-hidden="true" />
-            <span>{t('quiz.totalPrefix')} {totalPoints} {t('quiz.pointsSuffix')}</span>
+            <span>{t('quiz.rawTotalPrefix')} {totalPoints} {t('quiz.pointsSuffix')}</span>
           </div>
         </div>
+        <p className="mt-2 text-xs text-[var(--pbl-text-muted)]">{t('quiz.normalizedScoring')}</p>
 
         <button
           type="button"
@@ -736,17 +737,16 @@ function QuestionCard({
 }
 
 function ScoreBanner({
-  score,
-  total,
+  questions,
   results,
 }: {
-  score: number;
-  total: number;
+  questions: QuizQuestion[];
   results: QuestionResult[];
 }) {
   const { t } = useI18n();
-  const pct = total > 0 ? Math.round((score / total) * 100) : 0;
-  const hasPending = results.some((result) => result.status === 'pending');
+  const { earned: score, possible: total, percentage } = calculateQuizScore(questions, results);
+  const pct = percentage === undefined ? 0 : Math.round(percentage);
+  const hasPending = percentage === undefined;
   const correctCount = results.filter((r) => r.status === 'correct').length;
   const incorrectCount = results.filter((r) => r.status === 'incorrect').length;
 
@@ -762,9 +762,10 @@ function ScoreBanner({
         <div>
           <p className="text-sm font-semibold text-[var(--pbl-student)]">{summary}</p>
           <div className="mt-1 flex items-baseline gap-1 text-[var(--pbl-text-strong)]">
-            <span className="text-4xl font-bold">{hasPending ? '—' : score}</span>
-            <span className="text-lg text-[var(--pbl-text-muted)]">{hasPending ? '待完成批阅' : `/ ${total}`}</span>
+            <span className="text-4xl font-bold">{hasPending ? '—' : pct}</span>
+            <span className="text-lg text-[var(--pbl-text-muted)]">{hasPending ? '待完成批阅' : '/ 100'}</span>
           </div>
+          <p className="mt-1 text-xs text-[var(--pbl-text-muted)]">{t('quiz.rawScore', { score, total })}</p>
           <div className="mt-3 flex flex-wrap gap-3 text-xs">
             <span className="flex items-center gap-1 text-[var(--pbl-success)]">
               <CheckCircle2 className="size-3.5" aria-hidden="true" /> {correctCount} {t('quiz.correct')}
@@ -968,7 +969,10 @@ export function QuizView({ questions, sceneId, quizOutlineId, stagedPlayback = f
       for (const r of [...choiceResults, ...aiResults]) {
         allResultsMap.set(r.questionId, r);
       }
-      const ordered = questions.map((q) => allResultsMap.get(q.id)!).filter(Boolean);
+      const ordered = questions.flatMap((q) => {
+        const result = allResultsMap.get(q.id);
+        return result ? [{ ...result, points: q.points ?? 1 }] : [];
+      });
 
       setResults(ordered);
       setPhase('reviewing');
@@ -1004,8 +1008,6 @@ export function QuizView({ questions, sceneId, quizOutlineId, stagedPlayback = f
     dispatchPlaybackActivityComplete({ sceneId, purpose: 'quiz' });
     setReviewReleased(true);
   }, [sceneId]);
-
-  const earnedScore = useMemo(() => results.reduce((sum, r) => sum + r.earned, 0), [results]);
 
   const resultMap = useMemo(() => {
     const map: Record<string, QuestionResult> = {};
@@ -1180,7 +1182,7 @@ export function QuizView({ questions, sceneId, quizOutlineId, stagedPlayback = f
 
               <main className="flex-1 overflow-y-auto">
                 <div className="mx-auto max-w-4xl space-y-4 px-3 py-4 sm:px-6 sm:py-6">
-                  <ScoreBanner score={earnedScore} total={totalPoints} results={results} />
+                  <ScoreBanner questions={questions} results={results} />
 
                   {questions.map((q, i) => {
                     const r = resultMap[q.id];

@@ -3,6 +3,7 @@ import { allocateLectureBudget } from "@/lib/classroom/knowledge-lecture-budget"
 import { groupKnowledgePointsBySection } from "@/lib/course-design/learning-boundary";
 import { normalizeTeachingBrief } from "@/lib/openmaic/generation/teaching-brief";
 import { SECTION_QUIZ_FORMATS, SECTION_QUIZ_COUNT_RANGE } from "@/lib/openmaic/generation/terminal-mastery-assessment-policy";
+import { calculateQuizScore } from "@/lib/openmaic/quiz/grading";
 import type {
   Course,
   KnowledgeGraph,
@@ -281,12 +282,23 @@ export function isCurrentAiLearningEntry(
   return !classroomId || entry.classroomId === classroomId;
 }
 
-/** Percentage from verified, graded questions; pending questions are outside the denominator. */
+/** A section's percentage becomes available only after all its grades are verified. */
 export function verifiedKnowledgeLectureScoreRate(attempt: KnowledgeLectureAttempt): number | undefined {
   if (attempt.gradingSource !== "server") return undefined;
-  const graded = attempt.questions.filter((question) => question.gradingStatus === "graded" && question.points > 0);
-  const maximum = graded.reduce((sum, question) => sum + question.points, 0);
-  return maximum > 0 ? graded.reduce((sum, question) => sum + question.earned, 0) / maximum * 100 : undefined;
+  return calculateQuizScore(attempt.questions.map((question) => ({ id: question.questionId, points: question.points })),
+    attempt.questions.map((question) => ({ questionId: question.questionId, earned: question.earned,
+      status: question.gradingStatus === "graded" ? "graded" : "pending" }))).percentage;
+}
+
+/** Course quiz scores retain the relative weight of every authored question. */
+export function verifiedKnowledgeLectureOverallScoreRate(attempts: readonly KnowledgeLectureAttempt[]): number | undefined {
+  if (!attempts.length || attempts.some((attempt) => verifiedKnowledgeLectureScoreRate(attempt) === undefined)) return undefined;
+  const questions = attempts.flatMap((attempt, index) => attempt.questions.map((question) => ({
+    id: `${index}:${question.questionId}`, points: question.points, earned: question.earned,
+  })));
+  return calculateQuizScore(questions, questions.map((question) => ({
+    questionId: question.id, earned: question.earned, status: "graded",
+  }))).percentage;
 }
 
 export function knowledgeLectureQuizEstimate(

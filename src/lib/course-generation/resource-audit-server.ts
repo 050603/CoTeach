@@ -601,23 +601,44 @@ export async function auditCourseGeneratedResources(
           )
         ));
         if (!unresolved.length) return [];
-        const failed = unresolved.filter((action) => (
+        const unaligned = unresolved.filter((action) => (
+          action.type === "speech" && action.speechAlignment?.status !== "aligned"
+        ));
+        const failed = unaligned.filter((action) => (
           action.type === "speech" && action.speechAlignment?.status === "failed"
         )).length;
+        const unalignedIds = new Set(unaligned.map((action) => action.id));
+        const affectedCues = (scene.actions ?? []).filter((action) => {
+          if (action.type !== "spotlight" && action.type !== "laser") return false;
+          const startAffected = Boolean(action.speechId && unalignedIds.has(action.speechId));
+          const endSpeechId = action.type === "spotlight" ? action.endSpeechId ?? action.speechId : action.speechId;
+          const endAffected = Boolean(endSpeechId && unalignedIds.has(endSpeechId));
+          return (startAffected && Boolean(action.speechAnchor))
+            || (endAffected && Boolean(action.endSpeechAnchor))
+            || (startAffected && action.type === "laser" && Boolean(action.waypoints?.some((waypoint) => waypoint.speechAnchor)));
+        }).length;
         const bindingWarning = unresolved.find((action) => (
           action.type === "speech"
           && action.speechAlignment?.status === "aligned"
           && action.speechAlignment.error
         ));
+        const bindingError = bindingWarning?.type === "speech" ? bindingWarning.speechAlignment?.error : undefined;
+        const details: string[] = [];
+        if (unaligned.length) {
+          const pending = unaligned.length - failed;
+          const alignmentDetail = failed
+            ? `${failed} 段语音对齐失败${pending ? `，另有 ${pending} 段尚未完成精确时间对齐` : ""}`
+            : `${pending} 段语音尚未完成精确时间对齐`;
+          details.push(`${alignmentDetail}，音频可播放，相关字幕使用近似定位`);
+          if (affectedCues) details.push(`${affectedCues} 处关联指示动作暂无法按音频同步`);
+        }
+        if (bindingError) details.push(/[\u3400-\u9fff]/u.test(bindingError)
+          ? bindingError : "部分指示动作未能与讲解词句可靠绑定，自动指示已停用");
         return [{
           id: `speech-sync:${scene.id}`,
           type: "speech-sync" as const,
           title: userFacingName(scene.title, "课程讲解页面"),
-          detail: bindingWarning?.type === "speech" && bindingWarning.speechAlignment?.error
-            ? bindingWarning.speechAlignment.error
-            : failed > 0
-            ? `${failed} 段语音对齐失败，按音频同步的字幕定位与指示动作已停用`
-            : `${unresolved.length} 段语音尚未建立字幕与动作的音频时间线`,
+          detail: details.join("；"),
         }];
       })
     : [];

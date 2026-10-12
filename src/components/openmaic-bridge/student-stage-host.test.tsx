@@ -546,15 +546,32 @@ describe("StudentStageHost reporting modes", () => {
   it("reads submitted scores from interactive scenes that contain a quiz", () => {
     localStorage.setItem("quizAnswers:interactive-quiz", JSON.stringify({ q1: "A", q2: "B" }));
     localStorage.setItem("quizResults:interactive-quiz", JSON.stringify([
-      { status: "correct" },
-      { status: "incorrect" },
+      { questionId: "q1", status: "correct", earned: 15, points: 15 },
+      { questionId: "q2", status: "incorrect", earned: 0, points: 10 },
     ]));
 
     expect(quizScoreForScene({
       id: "interactive-quiz",
       type: "interactive",
       title: "节点小测",
-    } as import("@openmaic/lib/types/stage").Scene)).toBe(50);
+    } as import("@openmaic/lib/types/stage").Scene)).toBe(60);
+  });
+
+  it("uses the quiz's authored points, includes AI credit, and waits for missing grades", () => {
+    const sceneId = "weighted-quiz";
+    const scene = { id: sceneId, type: "quiz", content: { type: "quiz", questions: [
+      { id: "choice", points: 15 }, { id: "blank", points: 10 }, { id: "judge", points: 10 },
+    ] } } as import("@openmaic/lib/types/stage").Scene;
+    localStorage.setItem(`quizAnswers:${sceneId}`, JSON.stringify({ choice: "A", blank: "答案", judge: "true" }));
+    const results = [
+      { questionId: "choice", status: "correct", earned: 15 },
+      { questionId: "blank", status: "graded", earned: 10 },
+      { questionId: "judge", status: "correct", earned: 10 },
+    ];
+    localStorage.setItem(`quizResults:${sceneId}`, JSON.stringify(results));
+    expect(quizScoreForScene(scene)).toBe(100);
+    localStorage.setItem(`quizResults:${sceneId}`, JSON.stringify([results[0], { ...results[1], status: "pending", earned: 0 }, results[2]]));
+    expect(quizScoreForScene(scene)).toBeUndefined();
   });
 
   it("replays an unacknowledged final progress write after the player remounts", async () => {
@@ -680,7 +697,7 @@ describe("StudentStageHost reporting modes", () => {
     await waitFor(() => expect(renderedStage.props?.onPlaybackStateChange).toBeTypeOf("function"));
 
     localStorage.setItem("quizAnswers:scene-1", JSON.stringify({ q1: "A" }));
-    localStorage.setItem("quizResults:scene-1", JSON.stringify([{ status: "correct" }]));
+    localStorage.setItem("quizResults:scene-1", JSON.stringify([{ questionId: "q1", status: "correct", earned: 1, points: 1 }]));
     const scenes = [
       { ...stageMock.state.scenes[0], type: "quiz" },
       { id: "scene-2", title: "下一页", type: "slide", actions: [] },

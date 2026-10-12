@@ -5,7 +5,11 @@ export function compactSourceSequenceText(value: string): string {
 
 export function sourceSequenceLabelKey(value: string): string {
   const quotedAction = value.trim().match(/^进行\s*[“「『"‘']([^“”「」『』"‘']+)[”」』"’']$/u);
-  return compactSourceSequenceText(quotedAction?.[1] ?? value);
+  const full = compactSourceSequenceText(quotedAction?.[1] ?? value);
+  // A diagram may put the structural word “阶段” in its heading instead of
+  // repeating it on every node. Keep the complete, specific stage name;
+  // short generic actions and other meaningful suffixes have no such alias.
+  return full.match(/^(.{4,})阶段$/u)?.[1] ?? full;
 }
 
 /** Locate the first licensed spelling in compact text coordinates. A method

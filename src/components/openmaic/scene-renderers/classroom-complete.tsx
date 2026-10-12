@@ -8,7 +8,7 @@ import { useI18n } from '@openmaic/lib/hooks/use-i18n';
 import { useStageStore } from '@openmaic/lib/store';
 import type { Scene, SceneType } from '@openmaic/lib/types/stage';
 import { summarizeScenes } from '@openmaic/lib/classroom/complete-summary';
-import { readAnswersForSummary } from '@openmaic/lib/quiz/persistence';
+import { readSubmittedState } from '@openmaic/lib/quiz/persistence';
 
 const SCENE_TYPE_ICONS: Record<SceneType, typeof FileText> = {
   slide: FileText,
@@ -312,7 +312,7 @@ export function ClassroomCompletePage({ scenes, title }: ClassroomCompletePagePr
   // Computed once on mount: re-grading on every render would be wasteful and
   // the underlying localStorage values only change when the user revisits a
   // quiz scene (which unmounts this page).
-  const summary = useMemo(() => summarizeScenes(scenes, readAnswersForSummary), [scenes]);
+  const summary = useMemo(() => summarizeScenes(scenes, readSubmittedState), [scenes]);
 
   const dateLabel = useMemo(() => {
     try {
@@ -475,16 +475,17 @@ export function ClassroomCompletePage({ scenes, title }: ClassroomCompletePagePr
               className="w-full rounded-2xl bg-gradient-to-br from-amber-100 via-orange-50 to-amber-100 dark:from-amber-950/50 dark:via-orange-950/30 dark:to-amber-950/50 border border-amber-200 dark:border-amber-900/50 px-6 py-5 shadow-md shadow-amber-200/30 dark:shadow-amber-950/20"
             >
               <div className="flex items-center gap-5">
-                <QuizRing pct={summary.quiz.pct} delay={1.3} />
+                {summary.quiz.pct !== undefined && <QuizRing pct={summary.quiz.pct} delay={1.3} />}
                 <div className="flex-1 min-w-0">
                   <div className="text-base font-bold text-amber-700 dark:text-amber-300">
-                    {t('classroomComplete.quizScoreLabel', {
-                      correct: summary.quiz.correct,
-                      total: summary.quiz.total,
-                    })}
+                    {summary.quiz.pct === undefined ? t('classroomComplete.quizPending')
+                      : t('classroomComplete.quizScorePercent', { score: summary.quiz.pct })}
                   </div>
+                  <p className="mt-1 text-sm text-amber-700/80 dark:text-amber-300/80">
+                    {t('quiz.rawScore', { score: summary.quiz.score, total: summary.quiz.total })}
+                  </p>
                   <div className="mt-1 text-sm text-amber-700/80 dark:text-amber-300/80">
-                    {t(`classroomComplete.encouragement.${encouragementKey(summary.quiz.pct)}`)}
+                    {summary.quiz.pct !== undefined && t(`classroomComplete.encouragement.${encouragementKey(summary.quiz.pct)}`)}
                   </div>
                 </div>
               </div>

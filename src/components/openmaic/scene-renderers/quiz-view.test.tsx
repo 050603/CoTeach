@@ -10,6 +10,28 @@ import { gradeShortAnswerQuestion } from "./quiz-grade-client";
 vi.mock("./quiz-grade-client", () => ({ gradeShortAnswerQuestion: vi.fn() }));
 
 describe("QuizView single-attempt review", () => {
+  it("shows a 100-point grade and retains the raw score for a restored weighted quiz", () => {
+    const sceneId = "weighted-report";
+    const questions: QuizQuestion[] = [
+      { id: "choice", type: "single", question: "选择", points: 15 },
+      { id: "blank", type: "short_answer", format: "fill_blank", question: "填写", points: 10 },
+      { id: "judge", type: "single", question: "判断", points: 10 },
+    ];
+    localStorage.setItem(`quizAnswers:${sceneId}`, JSON.stringify({ choice: "A", blank: "答案", judge: "true" }));
+    localStorage.setItem(`quizResults:${sceneId}`, JSON.stringify([
+      { questionId: "choice", correct: true, status: "correct", earned: 15 },
+      { questionId: "blank", correct: null, status: "graded", earned: 10 },
+      { questionId: "judge", correct: true, status: "correct", earned: 10 },
+    ]));
+    render(<I18nProvider><KnowledgeLectureQuizLockProvider attemptsBySceneId={new Map()}>
+      <QuizView questions={questions} sceneId={sceneId} />
+    </KnowledgeLectureQuizLockProvider></I18nProvider>);
+    expect(screen.getByText("/ 100")).toBeInTheDocument();
+    expect(screen.getByRole("img", { name: "100%" })).toBeInTheDocument();
+    expect(screen.getByText(/Raw points 35 \/ 35|原始得分 35 \/ 35 分/)).toBeInTheDocument();
+    localStorage.removeItem(`quizAnswers:${sceneId}`);
+    localStorage.removeItem(`quizResults:${sceneId}`);
+  });
   it("releases submission before delayed grading and waits for review confirmation", async () => {
     const sceneId = "staged-delay-quiz";
     const questions: QuizQuestion[] = [{
