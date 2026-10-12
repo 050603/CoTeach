@@ -27,7 +27,6 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "prepublishOnly": "pnpm run build",
-    "transvert": "npx tsx scripts/transvert.js",
     "transvert:pro": "npx tsx scripts/transvert.ts"
   },
   "keywords": [

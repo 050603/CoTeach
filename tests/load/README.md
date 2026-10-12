@@ -58,10 +58,6 @@ CAPACITY_CONNECT_HOST=172.16.185.157 node scripts/verify-capacity-document-resum
 
 工具校验测试用户命名、课堂归属与原始草稿版本，使用短时内存凭据，保留原失败报告，将后续写入记到独立的 `document-resume-<时间戳>.json`。该专项不能替代完整 40 人验收；原始草稿版本已变化时会拒绝继续，不自动覆盖已有文档。
 
-### 2026-09-27 最终验收证据
+### 最终备份、恢复与清理
 
-本轮内网 42 用户实际持续 7202.978 秒，主报告为 **failed**：归档延迟及后台批注质量未达标。外部作品提交、展示读取及此前集中投屏短测的超标另列，不用总体低失败率替代各功能门槛。详见 本机最终报告 `docs/audits/2026-09-26-classroom-capacity/report.md`（过程证据不纳入 Git）。
-
-后台单段批注遇到明确 5xx 时，验收工具仅在数据库 FAILED 终态、完整模型原文与失败审计已核对后，允许相同 requestId/正文进行一次有界重试；首轮失败率与质量失败仍保留。该工具恢复逻辑不等于产品自动重试已掩盖失败。
-
-包含最终数据的本机恢复支持只读逐学生校验；使用 [恢复操作单](../../docs/audits/2026-09-26-classroom-capacity/final-backup-restore-runbook.md)。清理默认仅预览；投屏短测必须显式指定 `--kind=projection-contention` 及完整 `--abort-run=capacity-UUID`，见[精确清理规则](../../docs/audits/2026-09-26-classroom-capacity/cleanup.md)。先留存报告、核对记录并恢复验证，再清理明确所属的测试样本。
+包含最终数据的本机恢复支持只读逐学生校验；使用 [恢复操作单](../../docs/operations/classroom-capacity-restore.md)。清理默认仅预览；投屏短测必须显式指定 `--kind=projection-contention` 及完整 `--abort-run=capacity-UUID`，见[精确清理规则](../../docs/operations/classroom-capacity-cleanup.md)。先留存报告、核对记录并恢复验证，再清理明确所属的测试样本。

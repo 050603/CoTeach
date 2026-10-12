@@ -17,7 +17,7 @@
 
 一个运行在浏览器中，可以将 .pptx 文件转为可读的 JSON 数据的 JavaScript 库。
 
-**实现说明**：主入口为 TypeScript 实现（`src/`），构建产物为 `dist/`；输出 JSON 格式与文档及原示例一致。原 JavaScript 实现位于 `src1/`，仅作输出格式与逻辑参考，不参与构建。
+**实现说明**：主入口为 TypeScript 实现（`src/`），构建产物为 `dist/`；输出 JSON 格式与文档及原示例一致。需要对照旧版输出时，可查看[历史 JavaScript 实现](https://github.com/050603/CoTeach/tree/b13a257b/packages/@openmaic/importer/src1)。
 
 **OpenMAIC 扩展**：在 `parse()`（PPTX → 中间 JSON）之上新增了完整的 import pipeline —— `importPptx()` 直接吃 `.pptx` 文件、吐 OpenMAIC 画布需要的 `Slide[]`，并可选地把所有 base64 图片 / blob 媒体转交给你提供的 OSS 上传函数。详见下方「🚀 进阶用法」。
 

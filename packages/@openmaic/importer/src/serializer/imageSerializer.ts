@@ -220,7 +220,7 @@ const OOXML_100K = 100000;
  * Build `filters` for PPTist: `sharpen`, `colorTemperature`, `saturation`, `brightness`, `contrast`.
  *
  * - **ISO / DrawingML**: `<a:lum bright contrast>` on `<a:blip>`.
- * - **Office 2010+** (same as legacy `src1/fill.js` `getPicFilters`): `a:extLst` → `ext` →
+ * - **Office 2010+** (same as legacy `getPicFilters` behavior): `a:extLst` → `ext` →
  *   `a14:imgProps` / `a14:imgLayer` / `a14:imgEffect` → `a14:saturation`, `a14:brightnessContrast`,
  *   `a14:sharpenSoften`, `a14:colorTemperature`.
  *

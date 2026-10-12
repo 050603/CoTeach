@@ -29,7 +29,7 @@ overrides:
 
 patchedDependencies:
   '@platejs/docx-io@53.3.2':
-    hash: hcobjg35nkalwcpy7he2bbl23m
+    hash: a3b7daa3f044a168db4a8b457426815644bd269f5f11c79b95944c489dbd9c93
     path: patches/@platejs__docx-io@53.3.2.patch
 
 importers:
@@ -164,7 +164,7 @@ importers:
         version: 53.3.8(platejs@53.3.9(@types/react@19.2.17)(immer@11.1.9)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)(scheduler@0.27.0)(use-sync-external-store@1.6.0(react@19.2.4)))(react-dnd-html5-backend@16.0.1)(react-dnd@16.0.1(@types/node@22.20.0)(@types/react@19.2.17)(react@19.2.4))(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
       '@platejs/docx-io':
         specifier: 53.3.2
-        version: 53.3.2(patch_hash=hcobjg35nkalwcpy7he2bbl23m)(@platejs/docx@53.0.0(platejs@53.3.9(@types/react@19.2.17)(immer@11.1.9)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)(scheduler@0.27.0)(use-sync-external-store@1.6.0(react@19.2.4)))(react-dom@19.2.4(react@19.2.4))(react@19.2.4))(@platejs/markdown@53.3.3(platejs@53.3.9(@types/react@19.2.17)(immer@11.1.9)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)(scheduler@0.27.0)(use-sync-external-store@1.6.0(react@19.2.4)))(react-dom@19.2.4(react@19.2.4))(react@19.2.4)(typescript@5.9.3))(platejs@53.3.9(@types/react@19.2.17)(immer@11.1.9)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)(scheduler@0.27.0)(use-sync-external-store@1.6.0(react@19.2.4)))(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
+        version: 53.3.2(patch_hash=a3b7daa3f044a168db4a8b457426815644bd269f5f11c79b95944c489dbd9c93)(@platejs/docx@53.0.0(platejs@53.3.9(@types/react@19.2.17)(immer@11.1.9)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)(scheduler@0.27.0)(use-sync-external-store@1.6.0(react@19.2.4)))(react-dom@19.2.4(react@19.2.4))(react@19.2.4))(@platejs/markdown@53.3.3(platejs@53.3.9(@types/react@19.2.17)(immer@11.1.9)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)(scheduler@0.27.0)(use-sync-external-store@1.6.0(react@19.2.4)))(react-dom@19.2.4(react@19.2.4))(react@19.2.4)(typescript@5.9.3))(platejs@53.3.9(@types/react@19.2.17)(immer@11.1.9)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)(scheduler@0.27.0)(use-sync-external-store@1.6.0(react@19.2.4)))(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
       '@platejs/floating':
         specifier: 53.0.0
         version: 53.0.0(platejs@53.3.9(@types/react@19.2.17)(immer@11.1.9)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)(scheduler@0.27.0)(use-sync-external-store@1.6.0(react@19.2.4)))(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
@@ -11621,7 +11621,7 @@ snapshots:
       react-dnd-html5-backend: 16.0.1
       react-dom: 19.2.4(react@19.2.4)
 
-  '@platejs/docx-io@53.3.2(patch_hash=hcobjg35nkalwcpy7he2bbl23m)(@platejs/docx@53.0.0(platejs@53.3.9(@types/react@19.2.17)(immer@11.1.9)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)(scheduler@0.27.0)(use-sync-external-store@1.6.0(react@19.2.4)))(react-dom@19.2.4(react@19.2.4))(react@19.2.4))(@platejs/markdown@53.3.3(platejs@53.3.9(@types/react@19.2.17)(immer@11.1.9)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)(scheduler@0.27.0)(use-sync-external-store@1.6.0(react@19.2.4)))(react-dom@19.2.4(react@19.2.4))(react@19.2.4)(typescript@5.9.3))(platejs@53.3.9(@types/react@19.2.17)(immer@11.1.9)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)(scheduler@0.27.0)(use-sync-external-store@1.6.0(react@19.2.4)))(react-dom@19.2.4(react@19.2.4))(react@19.2.4)':
+  '@platejs/docx-io@53.3.2(patch_hash=a3b7daa3f044a168db4a8b457426815644bd269f5f11c79b95944c489dbd9c93)(@platejs/docx@53.0.0(platejs@53.3.9(@types/react@19.2.17)(immer@11.1.9)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)(scheduler@0.27.0)(use-sync-external-store@1.6.0(react@19.2.4)))(react-dom@19.2.4(react@19.2.4))(react@19.2.4))(@platejs/markdown@53.3.3(platejs@53.3.9(@types/react@19.2.17)(immer@11.1.9)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)(scheduler@0.27.0)(use-sync-external-store@1.6.0(react@19.2.4)))(react-dom@19.2.4(react@19.2.4))(react@19.2.4)(typescript@5.9.3))(platejs@53.3.9(@types/react@19.2.17)(immer@11.1.9)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)(scheduler@0.27.0)(use-sync-external-store@1.6.0(react@19.2.4)))(react-dom@19.2.4(react@19.2.4))(react@19.2.4)':
     dependencies:
       '@platejs/docx': 53.0.0(platejs@53.3.9(@types/react@19.2.17)(immer@11.1.9)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)(scheduler@0.27.0)(use-sync-external-store@1.6.0(react@19.2.4)))(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
       '@platejs/markdown': 53.3.3(platejs@53.3.9(@types/react@19.2.17)(immer@11.1.9)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)(scheduler@0.27.0)(use-sync-external-store@1.6.0(react@19.2.4)))(react-dom@19.2.4(react@19.2.4))(react@19.2.4)(typescript@5.9.3)

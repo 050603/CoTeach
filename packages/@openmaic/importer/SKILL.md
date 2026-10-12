@@ -12,7 +12,7 @@ description: 修复或扩展 CoTeach 的 PPTX 导入、OOXML 解析及导入还�
 - 分层或跨模块修改先读 [DESIGN.md](DESIGN.md) 对应章节。依赖方向为 `adapter → serializer → model → parser`；模型层不解析视觉样式。复用 `parser/units.ts`、`SafeXmlNode` 和 `utils/color.ts`。
 - 先用现有测试或用户样本复现。JSON 数值/样式错误查 serializer 与 RenderContext，节点类型查 model；JSON 正确但画面错误查相邻 renderer 包。master/layout 装饰需同时检查 `layoutElements` 和 `elements`。
 - 对实际解析问题，可在本包执行 `node scripts/extract-pptx-structure.js <样本.pptx> <临时目录>` 查看 XML，以及 `pnpm exec tsx scripts/transvert.ts <样本.pptx> <输出.json>` 对比修改前后 JSON。已有最小回归用例足够时无需重复解压整份 PPTX。
-- `src1/` 是只读历史参考；仅在新实现行为难以解释时对照，不作为每次修复的运行或构建前置条件。
+- 新实现行为难以解释时，可按对应 Git 版本对照[历史 JavaScript 实现](https://github.com/050603/CoTeach/tree/b13a257b/packages/@openmaic/importer/src1)；本地只保留当前实现和回归样本。
 
 ## 协议与易错点
 

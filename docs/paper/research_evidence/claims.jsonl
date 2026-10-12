@@ -1,6 +1,0 @@
-{"claim_id":"c1","claim":"PjBL benefits depend on implementation conditions, making scaffolding and orchestration central design concerns.","support":["chen_yang_2019","hmelo_silver_2007","kim_belland_walker_2018"],"status":"supported"}
-{"claim_id":"c2","claim":"Carefully structured AI support can improve learning or tutoring quality, whereas unconstrained assistance can undermine durable learner agency.","support":["kestin_2025","wang_tutor_copilot_2024","darvishi_2024"],"status":"supported"}
-{"claim_id":"c3","claim":"Educational chatbot support often emphasizes strategy enactment more than the full SRL cycle.","support":["guan_2025","de_mooij_2025"],"status":"supported"}
-{"claim_id":"c4","claim":"Teacher-facing analytics should preserve educator control and connect signals to actionable classroom context.","support":["dillenbourg_2013","holstein_2019","possaghi_2025"],"status":"supported"}
-{"claim_id":"c5","claim":"OpenPBL implements evidence gating, role and stage boundaries, teacher authority, and interruption-aware companion policies.","support":["repository:docs/adr","repository:src/lib/companion","repository:src/lib/classroom","repository:prisma/schema.prisma"],"status":"supported_by_artifact"}
-{"claim_id":"c6","claim":"OpenPBL improves student learning, agency, cognitive load, or teacher workload.","support":[],"status":"not_tested"}

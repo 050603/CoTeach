@@ -22,13 +22,6 @@
     "test:classroom-flow": "node scripts/verify-research-database.mjs",
     "test:e2e:ui": "playwright test --ui",
     "test:projection-sync": "node scripts/measure-projection-sync.mjs",
-    "quality-lab:build": "node tools/course-quality-lab/build.mjs",
-    "quality-lab:generate": "NODE_OPTIONS=--conditions=import tsx tools/course-quality-lab/generate.ts --deployment-secrets",
-    "quality-lab:cleanup": "NODE_OPTIONS=--conditions=import tsx tools/course-quality-lab/cleanup.ts",
-    "quality-lab:experiment": "NODE_OPTIONS=--conditions=import tsx tools/course-quality-lab/experiment-runner.ts",
-    "quality-lab:start": "tsx tools/course-quality-lab/server.ts",
-    "quality-lab:test": "vitest run --config tools/course-quality-lab/vitest.config.ts",
-    "quality-lab:typecheck": "tsc -p tools/course-quality-lab/tsconfig.json",
     "playwright:install": "playwright install chromium",
     "db:generate": "node scripts/run-prisma.mjs generate",
     "db:migrate": "node scripts/run-prisma.mjs migrate dev",
@@ -40,7 +33,8 @@
     "cleanup:uploads": "tsx --env-file=.env.local scripts/cleanup-uploads.ts orphans",
     "storage:rehydrate": "tsx --env-file=.env.local scripts/rehydrate-storage.ts",
     "admin:init-teacher": "tsx --env-file=.env.local scripts/init-teacher.ts",
-    "postinstall": "cd packages/mathml2omml && pnpm run build && cd ../pptxgenjs && pnpm run build && cd ../@openmaic/dsl && pnpm run build && cd ../generation && pnpm run build && cd ../importer && pnpm run build && cd ../renderer && pnpm run build && cd ../../.. && node scripts/sync-maic-importer.mjs && node scripts/run-prisma.mjs generate"
+    "postinstall": "cd packages/mathml2omml && pnpm run build && cd ../pptxgenjs && pnpm run build && cd ../@openmaic/dsl && pnpm run build && cd ../generation && pnpm run build && cd ../importer && pnpm run build && cd ../renderer && pnpm run build && cd ../../.. && node scripts/sync-maic-importer.mjs && node scripts/run-prisma.mjs generate",
+    "test:course-generation-acceptance": "vitest run --config tests/course-generation-acceptance/vitest.config.ts"
   },
   "dependencies": {
     "@ai-sdk/amazon-bedrock": "^4.0.103",

@@ -116,7 +116,7 @@ function parsePlaceholder(nvPr: SafeXmlNode): PlaceholderInfo | undefined {
 /**
  * Compute document-order index: count all Element nodes preceding this one
  * in a depth-first walk from the document root.
- * Mirrors the `cust_attr_order` counter in src1's `simplifyLostLess`.
+ * Preserves the legacy `cust_attr_order` element-order counter.
  */
 function getDocumentOrder(node: SafeXmlNode): number {
   const el = node.rawElement;

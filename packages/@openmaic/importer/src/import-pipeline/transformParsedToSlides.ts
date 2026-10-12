@@ -1215,7 +1215,6 @@ export async function transformParsedToSlides(
           // rowHeights（pt → px）：
           // - 全 0：解析库在 PPT 自动行高场景下可能返回全 0，用 element.height 均分兜底
           // - 其余：直接 pt × ratio；PPT XML 里 <a:tr h> 可能是"标称值"导致 sum(rowHeights) ≠ element.height，
-          //   归一化策略的取舍记录在 docs/plans/a2m-table-import-render.md
           const rowCount = data.length;
           const rawRowHeightsPt = el.rowHeights ?? [];
           const sumRawPt = rawRowHeightsPt.reduce((a, b) => a + b, 0);

@@ -14,17 +14,14 @@ node_modules/
 /coverage
 /playwright-report/
 /test-results/
-/docs/audits/**/*.log
-/docs/audits/**/*.json
-/docs/audits/**/*.jsonl
-/docs/verification/**/*.log
-/docs/verification/**/*.json
-/docs/verification/**/*.jsonl
-/docs/verification/**/*.png
-/docs/reports/**/*.json
-# Generated paper review page renders; authored manuscripts and figures remain tracked.
-/docs/paper/qa*/**/*.png
-/docs/paper/baseline_openmaic/rendered_jcst/
+# Research manuscripts, execution reports and historical implementation notes.
+# Maintain current contracts and runbooks in docs/quality, docs/adr and docs/operations.
+/docs/paper/
+/docs/plans/
+/docs/audits/
+/docs/reports/
+/docs/verification/
+/docs/research/
 /playwright/.cache/
 /.cache/
 /artifacts/
@@ -79,8 +76,6 @@ next-env.d.ts
 # openPBL local demo state and AI provider secrets
 .openpbl-data/
 .openpbl-runtime/
-tools/course-quality-lab/dist/
-tools/course-quality-lab/node_modules/
 
 # runtime data and generated assets (classrooms, audio, media)
 /data/
@@ -94,6 +89,10 @@ tools/course-quality-lab/node_modules/
 
 # backup files
 *.bak
+*.backup
+*.orig
+*.rej
+*~
 src/middleware-openmaic.ts.bak
 
 # database backups (Stage 11)
@@ -103,10 +102,8 @@ src/middleware-openmaic.ts.bak
 __pycache__/
 *.py[cod]
 
-# Local classroom capacity run notes and evidence (keep reusable runbooks)
-/docs/audits/2026-09-26-classroom-capacity/*
-!/docs/audits/2026-09-26-classroom-capacity/cleanup.md
-!/docs/audits/2026-09-26-classroom-capacity/final-backup-restore-runbook.md
-/docs/audits/2026-09-27-classroom-remediation/
-# Browser acceptance screenshots are local execution evidence
-/docs/audits/**/*.png
+# Generated workspace package bundles and retired reference tools.
+/packages/*/dist/
+/packages/@openmaic/*/dist/
+/packages/@openmaic/importer/src1/
+/tools/course-quality-lab/

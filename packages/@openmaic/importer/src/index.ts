@@ -1,6 +1,6 @@
 /**
  * pptxtojson — Parse .pptx to JSON for PPTist
- * New TypeScript implementation; src1 is reference for data format.
+ * New TypeScript implementation; preserves the established output data format.
  */
 
 import { parseZip } from './parser/ZipParser';

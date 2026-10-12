@@ -33,3 +33,5 @@
 CI 保留完整检查，不用路径跳过掩盖依赖影响；本地验证按上表缩小范围。修复一个失败后只重跑必要检查。发布前核对实际部署入口、环境与当前提交，完整要求见 [部署说明](../deploy/README.md)。
 
 交付说明实现结果、执行过的检查和仍存在的阻塞。不要用结构校验通过代替真实 CI、页面或生产验证。
+
+正式生成的真实模型验收保留在 `tests/course-generation-acceptance`，入口为 `pnpm test:course-generation-acceptance`，类型由 `pnpm typecheck` 检查。默认跳过供应商调用；各测试的显式环境开关见测试入口。执行产物写入已忽略的 `.openpbl-runtime`，不能把未执行的真实模型验收记为通过。

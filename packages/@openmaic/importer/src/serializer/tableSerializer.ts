@@ -7,7 +7,7 @@
  *   Later sections override earlier ones for fill, borders, and text props.
  *   Direct cell tcPr always takes highest priority.
  *
- * Aligned with src1/table.js for output format and
+ * Preserves the established table output format and
  * pptx-renderer-main/TableRenderer.ts for resolution logic.
  */
 

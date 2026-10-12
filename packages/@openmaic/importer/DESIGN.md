@@ -123,14 +123,13 @@ src/
 
 ## 参考实现
 
-- `src1/`：原版 JS 实现，**只读不改**，作为参考
+- [历史 JavaScript 实现](https://github.com/050603/CoTeach/tree/b13a257b/packages/@openmaic/importer/src1)：需要解释旧版格式时按对应 Git 版本查阅。
 
 ## 脚本
 
 | 命令 | 用途 |
 |---|---|
 | `npx tsx scripts/transvert.ts <file.pptx> [out.json]` | 用本库解析（开发主力，直接跑源码无需构建） |
-| `npx tsx scripts/transvert.js <file.pptx> [out.json]` | 用 pptxtojson 原版解析 |
 | `node scripts/extract-pptx-structure.js <file.pptx> [outDir]` | 解压 .pptx 查看源 XML |
 | `pnpm build` | Rollup 打包 + 生成 .d.ts → dist/ |
 | `pnpm lint` | ESLint 检查 |

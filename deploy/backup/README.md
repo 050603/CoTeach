@@ -50,7 +50,7 @@ SQLite 在线备份必须在计算文件清单前显式关闭源、目的连接�
 
 实际恢复时先运行演练验证所选备份，再在维护窗口停止应用写入；将所选逻辑快照恢复到新的数据库实例并还原同一快照下的 `files/`、`configuration/`；需要重建应用时还原 `source/`，验证后切换应用连接。不要直接覆盖仍在运行的生产目录。若只进行物理 PITR，必须另检查命名恢复点与文件之间的新引用差异；持续 WAL 本身不能替代配套文件快照。配置目录含敏感信息，不能上传到代码仓库或附在工单中。
 
-本次 42 人容量验收结束后的准确执行顺序、锁冲突判断、证据位置和 RPO/RTO 核对见 [最终备份与恢复操作单](../../docs/audits/2026-09-26-classroom-capacity/final-backup-restore-runbook.md)。该操作单需等待持续负载、最终归档、重启与对账全部结束后再执行，不代表最终恢复已通过。测试自建数据只在新恢复证据确认后清理；投屏探针须显式指定 `--kind=projection-contention`，详见 [清理说明](../../docs/audits/2026-09-26-classroom-capacity/cleanup.md)。
+本次 42 人容量验收结束后的准确执行顺序、锁冲突判断、证据位置和 RPO/RTO 核对见 [最终备份与恢复操作单](../../docs/operations/classroom-capacity-restore.md)。该操作单需等待持续负载、最终归档、重启与对账全部结束后再执行，不代表最终恢复已通过。测试自建数据只在新恢复证据确认后清理；投屏探针须显式指定 `--kind=projection-contention`，详见 [清理说明](../../docs/operations/classroom-capacity-cleanup.md)。
 
 ## 手动精简备份（保留原有流程）
 

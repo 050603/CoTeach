@@ -1154,7 +1154,7 @@ export async function renderShape(
   };
 
   // --- Shape vs Text type detection ---
-  // Mirrors src1/pptxtojson.js logic:
+  // Preserves legacy shape classification:
   // 1. cNvSpPr@txBox="1" → text box → output as "text"
   // 2. Placeholder body/title/ctrTitle/subTitle → output as "text"
   // 3. Custom geometry (non-diagram) → shape
@@ -1197,7 +1197,7 @@ export async function renderShape(
       outputAsText = false;
     } else if (hasPresetGeom && hasFillOrBorder) {
       // 带文字+填充的非占位符 rect 是色块 banner，按 shape 输出
-      // 以保留原始 width × height（与 src1 行为一致）。
+      // 以保留原始 width × height（保留既有输出行为）。
       outputAsText = false;
     } else {
       outputAsText = true;
