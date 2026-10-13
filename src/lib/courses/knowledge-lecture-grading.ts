@@ -6,6 +6,7 @@ import type { KnowledgeLectureQuestionReview } from "@/lib/session/types";
 import { callLLM } from "@openmaic/lib/ai/llm";
 import type { resolveModelFromRequest } from "@openmaic/lib/server/resolve-model";
 import { parseQuizGradeResponse } from "@openmaic/lib/quiz/grade-response";
+import { parseStructuredGrade, structuredGradePrompt } from "@openmaic/lib/quiz/rubric";
 
 type Model = Awaited<ReturnType<typeof resolveModelFromRequest>>;
 type Input = {
@@ -24,6 +25,8 @@ export function gradingFailureCode(error: unknown, phase: "resolve" | "model" | 
   if (signal.aborted || chain.some(item => item.name === "AbortError")) return "CANCELLED";
   if (phase === "resolve") return "MODEL_RESOLUTION_FAILED";
   if (phase === "parse") {
+    if (chain.some(item => item.message === "QUIZ_GRADE_INVALID_CRITERIA")) return "INVALID_CRITERIA";
+    if (chain.some(item => item.message === "QUIZ_GRADE_INVALID_RUBRIC")) return "INVALID_RUBRIC";
     return chain.some(item => item.message === "QUIZ_GRADE_INVALID_SCORE") ? "INVALID_SCORE" : "INVALID_JSON";
   }
   if (chain.some(item => item.name === "TimeoutError" || ["ETIMEDOUT", "UND_ERR_HEADERS_TIMEOUT", "UND_ERR_BODY_TIMEOUT", "UND_ERR_CONNECT_TIMEOUT"].includes(String(item.code)))) return "PROVIDER_TIMEOUT";
@@ -37,8 +40,13 @@ export async function gradeKnowledgeLectureQuestion(input: Input): Promise<Knowl
   const callAttemptId = randomUUID();
   const startedAt = new Date().toISOString();
   const start = performance.now();
-  const system = '你是教育评估专家。仅依据题目、评分要点和学生实际答案评分，不推测未写内容。严格输出 JSON：{"score": 0 到题目满分之间的数字, "comment": "简短评语"}。';
-  const prompt = `题目：${question.prompt}\n满分：${question.points}\n评分要点：${question.gradingRubric || "按准确性、相关性、完整性与推理质量评分"}\n学生答案：${question.answer}`;
+  const { system, prompt } = question.scoringRubric ? structuredGradePrompt({
+    question: question.prompt, answer: question.answer, points: question.points,
+    rubric: question.scoringRubric, referenceAnswer: question.referenceAnswer,
+  }) : {
+    system: '你是教育评估专家。仅依据题目、评分要点和学生实际答案评分，不推测未写内容，接受等价表述，不按篇幅或文采扣分。严格输出 JSON：{"score": 0 到题目满分之间的数字, "comment": "简短评语"}。',
+    prompt: `题目：${question.prompt}\n满分：${question.points}\n评分要点：${question.gradingRubric || "按题目要求的概念、结论与必要依据评分"}\n学生答案：${question.answer}`,
+  };
   const detail = { kind: "knowledge-quiz-grading", callAttemptId, attemptId: input.attemptId,
     questionId: question.questionId, classroomId: input.classroomId, startedAt, answerSha256: digest(question.answer) };
   const event = (suffix: string, eventType: AiInteractionEventInput["eventType"], content: string, payload: Record<string, unknown>): AiInteractionEventInput => ({
@@ -66,7 +74,9 @@ export async function gradeKnowledgeLectureQuestion(input: Input): Promise<Knowl
     raw = output.text;
     phase = "parse";
     input.signal.throwIfAborted();
-    const grade = parseQuizGradeResponse(raw.trim(), question.points);
+    const grade = question.scoringRubric
+      ? parseStructuredGrade(raw.trim(), question.points, question.scoringRubric, question.answer)
+      : parseQuizGradeResponse(raw.trim(), question.points);
     review = { ...question, earned: grade.score, correct: null, gradingStatus: "graded", feedback: grade.comment || "AI 已完成批阅。" };
   } catch (error) {
     errorCode = gradingFailureCode(error, phase, input.signal);

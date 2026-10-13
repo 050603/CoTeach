@@ -1408,7 +1408,11 @@ describe('classroom first-pass orchestration and checkpoint integration', () => 
       else {
         const restored = await generate;
         const restoredQuiz = restored.scenes.find((scene) => scene.outlineId === quiz.id)!;
-        expect(restoredQuiz.content).toEqual(paidQuiz.content);
+        expect(restoredQuiz.content).toMatchObject(paidQuiz.content);
+        if (restoredQuiz.content.type === 'quiz') {
+          expect(restoredQuiz.content.questions.reduce((sum, question) => sum + (question.points ?? 0), 0)).toBe(100);
+          expect(restoredQuiz.content.scoring?.courseTotal).toBe(100);
+        }
         if (recovery === 'page') expect(restoredQuiz.actions).toEqual(paidQuiz.actions);
         expect(restored.scenes[0].actions).toEqual(trial.scenes[0].actions);
         expect([...raws.raw]).toEqual(originalRaw);

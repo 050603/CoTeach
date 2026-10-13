@@ -139,7 +139,7 @@ describe('course generation model input', () => {
     expect(params.messages[0].content).toEqual(vision ? [
       { type: 'text', text: 'spatial budget' },
       { type: 'text', text: 'Image reference: spatial-plan' },
-      { type: 'image', image: 'data:image/png;base64,YQ==' },
+      { type: 'file', data: 'data:image/png;base64,YQ==', mediaType: 'image/png' },
     ] : 'spatial budget');
   });
   it('returns a completed empty response without regenerating', async () => {

@@ -1,4 +1,5 @@
 import { fingerprintStageAuthoringInput } from '@/lib/course-generation/authoring-checkpoints';
+import { assignCourseQuizPoints } from '@/lib/openmaic/quiz/course-scoring';
 import { bindTeachingManuscript, type TeachingManuscript } from '@/lib/course-design/teaching-manuscript';
 import { NATIVE_RENDER_REPAIR_POLICY, repairNativeRenderOnce, type NativeRenderRepairResult } from '../generation/native-render-repair';
 import { buildAssessmentContext, buildQuizNarrationContext, ASSESSMENT_DEPENDENCY_VERSION } from '@openmaic/lib/generation/assessment-dependencies';
@@ -1736,7 +1737,7 @@ async function generateClassroomInternal(
     if (page.type !== 'quiz' || !page.quizConfig) return fingerprintSceneOutline(page);
     // Actual counts and the resulting activity-time advice are output fields.
     // Keep every allocated time, source and assessment responsibility strict.
-    const { questionCount: _count, generatedQuestionCount: _generated, ...quizConfig } = page.quizConfig;
+    const { questionCount: _count, generatedQuestionCount: _generated, allocatedPoints: _allocated, ...quizConfig } = page.quizConfig;
     const timingPlan = page.timingPlan ? (() => {
       const { recommendedStudentActivitySec: _recommended, ...timing } = page.timingPlan;
       return timing;
@@ -2951,7 +2952,9 @@ async function generateClassroomInternal(
     phase: 'assembly',
   });
 
-  const scenes = assembledScenes;
+  const scenes = assignCourseQuizPoints(assembledScenes, confirmedProgression
+    .filter((outline) => outline.type === 'quiz')
+    .map((outline) => ({ outlineId: outline.id, knowledgePointIds: outline.knowledgePointIds })));
   const teacherReviewItems = collectGeneratedTeacherReviewItems({ outlines, scenes });
   const generatedTeacherReviewSummary = teacherReviewSummary(teacherReviewItems);
   const qualityReport: CourseQualityReport = {

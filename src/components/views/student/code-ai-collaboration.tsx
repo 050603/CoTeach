@@ -60,6 +60,8 @@ import { useCoursePresence } from "@/hooks/use-course-presence";
 import type { ProjectMemoryEntry, ProjectSupportDetails } from "@/lib/ai-collaboration/project-support-types";
 import { useProjectMemory } from "@/components/views/student/use-project-memory";
 
+import { useCodeDraft } from "./use-code-draft";
+import { acknowledgeCodeAiRequest, readPendingCodeAiRequest, requestBackgroundCodeAi, requestCodeAi, type PendingCodeAiRequest } from "@/lib/browser/code-ai-request";
 import { loadCodeEditorRuntime } from "@/lib/browser/code-editor-runtime";
 const PROACTIVE_REVIEW_IDLE_MS = 9_000;
 const RUNNER_MARKER_OWNER = "openpbl-code-runner";
@@ -194,8 +196,6 @@ export function CodeAiCollaboration({
   const replaceProjectMemories = projectMemory.replaceMemories;
   const loadedScopeRef = useRef("");
   const historyScopeRef = useRef("");
-  const submissionIdRef = useRef<string | undefined>(undefined);
-  const savedContentRef = useRef("");
   const editorRef = useRef<MonacoEditor | null>(null);
   const monacoRef = useRef<Monaco | null>(null);
   const editorDisposablesRef = useRef<MonacoDisposable[]>([]);
@@ -207,10 +207,18 @@ export function CodeAiCollaboration({
   const proactiveAbortRef = useRef<AbortController | null>(null);
   const startersAbortRef = useRef<AbortController | null>(null);
   const lastStartersFingerprintRef = useRef("");
+  const [backgroundRetry, setBackgroundRetry] = useState(0);
+  const backgroundRetryTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const scheduleBackgroundRetry = useCallback(() => {
+    if (backgroundRetryTimer.current) return;
+    backgroundRetryTimer.current = setTimeout(() => {
+      backgroundRetryTimer.current = null; setBackgroundRetry(value => value + 1);
+    }, 30_000 + Math.random() * 5_000);
+  }, []);
+  useEffect(() => () => { if (backgroundRetryTimer.current) clearTimeout(backgroundRetryTimer.current); }, []);
 
   const [artifact, setArtifact] = useState<CodeArtifact>(() => createCodeArtifact(language));
   const [artifactReady, setArtifactReady] = useState(false);
-  const [saveStatus, setSaveStatus] = useState<"saved" | "unsaved" | "saving" | "error">("saved");
   const [addingFile, setAddingFile] = useState(false);
   const [pendingDeleteFileId, setPendingDeleteFileId] = useState<string | null>(null);
   const [newFileName, setNewFileName] = useState("");
@@ -227,6 +235,16 @@ export function CodeAiCollaboration({
   const [memberOpen, setMemberOpen] = useState(false);
   const [memberMode, setMemberMode] = useState<"discuss" | "task">("discuss");
   const [aiBusy, setAiBusy] = useState(false);
+  const aiRequestScope = `${courseId}:${studentId}:${stageKey}:${language}`;
+  const [pendingAiRecovery, setPendingAiRecovery] = useState<PendingCodeAiRequest | null>(null);
+  const [pendingCommentRecovery, setPendingCommentRecovery] = useState<PendingCodeAiRequest | null>(null);
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setPendingAiRecovery(readPendingCodeAiRequest(aiRequestScope, "sidebar"));
+      setPendingCommentRecovery(readPendingCodeAiRequest(aiRequestScope, "comment"));
+    }, 0);
+    return () => clearTimeout(timer);
+  }, [aiRequestScope]);
   const [aiDraft, setAiDraft] = useState("");
   const [aiError, setAiError] = useState<string | null>(null);
   const [historyLoaded, setHistoryLoaded] = useState(false);
@@ -317,6 +335,8 @@ export function CodeAiCollaboration({
     ? Math.max(0, siblingCommentThreads.findIndex((thread) => thread.id === activeCommentThread.id))
     : 0;
   const currentStartersFingerprint = `${serializedArtifact}:${JSON.stringify(runContext)}:${memberMode}`;
+  const liveBackgroundContext = useRef({ review: "", starters: "" });
+  useEffect(() => { liveBackgroundContext.current = { review: `${serializedArtifact}:${JSON.stringify(runContext)}`, starters: currentStartersFingerprint }; }, [currentStartersFingerprint, serializedArtifact, runContext]);
   const visibleTaskStarters = taskStartersFingerprint === currentStartersFingerprint && taskStarters.length
     ? taskStarters
     : fallbackTaskStarters;
@@ -355,13 +375,9 @@ export function CodeAiCollaboration({
     const initialArtifact = existingCode
       ? parseCodeArtifact(existingCode.content, language) ?? createCodeArtifact(language)
       : createCodeArtifact(language);
-    const initialContent = serializeCodeArtifact(initialArtifact);
-    submissionIdRef.current = existingCode?.id;
-    savedContentRef.current = initialContent;
     artifactRef.current = initialArtifact;
     setArtifact(initialArtifact);
     setArtifactReady(true);
-    setSaveStatus("saved");
     setAddingFile(false);
     setNewFileName("");
     setFileError(null);
@@ -376,39 +392,23 @@ export function CodeAiCollaboration({
     lastStartersFingerprintRef.current = "";
   }, [course, existingCode, language, stageKey, studentId, supportedStage]);
 
-  const persistArtifact = useCallback((content: string) => {
-    if (!course || !studentId || !supportedStage || content === savedContentRef.current) {
-      setSaveStatus("saved");
-      return;
-    }
-    setSaveStatus("saving");
-    const title = codeSubmissionTitle(language);
-    const submission = session.upsertSubmission({
-      id: submissionIdRef.current,
-      courseId: course.id,
-      studentId,
-      studentName: session.studentName ?? session.user.name,
-      groupId: group?.id,
-      stageKey,
-      type: "code",
-      title,
-      content,
-    });
-    if (!submission) {
-      setSaveStatus("error");
-      return;
-    }
-    submissionIdRef.current = submission.id;
-    savedContentRef.current = content;
-    setSaveStatus("saved");
-  }, [course, group, language, session, stageKey, studentId, supportedStage]);
-
-  useEffect(() => {
-    if (!artifactReady || serializedArtifact === savedContentRef.current) return;
-    setSaveStatus("unsaved");
-    const timer = window.setTimeout(() => persistArtifact(serializedArtifact), 900);
-    return () => window.clearTimeout(timer);
-  }, [artifactReady, persistArtifact, serializedArtifact]);
+  const codeDraft = useCodeDraft({
+    scope: `${courseId}:${studentId}:${stageKey}:code:${language}`,
+    content: serializedArtifact,
+    initial: { id: existingCode?.id, version: existingCode?.version ?? 0,
+      content: existingCode?.content ?? serializedArtifact },
+    enabled: artifactReady && Boolean(course && studentId && supportedStage),
+    restore: (content) => {
+      const recovered = parseCodeArtifact(content, language);
+      if (recovered) { artifactRef.current = recovered; setArtifact(recovered); }
+    },
+    persist: (content, id, expectedVersion) => session.persistSubmission({
+      id, courseId, studentId, studentName: session.studentName ?? session.user.name,
+      groupId: group?.id, stageKey, type: "code", title: codeSubmissionTitle(language), content, expectedVersion,
+    }),
+  });
+  const saveStatus = codeDraft.status;
+  const persistArtifact = codeDraft.save;
 
   useEffect(() => {
     if (!artifactReady || !course || !studentId || !supportedStage) return;
@@ -613,23 +613,12 @@ export function CodeAiCollaboration({
       proactiveAbortRef.current?.abort();
       proactiveAbortRef.current = controller;
       const fingerprint = reviewFingerprint;
-      void fetch("/api/ai-collaboration/code", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          courseId,
-          studentId,
-          stageKey,
-          language,
-          intent: "proactive-review",
-          artifact,
-          run: runContext,
-        }),
-        signal: controller.signal,
-      }).then(async (response) => {
+      void requestBackgroundCodeAi({ courseId, studentId, stageKey, language,
+        intent: "proactive-review", artifact, run: runContext,
+      }, controller.signal).then(async (response) => {
         const payload = await response.json() as { result?: CodeCollaborationResponse; commentThreads?: CodeAiCommentThread[]; message?: string };
         if (!response.ok) throw new Error(payload.message || "主动检查暂时未完成。");
-        const currentFingerprint = `${serializeCodeArtifact(artifactRef.current)}:${JSON.stringify(runContext)}`;
+        const currentFingerprint = liveBackgroundContext.current.review;
         if (currentFingerprint === fingerprint) {
           lastReviewedArtifactRef.current = fingerprint;
           const incoming = payload.commentThreads ?? [];
@@ -642,11 +631,12 @@ export function CodeAiCollaboration({
         }
       }).catch((error) => {
         if (controller.signal.aborted) return;
+        scheduleBackgroundRetry();
         console.warn("[code-collaboration] proactive review failed", error);
       });
     }, runResult?.status === "failed" ? 1_200 : PROACTIVE_REVIEW_IDLE_MS);
     return () => window.clearTimeout(timer);
-  }, [aiBusy, artifact, artifactReady, courseId, language, pendingChangeSet, runContext, runResult?.status, running, serializedArtifact, stageKey, studentId]);
+  }, [aiBusy, artifact, artifactReady, backgroundRetry, courseId, language, pendingChangeSet, runContext, runResult?.status, running, scheduleBackgroundRetry, serializedArtifact, stageKey, studentId]);
 
   useEffect(() => {
     if (!memberOpen || !artifactReady || pendingChangeSet || aiBusy) return;
@@ -656,34 +646,23 @@ export function CodeAiCollaboration({
       const controller = new AbortController();
       startersAbortRef.current?.abort();
       startersAbortRef.current = controller;
-      void fetch("/api/ai-collaboration/code", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          courseId,
-          studentId,
-          stageKey,
-          language,
-          action: "code-task-starters",
-          mode: memberMode,
-          artifact,
-          run: runContext,
-        }),
-        signal: controller.signal,
-      }).then(async (response) => {
+      void requestBackgroundCodeAi({ courseId, studentId, stageKey, language,
+        action: "code-task-starters", mode: memberMode, artifact, run: runContext,
+      }, controller.signal).then(async (response) => {
         const payload = await response.json() as { starters?: string[]; message?: string };
         if (!response.ok) throw new Error(payload.message || "暂时无法生成代码建议。");
+        if (liveBackgroundContext.current.starters !== fingerprint) return;
         if (payload.starters?.length) {
           setTaskStarters(payload.starters);
           setTaskStartersFingerprint(fingerprint);
         }
         lastStartersFingerprintRef.current = fingerprint;
       }).catch((error) => {
-        if (!controller.signal.aborted) console.warn("[code-collaboration] starter refresh failed", error);
+        if (!controller.signal.aborted) { scheduleBackgroundRetry(); console.warn("[code-collaboration] starter refresh failed", error); }
       });
     }, 1_600);
     return () => window.clearTimeout(timer);
-  }, [aiBusy, artifact, artifactReady, courseId, currentStartersFingerprint, language, memberMode, memberOpen, pendingChangeSet, runContext, stageKey, studentId]);
+  }, [aiBusy, artifact, artifactReady, backgroundRetry, courseId, currentStartersFingerprint, language, memberMode, memberOpen, pendingChangeSet, runContext, scheduleBackgroundRetry, stageKey, studentId]);
 
   function updateActiveFile(content: string) {
     setArtifact((current) => ({
@@ -727,7 +706,7 @@ export function CodeAiCollaboration({
 
   async function runCode() {
     if (running || pendingChangeSet) return;
-    persistArtifact(serializedArtifact);
+    void persistArtifact(serializedArtifact);
     setRunning(true);
     setRunError(null);
     setConsoleTab("output");
@@ -785,22 +764,11 @@ export function CodeAiCollaboration({
     setMessages((current) => [...current, optimistic]);
     setAiDraft("");
     try {
-      const response = await fetch("/api/ai-collaboration/code", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          courseId,
-          studentId,
-          stageKey,
-          language,
-          intent,
-          message: requestMessage,
-          artifact,
-          selection: requestSelection,
-          run: runContext,
-          conversationId,
-        }),
+      const { response, pending } = await requestCodeAi(aiRequestScope, "sidebar", {
+        courseId, studentId, stageKey, language, intent, message: requestMessage,
+        artifact, selection: requestSelection, run: runContext, conversationId,
       });
+      if (loadedScopeRef.current !== aiRequestScope) return;
       const payload = await response.json() as {
         result?: CodeCollaborationResponse;
         messages?: unknown[];
@@ -809,11 +777,13 @@ export function CodeAiCollaboration({
         memories?: ProjectMemoryEntry[];
       };
       if (!response.ok || !payload.result) throw new Error(payload.message || "AI 组员暂时无法回应。");
+      acknowledgeCodeAiRequest(aiRequestScope, "sidebar", pending.requestId);
+      setPendingAiRecovery(null);
       const serverMessages = (payload.messages ?? []).map(collaborationMessage).filter((item): item is CodeAiWorkspaceMessage => Boolean(item));
       const serverUser = serverMessages.find((item) => item.role === "user");
       const serverAgent = serverMessages.find((item) => item.role === "assistant");
       setMessages((current) => [
-        ...current.filter((item) => item.id !== optimisticId),
+        ...current.filter((item) => item.id !== optimisticId && item.id !== serverUser?.id && item.id !== serverAgent?.id),
         serverUser ?? optimistic,
         {
           id: serverAgent?.id ?? nowId("ai-message"),
@@ -826,13 +796,16 @@ export function CodeAiCollaboration({
       ]);
       if (payload.memories) projectMemory.replaceMemories(payload.memories);
       setConversationId(payload.conversationId || conversationId);
-      if (payload.result.changeSet) {
+      if (payload.result.changeSet && JSON.stringify(pending.body.artifact) !== JSON.stringify(artifactRef.current)) {
+        setAiError("AI 的修改基于之前的代码。当前代码已变化，请以当前版本重新发起修改；本次回复已保留。");
+      } else if (payload.result.changeSet) {
         setPendingChangeSet(payload.result.changeSet);
         setPendingChangeSourceThreadId(null);
         setPreviewChangeIndex(0);
         setMemberOpen(true);
       }
     } catch (error) {
+      setPendingAiRecovery(readPendingCodeAiRequest(aiRequestScope, "sidebar"));
       setMessages((current) => current.filter((item) => item.id !== optimisticId));
       setAiDraft(requestMessage);
       setAiError(error instanceof Error ? error.message : "AI 组员暂时无法回应。");
@@ -852,6 +825,8 @@ export function CodeAiCollaboration({
       });
       const payload = await response.json() as { conversationId?: string; message?: string };
       if (!response.ok) throw new Error(payload.message || "无法开始新对话。");
+      if (pendingAiRecovery) acknowledgeCodeAiRequest(aiRequestScope, "sidebar", pendingAiRecovery.requestId);
+      setPendingAiRecovery(null);
       setMessages([]);
       setConversationId(payload.conversationId || "legacy");
       setSelection(undefined);
@@ -876,43 +851,38 @@ export function CodeAiCollaboration({
     }
   }
 
-  async function submitCommentReply(override?: string) {
-    const thread = activeCommentThread;
-    const requestMessage = (override ?? commentDraft).trim();
+  async function submitCommentReply(override?: string, recovery?: PendingCodeAiRequest) {
+    const thread = recovery ? commentThreads.find(item => item.id === recovery.body.commentThreadId) : activeCommentThread;
+    const requestMessage = (override ?? (recovery ? String(recovery.body.message) : commentDraft)).trim();
     if (!thread || !requestMessage || commentBusy || pendingChangeSet) return;
     setCommentBusy(true);
     setCommentError(null);
     setCommentDraft("");
     try {
-      const response = await fetch("/api/ai-collaboration/code", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          courseId,
-          studentId,
-          stageKey,
-          language,
-          action: "reply-code-comment",
-          commentThreadId: thread.id,
-          message: requestMessage,
-          artifact,
-          run: runContext,
-        }),
+      const { response, pending } = await requestCodeAi(aiRequestScope, "comment", {
+        courseId, studentId, stageKey, language, action: "reply-code-comment", commentThreadId: thread.id,
+        message: requestMessage, artifact, run: runContext,
       });
+      if (loadedScopeRef.current !== aiRequestScope) return;
       const payload = await response.json() as {
         commentThread?: CodeAiCommentThread;
         result?: CodeCollaborationResponse;
         message?: string;
       };
       if (!response.ok || !payload.commentThread || !payload.result) throw new Error(payload.message || "AI 组员暂时无法回应这条批注。");
+      acknowledgeCodeAiRequest(aiRequestScope, "comment", pending.requestId);
+      setPendingCommentRecovery(null);
       setCommentThreads((current) => current.map((item) => item.id === thread.id ? { ...payload.commentThread!, readAt: new Date().toISOString() } : item));
-      if (payload.result.changeSet) {
+      if (payload.result.changeSet && JSON.stringify(pending.body.artifact) !== JSON.stringify(artifactRef.current)) {
+        setCommentError("AI 的修改基于之前的代码。当前代码已变化，请以当前版本重新发起修改；本次回复已保留。");
+      } else if (payload.result.changeSet) {
         setPendingChangeSet(payload.result.changeSet);
         setPendingChangeSourceThreadId(thread.id);
         setPreviewChangeIndex(0);
       }
       markCommentRead(thread.id);
     } catch (error) {
+      setPendingCommentRecovery(readPendingCodeAiRequest(aiRequestScope, "comment"));
       setCommentDraft(requestMessage);
       setCommentError(error instanceof Error ? error.message : "AI 组员暂时无法回应这条批注。");
     } finally {
@@ -1016,8 +986,11 @@ export function CodeAiCollaboration({
             <h1 className="mt-1 truncate text-base font-bold leading-tight text-stone-950 sm:text-lg">{projectTitle}</h1>
           </div>
           <div className="flex shrink-0 items-center gap-2 sm:gap-3">
+            {pendingAiRecovery && <button disabled={aiBusy || Boolean(pendingChangeSet)} type="button" className="min-h-11 text-xs underline" onClick={() => { void submitAiRequest({ message: String(pendingAiRecovery.body.message), intent: pendingAiRecovery.body.intent as CodeCollaborationIntent, selection: pendingAiRecovery.body.selection as CodeSelection | undefined }); }}>恢复上次 AI 结果</button>}
+            {pendingCommentRecovery && <button disabled={commentBusy || Boolean(pendingChangeSet)} type="button" className="min-h-11 text-xs underline" onClick={() => { void submitCommentReply(undefined, pendingCommentRecovery); }}>恢复批注回复</button>}
+            {codeDraft.error && <span role="alert" className="max-w-md text-xs text-red-700">{codeDraft.error}<button type="button" onClick={codeDraft.download} className="ml-2 min-h-11 underline">下载本机代码草稿</button></span>}
             <span className={cn("hidden items-center gap-1.5 text-xs sm:inline-flex", saveStatus === "error" ? "text-red-600" : "text-stone-500")}>{saveStatus === "saved" ? <Check size={13} /> : null}{saveStateLabel(saveStatus)}</span>
-            <PrimaryButton disabled={saveStatus === "saving"} onClick={() => persistArtifact(serializedArtifact)} size="sm" tone="slate" variant="outline"><Save size={14} />保存</PrimaryButton>
+            <PrimaryButton disabled={saveStatus === "saving"} onClick={() => { void persistArtifact(serializedArtifact); }} size="sm" tone="slate" variant="outline"><Save size={14} />保存</PrimaryButton>
           </div>
         </div>
       </header>

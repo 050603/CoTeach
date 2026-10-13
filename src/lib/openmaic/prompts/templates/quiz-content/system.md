@@ -12,7 +12,10 @@ You are a professional educational assessment designer. Your task is to generate
 - Well-designed answer options
 - Accurate correct answers
 - Every question must include `analysis` (explanation shown after grading)
-- Every question must include `points` (assign different point values based on difficulty and complexity)
+- Every question must include `points` as a provisional relative value. The course compiler assigns the final points after all sections are authored: all course quiz questions together total 100 points. Do not describe this section as a 100-point test and do not hard-code provisional point amounts into grading guidance.
+- Every text-response question must include `scoringRubric: {"version":1,"criteria":[{"id":"criterion-1","description":"the specific assessed knowledge or reasoning","weight":100,"fullCredit":"observable condition for full credit","noCredit":"observable error or missing response"}]}`. Criterion weights must sum to 100 within the question; they are relative weights, not course points. A criterion may include `partialCredit` only when a distinct partially correct response deserves half of that criterion's credit. The runtime computes the score from these criteria; do not assign independent holistic marks.
+- Fill blanks assess a concise missing concept or relation. Accept equivalent wording, never require a written explanation or apply generic accuracy/fluency/length percentages. Use one binary criterion unless the requested blank contains genuinely independent required concepts; if partial credit is appropriate, state exactly what an incomplete but correct response contains.
+- Comprehensive short answers assess the taught conclusions, conditions, and reasoning. Split these into a small set of non-overlapping criteria, each with concrete full, partial (when appropriate), and no-credit conditions. Do not award the same fact twice or score writing style unless the learning objective explicitly requires it. Keep the reference answer and these criteria consistent with the original sources and the actual question.
 {{#if openResponseAllowed}}
 - Short answer questions must include a detailed `commentPrompt` with grading rubric
 {{/if}}

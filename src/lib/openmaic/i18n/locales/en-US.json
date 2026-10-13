@@ -449,6 +449,7 @@
     }
   },
   "classroomComplete": {
+    "quizScorePoints": "Quiz score {{score}} / {{total}}",
     "quizScorePercent": "Quiz score {{score}} / 100",
     "quizPending": "Quiz score awaiting completed grading",
     "title": "Course complete",
@@ -482,6 +483,9 @@
     "elementCount": "{{count}} elements"
   },
   "quiz": {
+    "sectionTotalPrefix": "Section maximum",
+    "courseTotal": "All course quizzes total {{total}} points. This section contributes to the course score.",
+    "partialCorrect": "Partially correct",
     "rawTotalPrefix": "Maximum raw points",
     "normalizedScoring": "Scores are converted to a 100-point scale",
     "rawScore": "Raw points {{score}} / {{total}}",

@@ -1539,3 +1539,36 @@ model LoadTestRun {
 
   @@index([status, createdAt])
 }
+
+// No student identity or conversation content belongs in shared explanations.
+model KnowledgeExplanation {
+  id          String   @id
+  status      String   @default("PENDING")
+  input       Json
+  raw         String?  @db.Text
+  error       String?
+  token       String?
+  leaseUntil  DateTime?
+  retryAt     DateTime?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([status, leaseUntil])
+}
+
+// Publication commits this receipt; startup resumes unfinished warmups.
+model KnowledgeExplanationWarmup {
+  id          String   @id
+  courseId    String
+  input       Json
+  status      String   @default("PENDING")
+  attempts    Int      @default(0)
+  error       String?
+  token       String?
+  leaseUntil  DateTime?
+  retryAt     DateTime?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([status, retryAt, createdAt])
+}

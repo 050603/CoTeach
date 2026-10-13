@@ -1,3 +1,4 @@
+import { withClassroomAiUsage } from '@/lib/observability/classroom-ai';
 import type { NextRequest } from 'next/server';
 
 import { createUIMessageStream, createUIMessageStreamResponse } from 'ai';
@@ -148,7 +149,7 @@ export async function POST(request: NextRequest) {
   ].join('\n');
 
   const stream = createUIMessageStream<ChatMessage>({
-    execute: async ({ writer }) => {
+    execute: async ({ writer }) => withClassroomAiUsage({ feature: 'document-command', courseId, studentId, requestId }, async () => {
       const textId = nanoid();
       writer.write({ data: toolName, type: 'data-toolName' });
       writer.write({ id: textId, type: 'text-start' });
@@ -176,7 +177,7 @@ export async function POST(request: NextRequest) {
       } finally {
         writer.write({ id: textId, type: 'text-end' });
       }
-    },
+    }),
   });
 
   return createUIMessageStreamResponse({ stream });

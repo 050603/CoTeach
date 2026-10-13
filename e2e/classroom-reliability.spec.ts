@@ -31,13 +31,18 @@ async function fixture(context: BrowserContext) {
     content: { pblOutline: '', knowledgePoints: [], lessonOutline: [], evaluationPlan: { dimensions: [], overallRubric: '' } },
     createdAt: at, updatedAt: at,
   } as Course;
-  const faults = { offline: false, loseSaveAck: false, loseFinalizeAck: false };
+  const faults = { offline: false, loseSaveAck: false, loseFinalizeAck: false, holdAi: false, aiFailures: 0, loseAiAck: false };
+  const sockets = new Set<(message: string) => void>();
+  let releaseAi: (() => void) | undefined;
+  const aiRequests: Array<Record<string, unknown>> = [];
+  const aiReceipts = new Map<string, Record<string, unknown>>();
   const writes: Array<{ requestId: string; expectedVersion: number; content: string }> = [];
   const receipts = new Map<string, Record<string, unknown>>();
   const finalizeIds: string[] = [];
   let finalizations = 0;
   let conflicts = 0;
   await context.routeWebSocket(/.*/, socket => {
+    sockets.add(message => socket.send(message));
     socket.onMessage(message => {
       const data = JSON.parse(String(message));
       if (data.type === 'subscribe') socket.send(JSON.stringify({ type: 'subscribed', courseId }));
@@ -54,7 +59,25 @@ async function fixture(context: BrowserContext) {
     if (path.endsWith('/projection')) return json({ courseId, courseVersion: course.version, projectionVersion: 0, projectionUpdatedAt: at, serverTime: at, resourceProjection: null, teacherResourceProjection: null });
     if (path === `/api/courses/${courseId}/events`) return json({ events: [], nextCursor: '0', courseVersion: course.version, requiresReconciliation: true });
     if (path.endsWith('/presence')) return json({ members: [], degraded: false });
-    if (path === '/api/ai-collaboration/document') return json({ conversationId: 'test-conversation', messages: [], commentThreads: [], requests: [], proactiveReviewEnabled: false });
+    if (path === '/api/ai-collaboration/document') {
+      const statusId = new URL(request.url()).searchParams.get('requestId');
+      if (request.method() === 'GET' && statusId && aiReceipts.has(statusId)) return json(aiReceipts.get(statusId));
+      if (request.method() === 'POST' && body.message) {
+        aiRequests.push(body);
+        if (faults.aiFailures > 0) {
+          faults.aiFailures -= 1;
+          return json({ requestId: body.requestId, status: 'failed', error: 'AI_RATE_LIMITED', message: 'AI 服务繁忙，请重试', retryable: true }, 429);
+        }
+        if (faults.holdAi) await new Promise<void>(resolve => { releaseAi = resolve; });
+        const result = { requestId: body.requestId, status: 'completed', conversationId: 'test-conversation',
+          result: { kind: 'edit-suggestion', message: '请核验来源后再决定是否采用修改。',
+            suggestion: { title: '旧文稿建议', reason: '补齐证据', operation: 'replace', targetText: '保存起点', replacement: '不可覆盖的新内容' } } };
+        aiReceipts.set(body.requestId, result);
+        if (faults.loseAiAck) { faults.loseAiAck = false; return route.abort('connectionreset'); }
+        return json(result);
+      }
+      return json({ conversationId: 'test-conversation', messages: [], commentThreads: [], requests: [], proactiveReviewEnabled: false });
+    }
     if (path === '/api/ai-collaboration/memory') return json({ memories: [] });
     if (path === `/api/courses/${courseId}/actions`) {
       if (faults.offline) return route.abort('internetdisconnected');
@@ -91,7 +114,16 @@ async function fixture(context: BrowserContext) {
     }
     return json({ ok: true, events: [], messages: [], items: [], enabled: false });
   });
-  return { faults, writes, finalizeIds, course, finalizations: () => finalizations, conflicts: () => conflicts };
+  return { faults, writes, finalizeIds, course, aiRequests,
+    releaseAi: () => releaseAi?.(),
+    switchStage: (index: number) => {
+      course.currentStageIndex = index;
+      course.version = (course.version ?? 0) + 1;
+      for (const send of sockets) send(JSON.stringify({ type: 'course-event', courseId,
+        event: { type: 'stage-changed', payload: { actionType: 'SET_STAGE', courseVersion: course.version } } }));
+    },
+    finalizations: () => finalizations, conflicts: () => conflicts };
+
 }
 
 async function openEditor(page: Page) {
@@ -162,4 +194,65 @@ test('finalization retries a lost acknowledgement and the next edit uses the new
   await expect.poll(() => server.writes.length).toBe(1);
   expect(server.writes[0].expectedVersion).toBe(2);
   expect(server.course.submissions?.[0].version).toBe(3);
+});
+
+
+test('an AI answer based on an old draft cannot overwrite edits made while it was running', async ({ page, context }) => {
+  const server = await fixture(context);
+  server.faults.holdAi = true;
+  const editor = await openEditor(page);
+  await page.getByRole('button', { name: 'AI 组员', exact: true }).click();
+  await page.getByPlaceholder('把你的判断、疑问或希望 AI 组员协助的非核心工作告诉它…').fill('请帮我核验这段记录的依据');
+  await page.getByRole('button', { name: '发送给 AI 组员', exact: true }).click();
+  await expect.poll(() => server.aiRequests.length).toBe(1);
+  await editor.fill('AI 回答期间独立补充的最新证据');
+  await expect.poll(() => server.writes.some(write => write.content.includes('独立补充的最新证据'))).toBe(true);
+  server.releaseAi();
+  await expect(page.getByText(/这次结果仅供参考/)).toBeVisible();
+  await expect(editor).toContainText('独立补充的最新证据');
+  await expect(page.getByRole('region', { name: '待确认的 AI 修改' })).toHaveCount(0);
+  expect(server.course.submissions?.[0].content).not.toContain('不可覆盖的新内容');
+});
+
+test('a teacher stage switch retains unsynced document edits until practice resumes', async ({ page, context }) => {
+  const server = await fixture(context);
+  server.faults.offline = true;
+  const editor = await openEditor(page);
+  await editor.fill('阶段切换之前尚未同步的完整项目稿');
+  await expect.poll(async () => (await drafts(page)).some(draft => draft.content.includes('尚未同步的完整项目稿'))).toBe(true);
+  server.switchStage(3);
+  await expect(page).toHaveURL(new RegExp(`/student/classroom/${courseId}`));
+  expect((await drafts(page)).some(draft => draft.content.includes('尚未同步的完整项目稿'))).toBe(true);
+  server.faults.offline = false;
+  server.switchStage(2);
+  const restored = await openEditor(page);
+  await expect(restored).toContainText('尚未同步的完整项目稿');
+  await expect.poll(() => server.writes.some(write => write.content.includes('尚未同步的完整项目稿'))).toBe(true);
+});
+
+
+test('a rate-limited AI request keeps the original message and retries its stable identity', async ({ page, context }) => {
+  const server = await fixture(context);
+  server.faults.aiFailures = 1;
+  await openEditor(page);
+  await page.getByRole('button', { name: 'AI 组员', exact: true }).click();
+  await page.getByPlaceholder('把你的判断、疑问或希望 AI 组员协助的非核心工作告诉它…').fill('请说明怎样核验观察来源');
+  await page.getByRole('button', { name: '发送给 AI 组员', exact: true }).click();
+  await expect(page.getByRole('alert').getByText('AI 服务繁忙，请重试')).toBeVisible();
+  await page.getByRole('button', { name: '重新尝试', exact: true }).click();
+  await expect(page.getByText('请核验来源后再决定是否采用修改。')).toBeVisible();
+  expect(server.aiRequests).toHaveLength(2);
+  expect(server.aiRequests[0].requestId).toBe(server.aiRequests[1].requestId);
+  expect(server.aiRequests[0].message).toBe(server.aiRequests[1].message);
+});
+
+test('a lost AI response is recovered from its receipt without posting another paid request', async ({ page, context }) => {
+  const server = await fixture(context);
+  server.faults.loseAiAck = true;
+  await openEditor(page);
+  await page.getByRole('button', { name: 'AI 组员', exact: true }).click();
+  await page.getByPlaceholder('把你的判断、疑问或希望 AI 组员协助的非核心工作告诉它…').fill('请说明如何保存观察证据');
+  await page.getByRole('button', { name: '发送给 AI 组员', exact: true }).click();
+  await expect(page.getByText('请核验来源后再决定是否采用修改。')).toBeVisible();
+  expect(server.aiRequests).toHaveLength(1);
 });

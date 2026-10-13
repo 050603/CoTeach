@@ -22,7 +22,7 @@ import { cn } from "@/lib/utils";
 import { dispatchPlaybackModalBlock } from "@openmaic/lib/playback/activity-events";
 
 /** Keep the same receipt across a lost response or a page reload. */
-async function fetchTutor(body: Record<string, unknown>): Promise<Response> {
+export async function fetchTutor(body: Record<string, unknown>): Promise<Response> {
   const key = `knowledge-tutor-request:${JSON.stringify([body.courseId, body.studentId, body.attemptId, body.questionId, body.action, body.message ?? ""])}`;
   let requestId = browserRandomUUID();
   try { requestId = sessionStorage.getItem(key) || requestId; sessionStorage.setItem(key, requestId); } catch { /* memory-only retry when storage is unavailable */ }
@@ -32,7 +32,7 @@ async function fetchTutor(body: Record<string, unknown>): Promise<Response> {
   while (true) {
     let response: Response;
     try {
-      response = await fetch("/api/knowledge-lecture", { method: "POST", headers: { "Content-Type": "application/json", "X-OpenPBL-Role": "student" }, body: serialized });
+      response = await fetch("/api/knowledge-lecture", { method: "POST", headers: { "Content-Type": "application/json", "X-OpenPBL-Role": "student" }, body: serialized, signal: AbortSignal.timeout(Math.max(1, Math.min(165_000, deadline - Date.now()))) });
       networkFailures = 0;
     } catch (error) {
       if (++networkFailures >= 3 || Date.now() >= deadline) throw error;
@@ -44,7 +44,7 @@ async function fetchTutor(body: Record<string, unknown>): Promise<Response> {
       continue;
     }
     const terminalFailure = response.status === 503
-      && ["TUTOR_REQUEST_FAILED", "TUTOR_REQUEST_CANCELLED"].includes((await response.clone().json().catch(() => ({}))).error);
+      && ["TUTOR_REQUEST_FAILED", "TUTOR_REQUEST_CANCELLED", "TUTOR_REQUEST_TIMEOUT"].includes((await response.clone().json().catch(() => ({}))).error);
     if ((response.ok && response.status !== 202) || response.status === 409 || terminalFailure) {
       try { sessionStorage.removeItem(key); } catch { /* no persistent cache */ }
     }
@@ -131,7 +131,8 @@ export function KnowledgeLectureBoard({
   const [threads, setThreads] = useState(initialThreads);
   const [message, setMessage] = useState("");
   const [sending, setSending] = useState(false);
-  const [initialExplaining, setInitialExplaining] = useState(false);
+  const [pendingExplanations, setPendingExplanations] = useState<string[]>([]);
+  const [explanationRetry, setExplanationRetry] = useState(0);
   const [error, setError] = useState<string>();
   const [audioSettings, setAudioSettings] = useState<TutorAudioSettings>();
   const [audioState, setAudioState] = useState<"idle" | "loading" | "playing" | "paused">("idle");
@@ -144,6 +145,9 @@ export function KnowledgeLectureBoard({
   const audioSequenceRef = useRef(0);
   const requestedExplanationRef = useRef(new Set<string>());
   const question = attempt.questions[questionIndex] ?? attempt.questions[0];
+  const activeQuestionRef = useRef(question?.questionId);
+  useEffect(() => { activeQuestionRef.current = question?.questionId; }, [question?.questionId]);
+  const initialExplaining = pendingExplanations.includes(question?.questionId ?? "");
   const thread = threads.find((item) =>
     item.attemptId === attempt.id && item.questionId === question?.questionId,
   );
@@ -163,7 +167,9 @@ export function KnowledgeLectureBoard({
     const key = `${attempt.id}:${question.questionId}`;
     if (requestedExplanationRef.current.has(key)) return;
     requestedExplanationRef.current.add(key);
-    setInitialExplaining(true);
+    const questionId = question.questionId;
+    setPendingExplanations(current => [...current, questionId]);
+    setError(undefined);
     void fetchTutor({
         action: "tutor-explain",
         courseId,
@@ -179,11 +185,11 @@ export function KnowledgeLectureBoard({
         ...current.filter((item) => item.id !== payload.thread!.id),
         payload.thread!,
       ]);
-    }).catch((cause) => {
+    }).catch(() => {
       requestedExplanationRef.current.delete(key);
-      setError(cause instanceof Error ? cause.message : "助教讲解生成失败");
-    }).finally(() => setInitialExplaining(false));
-  }, [attempt.id, courseId, question, studentId, thread?.messages]);
+      if (activeQuestionRef.current === questionId) setError("助教讲解暂时不可用，题目解析仍可查看。请点击重试讲解。");
+    }).finally(() => setPendingExplanations(current => current.filter(id => id !== questionId)));
+  }, [attempt.id, courseId, question, studentId, thread?.messages, explanationRetry]);
 
   useEffect(() => {
     void fetch("/api/knowledge-lecture/settings")
@@ -332,6 +338,7 @@ export function KnowledgeLectureBoard({
 
   async function sendMessage() {
     const content = message.trim();
+    const sendingQuestionId = question?.questionId;
     if (!content || !question || sending || initialExplaining) return;
     setSending(true);
     setError(undefined);
@@ -347,9 +354,9 @@ export function KnowledgeLectureBoard({
         ...current.filter((item) => item.id !== payload.thread!.id),
         payload.thread!,
       ]);
-      setMessage("");
+      if (activeQuestionRef.current === sendingQuestionId) setMessage("");
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "助教暂时没有回应");
+      if (activeQuestionRef.current === sendingQuestionId) setError(cause instanceof Error ? cause.message : "助教暂时没有回应");
     } finally {
       setSending(false);
     }
@@ -382,6 +389,7 @@ export function KnowledgeLectureBoard({
     stopAudioQueue();
     const nextQuestion = attempt.questions[index];
     if (nextQuestion) queuedAudioIdsRef.current.delete(`core:${nextQuestion.questionId}`);
+    setError(undefined);
     setQuestionIndex(index);
   }
 
@@ -403,6 +411,10 @@ export function KnowledgeLectureBoard({
             ))}
           </nav>
           <div className="flex shrink-0 items-center gap-2">
+            {!thread?.messages.some(item => item.role === "assistant") && !initialExplaining && error && (
+              <button className="inline-flex h-9 items-center rounded-lg border border-amber-300 bg-amber-50 px-3 text-xs font-bold text-amber-900" type="button"
+                onClick={() => { requestedExplanationRef.current.delete(`${attempt.id}:${question.questionId}`); setExplanationRetry(value => value + 1); }}>重试讲解</button>
+            )}
             <button className="inline-flex h-9 items-center gap-2 rounded-lg border border-stone-200 bg-white px-3 text-xs font-bold text-stone-700 hover:bg-stone-50" onClick={replayCoreExplanation} type="button">
               <RotateCcw size={15} />重新讲解
             </button>

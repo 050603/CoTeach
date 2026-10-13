@@ -35,6 +35,19 @@ describe("objective quiz grading", () => {
 });
 
 describe("percentage scoring", () => {
+  it("awards multiple-choice partial credit only without incorrect selections", () => {
+    const question: QuizQuestion = { id: "q", type: "multiple", question: "多选", points: 8, answer: ["A", "C"], scoringPolicy: "course-100-v1" };
+    expect(gradeChoiceQuestions([question], { q: ["A"] })[0].earned).toBe(4);
+    expect(gradeChoiceQuestions([question], { q: ["A", "B"] })[0].earned).toBe(0);
+    expect(gradeChoiceQuestions([question], { q: ["A", "A"] })[0].earned).toBe(0);
+  });
+  it("awards matching credit per correct relation without accepting duplicate pair IDs", () => {
+    const question: QuizQuestion = { id: "q", type: "matching", question: "配对", points: 4, scoringPolicy: "course-100-v1",
+      matchingPairs: [1, 2, 3].map((index) => ({ leftId: `L${index}`, left: `左${index}`, rightId: `R${index}`, right: `右${index}` })),
+      answer: ["L1:R1", "L2:R2", "L3:R3"] };
+    expect(gradeChoiceQuestions([question], { q: ["L1:R1", "L2:R3", "L3:R2"] })[0].earned).toBe(1.33);
+    expect(gradeChoiceQuestions([question], { q: ["L1:R1", "L1:R1"] })[0].earned).toBe(0);
+  });
   const questions = [{ id: "choice", points: 15 }, { id: "blank", points: 10 }, { id: "judge", points: 10 }];
   const results = [
     { questionId: "choice", status: "correct" as const, earned: 15 },

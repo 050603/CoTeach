@@ -1,3 +1,4 @@
+import { authoredQuestionFingerprint, knowledgeTutorEvidence, tutorEvidencePrompt } from "@/lib/courses/knowledge-tutor-evidence";
 import { randomUUID } from "node:crypto";
 import { isDatabaseConfigured, prisma } from "@/lib/db/client";
 import { loadKnowledgeLectureContext, persistKnowledgeLectureAttempt, QuizAlreadySubmittedError, sameSubmittedAnswers, withGradeSummary } from "@/lib/courses/knowledge-lecture-attempts";
@@ -5,7 +6,7 @@ import { legacyAiError } from "@/lib/ai-collaboration/legacy-scope";
 import { PlatformError } from "@/lib/platform/repository";
 import { claimTutorRequest, finishTutorRequest, failTutorRequest, type TutorRequest } from "@/lib/courses/knowledge-tutor-requests";
 import { callLLM } from "@openmaic/lib/ai/llm";
-import { resolveModel, resolveModelFromRequest } from "@openmaic/lib/server/resolve-model";
+import { resolveModelFromRequest } from "@openmaic/lib/server/resolve-model";
 import type { NextRequest } from "next/server";
 import { isAuthConfigured, type AuthClaims } from "@/lib/auth/session";
 import { authenticateRequest, requireSameOrigin } from "@/lib/auth/request-guards";
@@ -13,14 +14,16 @@ import { resolveStudentStateScope } from "@/lib/courses/student-state-scope";
 import { getCourse, updateCourse } from "@/lib/session/server-store";
 import type {
   KnowledgeLectureAttempt,
-  KnowledgeLectureBoardNote,
   KnowledgeLectureQuestionReview,
   KnowledgeLectureSection,
   KnowledgeLectureTutorMessage,
   KnowledgeLectureTutorThread,
   StudentAiProgress,
+  CourseContent,
 } from "@/lib/session/types";
-import { getKnowledgeLectureTutorSettings } from "@/lib/knowledge-lecture-settings";
+import { objectiveExplanation, resolveKnowledgeTutorModel } from "@/lib/courses/knowledge-explanations";
+import { parseTutorPayload, TUTOR_EXECUTION_MS, TUTOR_SYSTEM } from "@/lib/courses/knowledge-tutor-payload";
+import { withClassroomAiUsage } from "@/lib/observability/classroom-ai";
 import { canAccessLegacyCourse } from "@/lib/platform/access";
 import { readClassroom } from "@openmaic/lib/server/classroom-storage";
 import { gradeChoiceQuestions } from "@openmaic/lib/quiz/grading";
@@ -135,6 +138,7 @@ function createAttempt(
   teachingUnitIds: readonly string[],
   studentId: string,
   answers: Record<string, string | string[]>,
+  courseContent: Partial<CourseContent>,
 ): KnowledgeLectureAttempt {
   if (scene.content?.type !== "quiz") throw new Error("QUIZ_SCENE_NOT_FOUND");
   const allowedKnowledgePointIds = new Set(section.knowledgePointIds);
@@ -164,7 +168,9 @@ function createAttempt(
       answer,
       rawAnswer,
       questionType: question.type,
+      authoredQuestionFingerprint: authoredQuestionFingerprint(question, knowledgeTutorEvidence(courseContent, knowledgePointIds.length ? knowledgePointIds : section.knowledgePointIds, units.length ? units : teachingUnitIds)),
       gradingRubric: question.commentPrompt,
+      scoringRubric: question.scoringRubric,
       points,
       earned: grade?.earned ?? 0,
       correct: objective ? grade?.correct ?? false : null,
@@ -172,7 +178,7 @@ function createAttempt(
       feedback: objective
         ? (question.analysis || (grade?.correct ? "回答正确。" : "请对照题目解析复习。"))
         : empty ? "未作答。" : "答案已提交，等待 AI 批阅。",
-      referenceAnswer: question.analysis,
+      referenceAnswer: question.referenceAnswer || question.analysis,
       knowledgePointIds: knowledgePointIds.length ? knowledgePointIds : [...section.knowledgePointIds],
       teachingUnitIds: units.length ? units : [...teachingUnitIds],
     };
@@ -250,46 +256,13 @@ async function finishGrading(
   }
 }
 
-function parseTutorPayload(raw: string, now: string): { answer: string; notes: KnowledgeLectureBoardNote[] } {
-  try {
-    const match = raw.match(/\{[\s\S]*\}/);
-    const parsed = JSON.parse(match?.[0] ?? "{}") as {
-      answer?: unknown;
-      boardNotes?: Array<{ title?: unknown; body?: unknown; kind?: unknown }>;
-    };
-    const answer = typeof parsed.answer === "string" && parsed.answer.trim() ? parsed.answer : "";
-    const notes = (Array.isArray(parsed.boardNotes) ? parsed.boardNotes : []).slice(0, 3).flatMap((note, index) => {
-      const title = text(note.title, 80);
-      const body = text(note.body, 500);
-      if (!title || !body) return [];
-      const kind = ["concept", "evidence", "correction", "example"].includes(String(note.kind))
-        ? note.kind as KnowledgeLectureBoardNote["kind"]
-        : "concept";
-      return [{ id: `board-${Date.now()}-${index}`, title, body, kind, createdAt: now }];
-    });
-    if (answer) return { answer, notes };
-  } catch {
-    // Fall through to a concise recovery response.
-  }
-  return {
-    answer: "我们先抓住题目中的核心概念，再逐句对照你的答案：结论要准确，理由要能说明为什么。你也可以指出最不确定的一步，我会继续拆解。",
-    notes: [{
-      id: `board-${Date.now()}-fallback`,
-      title: "再看一步",
-      body: "先写结论，再补上能够支撑结论的概念或依据。",
-      kind: "correction",
-      createdAt: now,
-    }],
-  };
-}
-
 export async function POST(request: NextRequest) {
   const csrfError = requireSameOrigin(request);
   if (csrfError) return csrfError;
   const body = await request.json().catch(() => null) as KnowledgeLectureRequest | null;
   const courseId = text(body?.courseId, 160);
   const studentId = text(body?.studentId, 160);
-  if (!body?.action || !courseId || !studentId) {
+  if (!body?.action || !["record-attempt", "retry-grading", "tutor-message", "tutor-explain"].includes(body.action) || !courseId || !studentId) {
     return Response.json({ error: "INVALID_REQUEST" }, { status: 400 });
   }
   const authorization = await authorized(request, courseId, studentId, body.action === "record-attempt");
@@ -334,7 +307,7 @@ export async function POST(request: NextRequest) {
     const teachingUnitIds = blueprintSection?.units.map((unit) => unit.id) ?? [];
     let attempt: KnowledgeLectureAttempt;
     try {
-      attempt = createAttempt(scene, section, teachingUnitIds, studentId, answers);
+      attempt = createAttempt(scene, section, teachingUnitIds, studentId, answers, course.content);
     } catch {
       return Response.json({ error: "QUIZ_QUESTION_INVALID" }, { status: 400 });
     }
@@ -427,27 +400,42 @@ export async function POST(request: NextRequest) {
   if (durable && !requestId) return Response.json({ error: "REQUEST_ID_REQUIRED" }, { status: 400 });
   const tutorRequest: TutorRequest = { courseId, studentId, classroomId: progress!.classroomId, requestId: requestId || randomUUID(), threadId, attemptId: attempt.id, questionId: question.questionId, message, initial: initialExplanation };
   let token: string | undefined;
+  let rawModelOutput: string | undefined;
+  const tutorSignal = durable ? AbortSignal.timeout(TUTOR_EXECUTION_MS) : AbortSignal.any([request.signal, AbortSignal.timeout(TUTOR_EXECUTION_MS)]);
   try {
     if (durable) {
       const claim = await claimTutorRequest(tutorRequest);
       if (!claim.run) {
-        if (claim.status === "COMPLETED") return Response.json({ thread: claim.thread });
+        if (claim.status === "COMPLETED") return Response.json({ thread: claim.thread, resultSource: claim.resultSource ?? "personalized" });
         return Response.json({ error: claim.status === "RUNNING" ? "TUTOR_REQUEST_RUNNING" : "TUTOR_REQUEST_FAILED", status: claim.status }, { status: claim.status === "RUNNING" ? 202 : 409 });
       }
       token = claim.token;
     }
-  const tutorSettings = await getKnowledgeLectureTutorSettings();
-  const { model, thinkingConfig } = tutorSettings.modelString
-    ? await resolveModel({ modelString: tutorSettings.modelString })
-    : await resolveModelFromRequest(request, body, "quiz-grade");
-  const result = await callLLM({
-    model,
-    abortSignal: request.signal,
-    system: `你是知识讲授阶段的伴学助教。学生已经完成节末小测，你需要围绕具体题目进行清楚、短而有层次的讲解，并回应追问。不要长篇讲课；优先指出判断依据、纠正误区、补充一个最小例子。answer 是聊天区中自然完整的口头回答。boardNotes 不是回答全文，而是老师真正会留在黑板上的核心知识、关键判断依据、整体思路或可复用方法；普通问答、寒暄、重复题干和一次性细节不要写入板书。只有确实值得长期保留的内容才生成 boardNotes，可以返回空数组；每次最多2条，每条只写一个要点，并避免与已有板书重复。严格返回 JSON：{"answer":"给学生的回答","boardNotes":[{"title":"简短板书标题","body":"精炼的核心内容","kind":"concept|evidence|correction|example"}]}。`,
-    prompt: `知识点：${knowledgePointNames.join("、")}\n题目：${question.prompt}${choices ? `\n${choices}` : ""}\n学生答案：${question.answer || "未作答"}\n批阅状态：${question.gradingStatus || "历史记录未核验"}\n批阅反馈：${question.feedback}\n参考讲解：${question.referenceAnswer || "未提供"}\n已有对话：\n${recentConversation || "无"}\n学生追问：${message}`,
-  }, "quiz-grade", undefined, thinkingConfig);
+  const resolvedModel = await resolveKnowledgeTutorModel();
+  const sourceClassroom = await readClassroom(progress!.classroomId);
+  const sourceScene = sourceClassroom?.scenes.find(scene => scene.id === attempt.runtimeSceneId);
+  const sourceQuestion = sourceScene?.content?.type === "quiz"
+    ? sourceScene.content.questions.find(item => item.id === question.questionId) : undefined;
+  // Only an unchanged authored question can join the shared cache. Historical
+  // attempts keep their original prompt/answer context after a teacher edit.
+  const sourceEvidence = knowledgeTutorEvidence(course.content, question.knowledgePointIds, question.teachingUnitIds);
+  const sourceMatches = sourceQuestion && question.authoredQuestionFingerprint === authoredQuestionFingerprint(sourceQuestion, sourceEvidence);
+  const shareable = initialExplanation && sourceQuestion && sourceQuestion.type !== "short_answer" && sourceMatches;
+  let resultSource: "shared" | "personalized" = "personalized";
+  if (shareable && sourceScene) {
+    resultSource = "shared";
+    rawModelOutput = await objectiveExplanation({ classroomId: progress!.classroomId, sceneId: sourceScene.id,
+      question: sourceQuestion, knowledgePointNames, sourceEvidence, answer: question.rawAnswer ?? question.answer }, resolvedModel, tutorSignal);
+  } else {
+    const result = await withClassroomAiUsage({ courseId, studentId, requestId: tutorRequest.requestId, feature: "knowledge-tutor" }, () => callLLM({
+      model: resolvedModel.model, abortSignal: tutorSignal, maxRetries: 0, system: TUTOR_SYSTEM,
+      prompt: `知识点：${knowledgePointNames.join("、")}\n题目：${question.prompt}${choices ? `\n${choices}` : ""}\n学生答案：${question.answer || "未作答"}\n批阅状态：${question.gradingStatus || "历史记录未核验"}\n批阅反馈：${question.feedback}\n参考讲解：${question.referenceAnswer || "未提供"}\n已有对话：\n${recentConversation || "无"}\n学生追问：${message}\n${tutorEvidencePrompt(sourceMatches ? sourceEvidence : undefined)}`,
+    }, "quiz-grade", undefined, resolvedModel.thinkingConfig));
+    rawModelOutput = result.text;
+  }
+  tutorSignal.throwIfAborted();
   const now = new Date().toISOString();
-  const tutorPayload = parseTutorPayload(result.text, now);
+  const tutorPayload = parseTutorPayload(rawModelOutput, now);
   const studentMessage: KnowledgeLectureTutorMessage = {
     id: `tutor-message-student-${tutorRequest.requestId}`,
     role: "student",
@@ -465,8 +453,8 @@ export async function POST(request: NextRequest) {
       id: threadId, attemptId: attempt.id, questionId: question.questionId,
       messages: [...(initialExplanation ? [] : [studentMessage]), assistantMessage],
       boardNotes: tutorPayload.notes, createdAt: now, updatedAt: now,
-    }, result.text);
-    return Response.json({ thread });
+    }, rawModelOutput, resultSource);
+    return Response.json({ thread, resultSource });
   }
   let savedThread: KnowledgeLectureTutorThread | undefined;
   await updateCourse(courseId, (current) => {
@@ -505,11 +493,16 @@ export async function POST(request: NextRequest) {
       },
     };
   }, { targetStudentId: studentId });
-  return Response.json({ thread: savedThread });
+  return Response.json({ thread: savedThread, resultSource });
   } catch (error) {
-    if (token) await failTutorRequest(tutorRequest, token, request.signal.aborted);
+    if (token) {
+      try { await failTutorRequest(tutorRequest, token, request.signal.aborted, rawModelOutput,
+        tutorSignal.aborted && !request.signal.aborted ? "TUTOR_REQUEST_TIMEOUT"
+          : error instanceof Error && error.message === "TUTOR_INVALID_OUTPUT" ? "TUTOR_INVALID_OUTPUT" : "TUTOR_GENERATION_FAILED"); }
+      catch { console.error("[knowledge-tutor] failure receipt unavailable; request lease retained"); }
+    }
     if (error instanceof PlatformError) return Response.json({ error: error.code, message: error.message }, { status: error.status });
     console.error("[knowledge-tutor] request failed", error);
-    return Response.json({ error: request.signal.aborted ? "TUTOR_REQUEST_CANCELLED" : "TUTOR_REQUEST_FAILED" }, { status: 503 });
+    return Response.json({ error: request.signal.aborted ? "TUTOR_REQUEST_CANCELLED" : tutorSignal.aborted ? "TUTOR_REQUEST_TIMEOUT" : "TUTOR_REQUEST_FAILED" }, { status: 503 });
   }
 }

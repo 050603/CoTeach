@@ -1,3 +1,4 @@
+import { enqueueKnowledgeExplanationSnapshot } from "@/lib/courses/knowledge-explanation-enqueue";
 import { publicResourcePackageSnapshot } from "@/lib/resource-package/privacy";
 import { createHash, randomUUID } from "node:crypto";
 import { z } from "zod";
@@ -90,10 +91,20 @@ export async function changeClassroomState(claims: AuthClaims, instanceId: strin
     if (!await tx.courseTeacher.findFirst({ where: { userId: teacher.id, offeringId } })) throw new PlatformError("FORBIDDEN", "无权操作该课堂", 403);
     const status = instance.status.toUpperCase();
     const next = action === "start" ? "TEACHING" : "FINISHED";
-    if (status === next) return instance;
+    if (status === next) {
+      if (action === "start") {
+        const version = await tx.classroomTemplateVersion.findUniqueOrThrow({ where: { id: instance.templateVersionId }, select: { id: true, snapshot: true } });
+        await enqueueKnowledgeExplanationSnapshot(tx, { snapshot: version.snapshot, courseId: instance.id, identity: `classroom-instance:${instance.id}:template-version:${version.id}` });
+      }
+      return instance;
+    }
     if (status !== (action === "start" ? "SCHEDULED" : "TEACHING")) throw new PlatformError("STATE_CONFLICT", "课堂状态已变化，结束的课堂请创建新场次", 409);
     const now = new Date();
     const updated = await tx.classroomInstance.update({ where: { id: instanceId }, data: { status: next, ...(action === "start" ? { startedAt: now } : { endedAt: now }) } });
+    if (action === "start") {
+      const version = await tx.classroomTemplateVersion.findUniqueOrThrow({ where: { id: instance.templateVersionId }, select: { id: true, snapshot: true } });
+      await enqueueKnowledgeExplanationSnapshot(tx, { snapshot: version.snapshot, courseId: instance.id, identity: `classroom-instance:${instance.id}:template-version:${version.id}` });
+    }
     if (action === "finish") {
       await tx.classroomParticipation.updateMany({ where: { instanceId, completedAt: null }, data: { completedAt: now } });
     }

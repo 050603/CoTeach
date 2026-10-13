@@ -440,6 +440,9 @@
     "elementCount": "{{count}} 個元素"
   },
   "quiz": {
+    "sectionTotalPrefix": "本節滿分",
+    "courseTotal": "全課小測合計 {{total}} 分，本節得分計入課程總分。",
+    "partialCorrect": "部分正確",
     "rawTotalPrefix": "原始滿分",
     "normalizedScoring": "成績按原始分值換算為百分制",
     "rawScore": "原始得分 {{score}} / {{total}} 分",
@@ -1577,6 +1580,7 @@
     "error": "課堂碼錯誤，請重試。"
   },
   "classroomComplete": {
+    "quizScorePoints": "小測總成績 {{score}} / {{total}} 分",
     "quizScorePercent": "小測總成績 {{score}} / 100 分",
     "quizPending": "小測總成績待完成批閱",
     "encouragement": {

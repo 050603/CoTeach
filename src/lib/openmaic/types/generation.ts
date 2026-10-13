@@ -372,6 +372,8 @@ export interface SceneOutline {
     questionCountRange?: { min: number; max: number };
     /** Actual question count after scene generation; absent in a review-stage outline. */
     generatedQuestionCount?: number;
+    /** Allocated only after authoring; contributes to the course's 100 points. */
+    allocatedPoints?: number;
     /** Require per-item authoring evidence in new section assessments. */
     qualityContract?: 'grounded-v1';
     questionCount: number;

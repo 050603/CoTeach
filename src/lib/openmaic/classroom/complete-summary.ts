@@ -1,6 +1,7 @@
 import type { Scene, SceneType } from '@openmaic/lib/types/stage';
 import { calculateQuizScore } from '@openmaic/lib/quiz/grading';
 import type { SubmittedState } from '@openmaic/lib/quiz/persistence';
+import { roundQuizPoints } from '@openmaic/lib/quiz/rubric';
 
 export interface CompleteSummary {
   countsByType: Partial<Record<SceneType, number>>;
@@ -28,6 +29,8 @@ export function summarizeScenes(scenes: Scene[], readSubmission: SubmissionReade
     pendingCount += summary.pendingCount;
   }
 
+  score = roundQuizPoints(score);
+  total = roundQuizPoints(total);
   const quiz = total > 0 ? { score, total, pendingCount,
     pct: pendingCount ? undefined : Math.round(score / total * 100) } : null;
 

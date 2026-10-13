@@ -1,4 +1,5 @@
 import type { QuizQuestion } from '@openmaic/lib/types/stage';
+import { roundQuizPoints } from './rubric';
 
 export interface QuestionResult {
   questionId: string;
@@ -42,6 +43,8 @@ export function calculateQuizScore(
     score.earned += result.earned;
     score.gradedCount += 1;
   }
+  score.earned = roundQuizPoints(score.earned);
+  score.possible = roundQuizPoints(score.possible);
   if (score.possible > 0 && score.pendingCount === 0) {
     score.percentage = score.earned / score.possible * 100;
   }
@@ -82,11 +85,26 @@ export function gradeChoiceQuestions(
       const userAnswer = toArray(answers[q.id]);
       const correctAnswer = toArray(q.answer);
       const correct = arraysEqual(userAnswer, correctAnswer);
+      let earned = correct ? pts : 0;
+      if (q.scoringPolicy === 'course-100-v1' && q.type === 'multiple') {
+        const valid = userAnswer.length > 0 && new Set(userAnswer).size === userAnswer.length
+          && userAnswer.every((answer) => correctAnswer.includes(answer));
+        earned = valid && correctAnswer.length ? roundQuizPoints(pts * userAnswer.length / correctAnswer.length) : 0;
+      }
+      if (q.scoringPolicy === 'course-100-v1' && q.type === 'matching') {
+        const pairs = userAnswer.map((answer) => answer.split(':'));
+        const valid = new Set(pairs.map((pair) => pair[0])).size === pairs.length
+          && new Set(pairs.map((pair) => pair[1])).size === pairs.length
+          && pairs.every((pair) => pair.length === 2 && q.matchingPairs?.some((p) => p.leftId === pair[0])
+            && q.matchingPairs.some((p) => p.rightId === pair[1]));
+        earned = valid && correctAnswer.length
+          ? roundQuizPoints(pts * userAnswer.filter((answer) => correctAnswer.includes(answer)).length / correctAnswer.length) : 0;
+      }
       return {
         questionId: q.id,
         correct,
         status: correct ? ('correct' as const) : ('incorrect' as const),
-        earned: correct ? pts : 0,
+        earned,
       };
     });
 }

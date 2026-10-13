@@ -162,6 +162,21 @@ export interface QuizMatchingPair {
   right: string;
 }
 
+export interface QuizScoringCriterion {
+  id: string;
+  description: string;
+  /** Relative share of this question; all criterion weights sum to 100. */
+  weight: number;
+  fullCredit: string;
+  partialCredit?: string;
+  noCredit: string;
+}
+
+export interface QuizScoringRubric {
+  version: 1;
+  criteria: QuizScoringCriterion[];
+}
+
 export interface QuizQuestion {
   id: string;
   /** Confirmed course knowledge points assessed by this question. */
@@ -178,6 +193,9 @@ export interface QuizQuestion {
   matchingPairs?: QuizMatchingPair[];
   analysis?: string; // Explanation shown after grading
   commentPrompt?: string; // Grading guidance for text questions
+  referenceAnswer?: string;
+  scoringRubric?: QuizScoringRubric;
+  scoringPolicy?: 'course-100-v1';
   hasAnswer?: boolean; // Whether auto-grading is possible
   points?: number; // Points per question (default 1)
 }
@@ -188,6 +206,7 @@ export interface QuizQuestion {
 export interface QuizContent {
   type: 'quiz';
   questions: QuizQuestion[];
+  scoring?: { policy: 'course-100-v1'; courseTotal: 100; sectionPoints: number };
 }
 
 /**

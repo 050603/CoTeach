@@ -12,6 +12,19 @@ const input = () => ({ courseId: "course", studentId: "student", classroomId: "c
 const facts = () => vi.mocked(appendDurableAiInteractionEvents).mock.calls.flatMap(([events]) => events);
 beforeEach(() => { vi.clearAllMocks(); vi.mocked(appendDurableAiInteractionEvents).mockResolvedValue(undefined); vi.mocked(callLLM).mockResolvedValue({ text: '{"score":6,"comment":"完整评分"}' } as never); });
 describe("immutable subjective grading evidence", () => {
+  it("derives structured subjective points from criteria and retains the grading evidence", async () => {
+    const args = input();
+    const rubric = { version: 1 as const, criteria: [{ id: "phase", description: "环节判断", weight: 100,
+      fullCredit: "自主探索并完成任务", partialCredit: "只指出一个要素", noCredit: "其他环节" }] };
+    const question = { ...args.question, points: 2, answer: "自主探索", scoringRubric: rubric };
+    vi.mocked(callLLM).mockResolvedValueOnce({ text: JSON.stringify({ score: 999,
+      criteria: [{ id: "phase", level: "partial", evidence: "自主探索", reason: "仅指出一个正确要素" }] }) } as never);
+    const result = await gradeKnowledgeLectureQuestion({ ...args, question });
+    expect(result.earned).toBe(1);
+    expect(result.feedback).toContain("环节判断：1/2分");
+    expect(facts()[0].payload?.system).toContain("不得自行给总分");
+    expect(facts()[2].payload).toMatchObject({ earned: 1, gradingStatus: "graded" });
+  });
   it("retains full raw beyond feedback limit, exact input, stable IDs and terminal status", async () => {
     const raw = JSON.stringify({ score: 6, comment: "完整长评语".repeat(700), additional: "原始扩展字段" });
     vi.mocked(callLLM).mockResolvedValueOnce({ text: raw } as never);

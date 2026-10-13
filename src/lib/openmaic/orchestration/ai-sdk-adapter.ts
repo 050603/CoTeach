@@ -1,3 +1,4 @@
+import { withClassroomAiStream } from "@/lib/llm/classroom-capacity";
 /**
  * AI SDK Adapter for LangGraph
  *
@@ -129,6 +130,12 @@ export class AISdkLangGraphAdapter extends BaseChatModel {
   async *streamGenerate(
     messages: BaseMessage[],
     options?: { tools?: ToolSet; signal?: AbortSignal },
+  ): AsyncGenerator<StreamChunk> {
+    yield* withClassroomAiStream(signal => this.streamGenerateWithCapacity(messages, { ...options, signal }), options?.signal);
+  }
+
+  private async *streamGenerateWithCapacity(
+    messages: BaseMessage[], options?: { tools?: ToolSet; signal?: AbortSignal },
   ): AsyncGenerator<StreamChunk> {
     const aiMessages = this.convertMessages(messages);
 

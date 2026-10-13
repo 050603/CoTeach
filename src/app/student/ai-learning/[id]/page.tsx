@@ -3,7 +3,8 @@
 import { Suspense } from 'react';
 import { useParams, useSearchParams } from 'next/navigation';
 import { AdaptiveAiLearningRuntime } from '@/components/views/student/adaptive-ai-learning-runtime';
-import { useCourse, useSession } from '@/lib/session/store';
+import { useCourse, useHydrated, useSession } from '@/lib/session/store';
+import { useRealtimeSync } from '@/hooks/use-realtime-sync';
 
 function LoadingShell() {
   return (
@@ -22,16 +23,28 @@ function AiLearningPlayer() {
   const session = useSession();
 
   const classroomId = params?.id;
-  const courseId = searchParams.get('courseId') ?? undefined;
+  const courseId = searchParams.get('courseId') || undefined;
   const course = useCourse(courseId);
+  useRealtimeSync(courseId);
+  const hydrated = useHydrated();
   const studentId = session.studentId;
   const studentName = session.studentName ?? session.user.name;
   const backHref = courseId ? `/student/classroom/${courseId}` : '/student';
 
-  if (!classroomId || !course) {
+  if (!classroomId || !courseId) {
     return (
       <div className="grid h-screen place-items-center bg-white text-stone-500">
-        <p className="text-sm">缺少课堂 ID 参数</p>
+        <p className="text-sm">缺少课堂或课程 ID 参数，请从课程空间重新进入</p>
+      </div>
+    );
+  }
+
+  if (!hydrated) return <LoadingShell />;
+
+  if (!course) {
+    return (
+      <div className="grid h-screen place-items-center bg-white text-stone-500">
+        <p className="text-sm">未找到课程，请从课程空间重新进入</p>
       </div>
     );
   }

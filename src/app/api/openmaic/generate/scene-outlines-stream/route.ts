@@ -1,3 +1,4 @@
+import { withClassroomAiStream } from "@/lib/llm/classroom-capacity";
 /**
  * Scene Outlines Streaming API (SSE)
  *
@@ -520,11 +521,11 @@ export async function POST(req: NextRequest) {
               languageDirective = null;
               courseTitle = null;
               const usedOutlineIds = new Set<string>();
-              const textStream = streamLLM(
-                streamParams,
+              const textStream = withClassroomAiStream(signal => streamLLM(
+                { ...streamParams, abortSignal: signal },
                 'scene-outlines-stream',
                 thinkingConfig,
-              ).textStream;
+              ).textStream, req.signal);
 
               for await (const chunk of textStream) {
                 // Stop doing work the moment the client goes away — otherwise

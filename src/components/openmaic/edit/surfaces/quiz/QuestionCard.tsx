@@ -25,6 +25,7 @@ import {
 import { useI18n } from '@openmaic/lib/hooks/use-i18n';
 import { cn } from '@openmaic/lib/utils';
 import type { QuizQuestion, QuizQuestionType } from '@openmaic/lib/types/stage';
+import { rubricCriterionPoints } from '@openmaic/lib/quiz/rubric';
 import { MAX_OPTIONS, isChoice, optionLetter } from './quiz-edit-ops';
 import {
   addQuizOption,
@@ -70,9 +71,10 @@ interface Props {
   readonly index: number;
   readonly expanded: boolean;
   readonly onToggle: () => void;
+  readonly questionCount?: number;
 }
 
-export function QuestionCard({ question: q, index, expanded, onToggle }: Props) {
+export function QuestionCard({ question: q, index, expanded, onToggle, questionCount }: Props) {
   const { t } = useI18n();
   const controls = useDragControls();
   const choice = isChoice(q.type);
@@ -162,6 +164,7 @@ export function QuestionCard({ question: q, index, expanded, onToggle }: Props) 
         <button
           type="button"
           aria-label={t('edit.quiz.deleteQuestion')}
+          disabled={q.scoringPolicy === 'course-100-v1' && questionCount === 1}
           onPointerDown={stopDrag}
           onClick={() => deleteQuizQuestion(q.id)}
           className="shrink-0 rounded-lg p-1.5 text-zinc-300 transition-colors hover:bg-rose-50 hover:text-rose-500 dark:text-zinc-600 dark:hover:bg-rose-950/40"
@@ -215,6 +218,8 @@ export function QuestionCard({ question: q, index, expanded, onToggle }: Props) 
                 type="number"
                 min={0}
                 value={q.points ?? 1}
+                readOnly={q.scoringPolicy === 'course-100-v1'}
+                title={q.scoringPolicy === 'course-100-v1' ? '分值按整课100分规则自动分配' : undefined}
                 onPointerDown={stopDrag}
                 onChange={(e) => {
                   const n = e.target.value === '' ? 0 : Number(e.target.value);
@@ -386,7 +391,29 @@ export function QuestionCard({ question: q, index, expanded, onToggle }: Props) 
                 <Sparkles className="mt-0.5 h-4 w-4 shrink-0" strokeWidth={2} />
                 <span>{t('edit.quiz.shortAnswerGradingNote')}</span>
               </div>
-              <Field label={t('edit.quiz.commentPromptLabel')}>
+              {q.scoringRubric ? <div className="space-y-3">
+                <Field label="参考答案">
+                  <Textarea value={q.referenceAnswer ?? ''} rows={2} onPointerDown={stopDrag}
+                    onChange={(event) => typeQuizQuestion(q.id, { referenceAnswer: event.target.value }, `${q.id}:referenceAnswer`)} />
+                </Field>
+                {q.scoringRubric.criteria.map((criterion, criterionIndex) => <div key={criterion.id} className="space-y-2 border-t border-zinc-200 pt-3">
+                  <p className="text-xs font-semibold">{criterion.description} · 满分 {rubricCriterionPoints(q.points ?? 1, q.scoringRubric!)[criterionIndex]} 分</p>
+                  {(['fullCredit', 'partialCredit', 'noCredit'] as const).map((field) => <Field key={field}
+                    label={field === 'fullCredit' ? '满分条件' : field === 'partialCredit' ? '部分分条件（满足时得本要点一半分值，可留空）' : '零分条件'}>
+                    <Textarea value={criterion[field] ?? ''} rows={2} onPointerDown={stopDrag} onChange={(event) => {
+                      const criteria = q.scoringRubric!.criteria.map((item, index) => {
+                        if (index !== criterionIndex) return item;
+                        if (field === 'partialCredit' && !event.target.value.trim()) {
+                          const { partialCredit: _partial, ...rest } = item;
+                          return rest;
+                        }
+                        return { ...item, [field]: event.target.value };
+                      });
+                      typeQuizQuestion(q.id, { scoringRubric: { version: 1, criteria } }, `${q.id}:${criterion.id}:${field}`);
+                    }} />
+                  </Field>)}
+                </div>)}
+              </div> : <Field label={t('edit.quiz.commentPromptLabel')}>
                 <Textarea
                   value={q.commentPrompt ?? ''}
                   onPointerDown={stopDrag}
@@ -401,7 +428,7 @@ export function QuestionCard({ question: q, index, expanded, onToggle }: Props) 
                   rows={2}
                   className={cn('resize-none', FOCUS)}
                 />
-              </Field>
+              </Field>}
             </>
           )}
 

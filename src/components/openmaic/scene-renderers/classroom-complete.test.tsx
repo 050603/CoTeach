@@ -13,15 +13,15 @@ afterEach(() => {
   localStorage.removeItem(`quizResults:${scene.id}`);
 });
 describe("classroom completion grade", () => {
-  it("displays a perfect percentage including AI-graded answers and keeps the raw points", () => {
+  it("displays the actual total including AI-graded answers in a single score", () => {
     localStorage.setItem(`quizAnswers:${scene.id}`, JSON.stringify({ choice: "A", blank: "答案" }));
     localStorage.setItem(`quizResults:${scene.id}`, JSON.stringify([
       { questionId: "choice", status: "correct", earned: 15 },
       { questionId: "blank", status: "graded", earned: 10 },
     ]));
     render(<I18nProvider><ClassroomCompletePage scenes={[scene]} title="课程" /></I18nProvider>);
-    expect(screen.getByText(/Quiz score 100 \/ 100|小测总成绩 100 \/ 100 分/)).toBeInTheDocument();
-    expect(screen.getByText(/Raw points 25 \/ 25|原始得分 25 \/ 25 分/)).toBeInTheDocument();
+    expect(screen.getByText(/Quiz score 25 \/ 25|小测总成绩 25 \/ 25 分/)).toBeInTheDocument();
+    expect(screen.queryByText(/Raw points|原始得分/)).toBeNull();
   });
   it("shows pending grading rather than dropping the unanswered fill blank", () => {
     localStorage.setItem(`quizAnswers:${scene.id}`, JSON.stringify({ choice: "A", blank: "答案" }));
@@ -31,6 +31,6 @@ describe("classroom completion grade", () => {
     ]));
     render(<I18nProvider><ClassroomCompletePage scenes={[scene]} title="课程" /></I18nProvider>);
     expect(screen.getByText(/Quiz score awaiting completed grading|小测总成绩待完成批阅/)).toBeInTheDocument();
-    expect(screen.queryByText(/Quiz score 100 \/ 100|小测总成绩 100 \/ 100 分/)).toBeNull();
+    expect(screen.queryByText(/Quiz score 25 \/ 25|小测总成绩 25 \/ 25 分/)).toBeNull();
   });
 });

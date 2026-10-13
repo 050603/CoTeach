@@ -96,6 +96,21 @@ describe("V2 classroom projection writes", () => {
     expect(() => assertImmutableClassroomDesign(before, normalized)).not.toThrow();
     expect(() => assertImmutableClassroomDesign(before, { ...normalized, content: { ...normalized.content, pblOutline: "Changed" } })).toThrow();
   });
+  it("switches stages for published templates with partial practice settings", () => {
+    const before = fixture();
+    // The public template API accepts partial configuration, including snapshots
+    // created before practiceWebSearchEnabled was introduced.
+    before.pblConfig = { makeArtifactMode: "document" } as Course["pblConfig"];
+    const after = applySessionAction(
+      { ...initialSessionState(), hydrated: true, courses: [before] },
+      { type: "SET_STAGE", payload: { id: before.id, index: 1 } },
+    ).courses[0]!;
+    expect(after.currentStageIndex).toBe(1);
+    expect(() => assertImmutableClassroomDesign(before, after)).not.toThrow();
+    expect(() => assertImmutableClassroomDesign(before, {
+      ...after, content: { ...after.content, pblOutline: "Unauthorized design edit" },
+    })).toThrow("课堂已固定发布教案");
+  });
   it("starts an authored generated course after reducer normalization", () => {
     const before = fixture();
     before.status = "ready";

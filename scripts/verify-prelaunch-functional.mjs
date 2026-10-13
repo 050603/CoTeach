@@ -8,6 +8,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { PrismaClient } from '@prisma/client';
+import { hash } from '@node-rs/argon2';
 import { chromium } from 'playwright';
 import { PDFDocument } from 'pdf-lib';
 import JSZip from 'jszip';
@@ -16,11 +17,15 @@ import PptxGenJS from 'pptxgenjs';
 const root = path.resolve(import.meta.dirname, '..');
 const output = path.resolve(process.env.PRELAUNCH_OUTPUT_DIR || path.join(root, 'test-results/prelaunch/functional'));
 mkdirSync(output, { recursive: true });
+const resumeSource = process.env.PRELAUNCH_RESUME_AI_DIR ? path.resolve(process.env.PRELAUNCH_RESUME_AI_DIR) : null;
 const container = `openpbl-prelaunch-${randomUUID()}`;
 const redisContainer = `${container}-redis`;
 const temporary = path.join(tmpdir(), container);
 mkdirSync(temporary, { recursive: true });
-const distDir = process.env.PRELAUNCH_DIST_DIR || `.next-prelaunch-${process.pid}`;
+const reuseBuild = process.env.PRELAUNCH_REUSE_BUILD === '1';
+const distDir = process.env.PRELAUNCH_DIST_DIR || (reuseBuild ? '.next-build' : `.next-prelaunch-${process.pid}`);
+assert.ok(!path.isAbsolute(distDir) && !distDir.includes('..'), 'Build directory must stay inside the repository');
+assert.ok(reuseBuild || distDir.startsWith('.next-prelaunch-'), 'Disposable builds must use .next-prelaunch-*');
 const port = 3198;
 const origin = `http://127.0.0.1:${port}`;
 const password = randomBytes(18).toString('base64url');
@@ -40,7 +45,10 @@ const env = {
   ENABLE_WEBSOCKET: 'false',
   ENABLE_TLDRAW_SYNC: 'false',
   COURSE_GENERATION_BACKGROUND_ENABLED: 'false',
+  KNOWLEDGE_EXPLANATION_WARMUP_ENABLED: 'false',
+  DOCUMENT_AI_PROACTIVE_REVIEW_ENABLED: 'true',
   UPLOAD_DIR: path.join(temporary, 'uploads'),
+  TTS_CACHE_DIR: path.join(temporary, 'tts-cache'),
   WHITEBOARD_DATA_DIR: path.join(temporary, 'whiteboards'),
   CLASSROOM_DATA_DIR: path.join(temporary, 'classrooms'),
   PUBLIC_BASE_URL: origin,
@@ -52,12 +60,15 @@ let server;
 let browser;
 let db;
 let serverOutput = '';
+let verifiedBuildId = null;
 const results = [];
+const aiSamples = [];
 const record = (name, status, detail = '') => { results.push({ name, status, detail }); console.log(`${status} ${name}${detail ? `: ${detail}` : ''}`); };
 const command = (bin, args, options = {}) => execFileSync(bin, args, { cwd: root, env, encoding: 'utf8', timeout: 120_000, ...options }).trim();
 const report = () => writeFileSync(path.join(output, 'report.json'), JSON.stringify({
   date: new Date().toISOString(), commit: command('git', ['rev-parse', '--short', 'HEAD']),
-  mode: 'isolated-production-build-and-disposable-database', browser: browser?.version() ?? null, results,
+  mode: 'isolated-production-build-and-disposable-database', buildId: verifiedBuildId,
+  realClassroomAi: process.env.PRELAUNCH_CLASSROOM_AI === '1', browser: browser?.version() ?? null, results,
 }, null, 2));
 
 async function checkedRequest(context, method, url, data, expected = 200) {
@@ -155,6 +166,275 @@ async function checkConfiguredProviders(teacher) {
   }
 }
 
+async function checkPracticeAi(student, instance, learner, aiRequest) {
+    const documentRequest = { courseId: instance.id, studentId: learner.id, stageKey: 'make', workspaceKind: 'document',
+      requestId: randomUUID(), conversationId: 'legacy', intent: 'discuss',
+      message: '请指出这份观察记录中还缺少哪项便于核验的信息，不要替我作结论。', documentHtml: '<p>我今天在学校东侧绿地观察到了三只麻雀。</p>' };
+    if (!resumeSource) {
+    const documentReply = await aiRequest(student, '/api/ai-collaboration/document', documentRequest);
+    assert.ok(documentReply.result?.message);
+    assert.deepEqual(await aiRequest(student, '/api/ai-collaboration/document', documentRequest), documentReply);
+    aiSamples.push({ feature: 'document-discussion', prompt: documentRequest.message, document: documentRequest.documentHtml, response: documentReply.result });
+    record('real-ai-document-discussion-and-request-replay', '通过');
+    }
+    const documentModelCalls = async () => {
+      const metrics = await fetch(`${origin}/api/metrics`, {
+        headers: { Authorization: `Bearer ${env.INTERNAL_MONITOR_TOKEN}` }, signal: AbortSignal.timeout(5_000),
+      });
+      assert.equal(metrics.status, 200);
+      return (await metrics.text()).split('\n')
+        .filter(line => line.startsWith('classroom_ai_calls_total{') && line.includes('feature="document-collaboration"'))
+        .reduce((total, line) => total + Number(line.split(' ').at(-1)), 0);
+    };
+    try {
+    const suggestionRequest = { courseId: instance.id, studentId: learner.id, stageKey: 'make', workspaceKind: 'document',
+      action: 'suggest-delegated-work', requestId: randomUUID(), documentHtml: documentRequest.documentHtml };
+    const callsBeforeSuggestions = await documentModelCalls();
+    const suggestions = await aiRequest(student, '/api/ai-collaboration/document', suggestionRequest);
+    assert.ok(Array.isArray(suggestions.starters), '任务建议必须明确返回候选数组，空结果也有效');
+    const callsAfterSuggestions = await documentModelCalls();
+    if (resumeSource && suggestions.resultSource === 'reused') {
+      assert.equal(callsAfterSuggestions, callsBeforeSuggestions, '恢复已有建议不应调用模型');
+    } else {
+      assert.equal(suggestions.resultSource, 'generated');
+      assert.ok(callsAfterSuggestions > callsBeforeSuggestions, '首次建议未调用真实模型');
+      if (suggestions.starters.length) assert.ok(callsAfterSuggestions - callsBeforeSuggestions >= 2, '非空任务建议必须经过生成和边界审核');
+    }
+    const reusedSuggestions = await aiRequest(student, '/api/ai-collaboration/document', { ...suggestionRequest, requestId: randomUUID() });
+    assert.equal(reusedSuggestions.resultSource, 'reused');
+    assert.equal(reusedSuggestions.requestId, suggestions.requestId);
+    assert.deepEqual(reusedSuggestions.starters, suggestions.starters);
+    assert.equal(await documentModelCalls(), callsAfterSuggestions, '相同学生及完整上下文不应重复生成或审核建议');
+    aiSamples.push({ feature: 'document-work-suggestions', document: suggestionRequest.documentHtml,
+      response: suggestions.starters, modelCalls: callsAfterSuggestions - callsBeforeSuggestions, reusedWithoutModelCall: true });
+    record('real-ai-document-two-stage-suggestions-content-cache', '通过', `${suggestions.starters.length} 项建议；新请求编号复用完整结果，无新增模型调用`);
+    } catch (error) { record('real-ai-document-two-stage-suggestions-content-cache', '失败', String(error.message).slice(0, 350)); }
+    try {
+    const reviewText = '我只在东侧绿地观察了三分钟，看到了三只麻雀，因此证明学校所有绿地的鸟类数量都在增加。';
+    const reviewRequest = { courseId: instance.id, studentId: learner.id, stageKey: 'make', workspaceKind: 'document',
+      action: 'proactive-document-comments', requestId: randomUUID(), documentHtml: `<p>${reviewText}</p>`,
+      paragraphs: [{ candidateId: 'observation-paragraph', blockId: 'observation-paragraph', blockIndex: 0, targetText: reviewText }] };
+    const callsBeforeReview = await documentModelCalls();
+    const review = await aiRequest(student, '/api/ai-collaboration/document', reviewRequest);
+    assert.equal(review.complete, true, '单段主动审阅必须明确完成');
+    assert.ok(Array.isArray(review.commentThreads));
+    const callsAfterReview = await documentModelCalls();
+    assert.ok(callsAfterReview > callsBeforeReview, '首次主动批注未调用真实模型');
+    const reviewAgain = await aiRequest(student, '/api/ai-collaboration/document', { ...reviewRequest, requestId: randomUUID() });
+    assert.equal(reviewAgain.complete, true);
+    assert.equal(await documentModelCalls(), callsAfterReview, '已审阅段落（含无问题结论）应复用指纹检查点');
+    aiSamples.push({ feature: 'document-proactive-review', document: reviewText,
+      response: review.commentThreads, decision: review.reviewDecision, reusedWithoutModelCall: true });
+    record('real-ai-document-proactive-review-and-paragraph-checkpoint', '通过', `${review.commentThreads.length} 条批注；新请求编号不重复审阅`);
+
+    } catch (error) { record('real-ai-document-proactive-review-and-paragraph-checkpoint', '失败', String(error.message).slice(0, 350)); }
+
+    try {
+    const codeRequest = { courseId: instance.id, studentId: learner.id, stageKey: 'make', language: 'python',
+      requestId: randomUUID(), conversationId: 'legacy', intent: 'discuss', message: '请解释这段代码的输出，不要修改代码。',
+      artifact: { version: 1, language: 'python', activeFileId: 'main', files: [{ id: 'main', path: 'main.py', content: 'print(1 + 2)\n' }] }, run: { status: 'idle' } };
+    const codeReply = await aiRequest(student, '/api/ai-collaboration/code', codeRequest);
+    assert.ok(codeReply.result?.message);
+    assert.deepEqual(await aiRequest(student, '/api/ai-collaboration/code', codeRequest), codeReply);
+    aiSamples.push({ feature: 'code-discussion', prompt: codeRequest.message, artifact: codeRequest.artifact, response: codeReply.result });
+    record('real-ai-code-discussion-and-request-replay', '通过');
+    } catch (error) { record('real-ai-code-discussion-and-request-replay', '失败', String(error.message).slice(0, 350)); }
+}
+
+async function checkFiveStageClassroom(teacher, student, offering, chapter, invitation) {
+  const stages = [
+    { key: 'launch', label: '项目启动', view: 'simple-resource', description: '明确观察任务' },
+    { key: 'ai-learning', label: '知识讲授', view: 'ai-learning', description: '学习科学观察' },
+    { key: 'make', label: '项目实践', view: 'ai-collaboration', description: '完成记录' },
+    { key: 'showcase', label: '成果汇报与评价', view: 'showcase-reporting', description: '分享成果' },
+    { key: 'reflection', label: '后测', view: 'experiment-posttest', description: '完成后测' },
+  ];
+  const classroomId = `prelaunch-learning-${randomUUID()}`;
+  const timestamp = new Date().toISOString();
+  const question = { id: 'observation-q', type: 'single', question: '为了比较两处绿地的鸟类数量，下列哪种记录方式更可靠？',
+    options: [{ value: 'A', label: '在相同观察时长下记录日期、地点和鸟类数量' }, { value: 'B', label: '仅凭印象判断哪处鸟更多' }],
+    answer: ['A'], analysis: '比较应保持观察时长一致，并保存日期、地点与数量记录，避免仅凭主观印象判断。', points: 1, knowledgePointIds: ['observation-kp'] };
+  mkdirSync(env.CLASSROOM_DATA_DIR, { recursive: true });
+  writeFileSync(path.join(env.CLASSROOM_DATA_DIR, `${classroomId}.json`), JSON.stringify({
+    id: classroomId, revision: 1, stage: { id: classroomId, name: '科学观察', createdAt: timestamp, updatedAt: timestamp },
+    createdAt: timestamp, updatedAt: timestamp,
+    scenes: [{ id: 'observation-scene', stageId: classroomId, outlineId: 'observation-quiz', lectureSectionId: 'observation-section',
+      title: '科学观察检测', type: 'quiz', order: 0, content: { type: 'quiz', questions: [question] }, actions: [] }],
+  }));
+  writeFileSync(path.join(output, 'five-stage-classroom.json'), readFileSync(path.join(env.CLASSROOM_DATA_DIR, `${classroomId}.json`)));
+  const template = await checkedRequest(teacher, 'POST', '/api/platform/templates', {
+    title: '五阶段功能验收模板', snapshot: { schemaVersion: 2, kind: 'pbl-course', design: {
+      name: '五阶段科学观察验收', subject: '科学', grade: '七年级', hours: 1, stages,
+      drivingQuestion: '如何比较两处绿地的鸟类数量？', expectedOutcome: '有原始观察记录支持的比较报告',
+      pblConfig: { makeArtifactMode: 'document' }, aiLearningClassroomId: classroomId,
+      content: { pblOutline: '学生独立完成观察与分析，AI 可协助整理记录和核验表达。',
+        knowledgePoints: [{ id: 'observation-kp', name: '科学观察', description: question.analysis }], lessonOutline: [],
+        knowledgeLectureSections: [{ id: 'observation-section', title: '科学观察', order: 0,
+          quizOutlineId: 'observation-quiz', sceneOutlineIds: [], estimatedMinutes: 3, knowledgePointIds: ['observation-kp'] }],
+        teachingBlueprint: { sections: [{ id: 'observation-section', units: [] }] },
+        evaluationPlan: { dimensions: [], overallRubric: '' } },
+    } },
+  }, 201);
+  writeFileSync(path.join(output, 'five-stage-template.json'), JSON.stringify(template, null, 2));
+  assert.equal(await db.knowledgeExplanationWarmup.count({ where: { courseId: template.id } }), 1, '正式模板发布入口未安排讲解预生成');
+  record('five-stage-template-publication-queues-explanation-warmup', '通过');
+  const activity = (await checkedRequest(teacher, 'POST', `/api/platform/offerings/${offering.id}/chapters/${chapter.id}/activities`, {
+    type: 'Classroom', title: '五阶段功能验收', templateVersionId: template.versions[0].id,
+    config: { schemaVersion: 1, experiment: { enabled: true,
+      pretest: [{ id: 'pre-observation', type: 'single-choice', prompt: '哪项便于核验观察结果？', options: ['记录日期和时长', '仅凭印象'], correctAnswer: '记录日期和时长' }],
+      posttest: [{ id: 'post-observation', type: 'short-answer', prompt: '比较两处绿地的鸟类数量时需要保持什么条件一致？' }],
+    } },
+  }, 201)).activity;
+  await checkedRequest(teacher, 'PATCH', `/api/platform/activities/${activity.id}`, { isOpen: true });
+  const instance = await db.classroomInstance.findFirstOrThrow({ where: { activityId: activity.id } });
+  await checkedRequest(teacher, 'POST', `/api/platform/classroom-instances/${instance.id}/start`, {});
+  assert.equal(await db.knowledgeExplanationWarmup.count({ where: { courseId: instance.id } }), 1, '正式开课入口未安排讲解预生成');
+  record('five-stage-start-queues-explanation-warmup-with-worker-disabled', '通过');
+  await checkedRequest(student, 'GET', `/api/platform/activities/${activity.id}`);
+  await checkedRequest(student, 'POST', `/api/platform/classroom-instances/${instance.id}/experiment`, {
+    phase: 'pretest', answers: { 'pre-observation': '记录日期和时长' },
+  });
+  const participation = (await checkedRequest(student, 'POST', `/api/platform/classroom-instances/${instance.id}/enter`, {})).participation;
+  const learner = await db.user.findFirstOrThrow({ where: { username: 'prelaunch-student' } });
+  const setStage = async (index) => {
+    const before = await checkedRequest(teacher, 'GET', `/api/courses/${instance.id}/state`);
+    writeFileSync(path.join(output, `five-stage-before-${index}.json`), JSON.stringify(before, null, 2));
+    await checkedRequest(teacher, 'POST', `/api/courses/${instance.id}/actions`, {
+      requestId: randomUUID(), action: { type: 'SET_STAGE', payload: { id: instance.id, index } },
+    });
+    const state = await checkedRequest(student, 'GET', `/api/courses/${instance.id}/state`);
+    assert.equal(state.course.stages[state.course.currentStageIndex].key, stages[index].key);
+    record(`five-stage-${stages[index].key}-teacher-switch-student-reload`, '通过');
+  };
+  await setStage(0);
+  await pageCheck(student, 'student/five-stage-launch', `/student/classroom/${instance.id}`, '项目启动');
+  await setStage(1);
+  const player = await student.newPage();
+  const playerErrors = [];
+  let expectedTutorFailure = false;
+  player.on('pageerror', error => playerErrors.push(error.message));
+  player.on('response', response => {
+    if (expectedTutorFailure && response.status() === 503
+      && ['/api/knowledge-lecture', '/api/openmaic/generate/tts'].includes(new URL(response.url()).pathname)) return;
+    if (response.status() >= 400 && (new URL(response.url()).pathname.startsWith('/api/') || /\.(js|css|woff2?)(\?|$)/.test(response.url()))) {
+      playerErrors.push(`${response.status()} ${new URL(response.url()).pathname}`);
+    }
+  });
+  try {
+    // The V2 classroom route loads the authenticated instance into the session
+    // store before mounting its real embedded learning player.
+    await player.goto(`${origin}/student/classroom/${instance.id}`, { waitUntil: 'domcontentloaded' });
+    await player.getByRole('button', { name: /^(开始答题|Start Quiz)$/ }).click({ timeout: 30_000 });
+    await player.getByText(question.question, { exact: true }).waitFor();
+    await player.getByRole('button', { name: /仅凭印象判断哪处鸟更多/ }).click();
+    await player.getByRole('button', { name: /^(提交答案|Submit Answers)$/ }).click();
+    await player.getByText(question.analysis, { exact: true }).waitFor();
+    await player.reload({ waitUntil: 'domcontentloaded' });
+    await player.getByText(question.analysis, { exact: true }).waitFor({ timeout: 30_000 });
+    assert.deepEqual(playerErrors, [], '播放器存在浏览器或资源/API异常');
+    await player.screenshot({ path: path.join(output, 'student-five-stage-learning-player.png'), fullPage: true });
+    record('five-stage-real-learning-player-submit-analysis-refresh-recovery', '通过');
+    expectedTutorFailure = true;
+    let injectedFailures = 0;
+    await player.route('**/api/knowledge-lecture', async route => {
+      if (route.request().postDataJSON()?.action !== 'tutor-explain') return route.continue();
+      injectedFailures++;
+      await route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ error: 'TUTOR_REQUEST_FAILED' }) });
+    });
+    // This fault check never reaches a paid speech provider.
+    await player.route('**/api/openmaic/generate/tts', route => route.fulfill({ status: 503, contentType: 'application/json', body: '{"error":"INJECTED_TTS_UNAVAILABLE"}' }));
+    await player.getByRole('button', { name: '助教讲解', exact: true }).click();
+    await player.getByRole('button', { name: '重试讲解', exact: true }).waitFor({ timeout: 30_000 });
+    await player.getByText('助教讲解暂时不可用，题目解析仍可查看。请点击重试讲解。', { exact: true }).waitFor();
+    await player.getByRole('dialog', { name: '助教题目讲解' }).getByText(question.analysis).first().waitFor();
+    assert.equal(injectedFailures, 1, '首次讲解失败不应无界重试');
+    assert.deepEqual(playerErrors, [], '故障注入后出现非预期浏览器或接口异常');
+    await player.screenshot({ path: path.join(output, 'student-five-stage-tutor-unavailable.png'), fullPage: true });
+    record('five-stage-tutor-503-shows-authored-analysis-and-explicit-retry', '通过', '仅首次AI讲解注入503；作答/评分/学习记录均为真实隔离后端');
+  } catch (error) {
+    await player.screenshot({ path: path.join(output, 'student-five-stage-learning-player-failure.png'), fullPage: true }).catch(() => undefined);
+    record('five-stage-real-learning-player-submit-analysis-refresh-recovery', '失败', String(error.message).slice(0, 350));
+  } finally { await player.close(); }
+  const attemptBody = { action: 'record-attempt', courseId: instance.id, studentId: learner.id,
+    sectionId: 'observation-section', quizOutlineId: 'observation-quiz', runtimeSceneId: 'observation-scene', answers: { 'observation-q': 'B' } };
+  const attempted = await checkedRequest(student, 'POST', '/api/knowledge-lecture', attemptBody);
+  const replay = await checkedRequest(student, 'POST', '/api/knowledge-lecture', attemptBody);
+  assert.equal(replay.attempt.id, attempted.attempt.id);
+  assert.equal(replay.attempt.submittedAt, attempted.attempt.submittedAt);
+  record('five-stage-quiz-real-submit-idempotent-replay', '通过');
+  await pageCheck(student, 'student/five-stage-independent-player',
+    `/student/ai-learning/${classroomId}?courseId=${instance.id}`, question.analysis);
+  if (process.env.PRELAUNCH_CLASSROOM_AI === '1') {
+    const aiRequest = async (context, route, data) => {
+      const response = await context.request.post(`${origin}${route}`, { data, headers: { Origin: origin }, timeout: 180_000 });
+      const result = await response.json();
+      assert.equal(response.status(), 200, `${route}: ${response.status()} ${JSON.stringify(result).slice(0, 250)}`);
+      return result;
+    };
+    const other = await browser.newContext();
+    try {
+      await checkedRequest(other, 'POST', '/api/platform/auth/register', { invitationCode: invitation.code,
+        username: 'prelaunch-second-student', displayName: '第二名验收学生', password, confirmPassword: password }, 201);
+      await checkedRequest(other, 'GET', `/api/platform/activities/${activity.id}`);
+      await checkedRequest(other, 'POST', `/api/platform/classroom-instances/${instance.id}/experiment`, {
+        phase: 'pretest', answers: { 'pre-observation': '记录日期和时长' },
+      });
+      await checkedRequest(other, 'POST', `/api/platform/classroom-instances/${instance.id}/enter`, {});
+      const second = await db.user.findFirstOrThrow({ where: { username: 'prelaunch-second-student' } });
+      const secondAttempt = await checkedRequest(other, 'POST', '/api/knowledge-lecture', { ...attemptBody, studentId: second.id });
+      const explain = { action: 'tutor-explain', courseId: instance.id, studentId: learner.id,
+        attemptId: attempted.attempt.id, questionId: question.id, requestId: randomUUID() };
+      const first = await aiRequest(student, '/api/knowledge-lecture', explain);
+      assert.equal(first.resultSource, 'shared');
+      const cachedBefore = await db.knowledgeExplanation.findMany({ where: { status: 'COMPLETED' }, orderBy: { id: 'asc' } });
+      assert.ok(cachedBefore.length, '共享首次讲解没有持久化');
+      const shared = await aiRequest(other, '/api/knowledge-lecture', { ...explain, studentId: second.id,
+        attemptId: secondAttempt.attempt.id, requestId: randomUUID() });
+      assert.equal(shared.resultSource, 'shared');
+      assert.equal(shared.thread.messages.at(-1).content, first.thread.messages.at(-1).content);
+      const cachedAfter = await db.knowledgeExplanation.findMany({ where: { status: 'COMPLETED' }, orderBy: { id: 'asc' } });
+      for (const before of cachedBefore) assert.equal(cachedAfter.find(row => row.id === before.id)?.updatedAt.toISOString(), before.updatedAt.toISOString());
+      assert.notEqual(shared.thread.messages.at(-1).id, first.thread.messages.at(-1).id);
+      aiSamples.push({ feature: 'shared-explanation', question, answer: 'B', response: first.thread.messages.at(-1).content });
+      record('real-ai-two-students-share-explanation-with-independent-receipts', '通过');
+      const followup = await aiRequest(student, '/api/knowledge-lecture', { ...explain, action: 'tutor-message',
+        requestId: randomUUID(), message: '如果两个地点观察时长不一样，为什么不能直接比较鸟类总数？' });
+      assert.equal(followup.resultSource, 'personalized');
+      assert.ok(followup.thread.messages.length > first.thread.messages.length);
+      aiSamples.push({ feature: 'personal-followup', response: followup.thread.messages.at(-1).content });
+      record('real-ai-personal-followup-after-shared-explanation', '通过');
+    } finally { await other.close(); }
+    await setStage(2);
+    await checkPracticeAi(student, instance, learner, aiRequest);
+  } else await setStage(2);
+  await pageCheck(student, 'student/five-stage-document-editor', `/student/ai-collaboration/${instance.id}`, '提交最终版');
+  await setStage(3);
+  await pageCheck(student, 'student/five-stage-showcase', `/student/classroom/${instance.id}`, '成果汇报');
+  await checkedRequest(student, 'POST', `/api/platform/participations/${participation.id}/outcomes`, {
+    action: 'save_artifact', idempotencyKey: randomUUID(), title: '科学观察报告', type: 'HTML', sourceHtml: '<p>同样观察十分钟，记录日期和数量。</p>',
+  });
+  await checkedRequest(teacher, 'POST', `/api/platform/participations/${participation.id}/outcomes`, {
+    action: 'evaluate', idempotencyKey: randomUUID(), type: 'FORMATIVE', score: 90, content: '已记录对比条件。',
+  });
+  await setStage(4);
+  await pageCheck(student, 'student/five-stage-reflection', `/student/classroom/${instance.id}`, '完成课堂后测');
+  const posttestPath = `/api/platform/classroom-instances/${instance.id}/experiment`;
+  const posttestState = await checkedRequest(student, 'GET', `${posttestPath}?phase=posttest`);
+  assert.equal(posttestState.available, true);
+  const posttestBody = { phase: 'posttest', answers: { 'post-observation': '应保持观察时长一致，同时记录日期和地点。' } };
+  await checkedRequest(student, 'PUT', posttestPath, { ...posttestBody, currentPage: 0, version: 0 });
+  assert.equal((await checkedRequest(student, 'GET', `${posttestPath}?phase=posttest`)).draft.answers['post-observation'], posttestBody.answers['post-observation']);
+  const posttestSubmission = await checkedRequest(student, 'POST', posttestPath, posttestBody);
+  assert.equal((await checkedRequest(student, 'POST', posttestPath, posttestBody)).submission.id, posttestSubmission.submission.id);
+  const results = await checkedRequest(teacher, 'GET', `${posttestPath}/results`);
+  assert.equal(results.posttestCount, 1);
+  record('five-stage-pretest-posttest-draft-submit-replay-and-teacher-results', '通过');
+  await checkedRequest(teacher, 'POST', `/api/platform/classroom-instances/${instance.id}/finish`, {});
+  assert.equal((await db.classroomInstance.findUniqueOrThrow({ where: { id: instance.id } })).status, 'FINISHED');
+  assert.ok(await db.classroomParticipation.findUnique({ where: { id: participation.id } }));
+  record('five-stage-sequential-controls-quiz-practice-and-finish', '通过', '阶段控制与持久化验收；完整课堂容量压测另行进行');
+}
+
 try {
   command('docker', ['run', '--detach', '--rm', '--name', container,
     '--publish', '127.0.0.1::5432', '--tmpfs', '/var/lib/postgresql/data:rw',
@@ -167,6 +447,16 @@ try {
   const address = command('docker', ['port', container, '5432/tcp']);
   assert.match(address, /^127\.0\.0\.1:\d+$/);
   env.DATABASE_URL = `postgresql://postgres@${address}/postgres?schema=public`;
+  if (resumeSource) {
+    command('docker', ['exec', '-i', container, 'psql', '-U', 'postgres', '-d', 'postgres', '-v', 'ON_ERROR_STOP=1'], {
+      input: readFileSync(path.join(resumeSource, 'isolated-failure-database.sql'), 'utf8'), maxBuffer: 32 * 1024 * 1024,
+    });
+    const classroom = JSON.parse(readFileSync(path.join(resumeSource, 'five-stage-classroom.json'), 'utf8'));
+    mkdirSync(env.CLASSROOM_DATA_DIR, { recursive: true });
+    writeFileSync(path.join(env.CLASSROOM_DATA_DIR, `${classroom.id}.json`), JSON.stringify(classroom));
+    writeFileSync(path.join(output, 'five-stage-classroom.json'), JSON.stringify(classroom));
+    record('isolated-database-restore-previous-synthetic-ai-run', '通过');
+  }
   command('node', ['scripts/run-prisma.mjs', 'migrate', 'deploy']);
   db = new PrismaClient({ datasources: { db: { url: env.DATABASE_URL } } });
   await db.$queryRaw`SELECT 1`;
@@ -187,16 +477,23 @@ try {
     env.OPENPBL_OUTBOUND_PROXY = 'http://127.0.0.1:19999';
   }
 
-  if (process.env.PRELAUNCH_REUSE_BUILD !== '1') {
+  if (!reuseBuild) {
     command('node', ['scripts/run-next-production.mjs', 'build', '--webpack'], { timeout: 1_200_000, stdio: 'pipe' });
     record('isolated-production-build', '通过');
   } else {
     readFileSync(path.join(root, distDir, 'BUILD_ID'), 'utf8');
     record('isolated-production-build', '通过', '复用本次验收构建');
   }
+  verifiedBuildId = readFileSync(path.join(root, distDir, 'BUILD_ID'), 'utf8').trim();
   command('node', ['scripts/check-generated-css.mjs']);
   record('isolated-generated-css-integrity', '通过');
-  const standalone = path.join(root, distDir, 'standalone');
+  // Reused production output is read-only, including its traced local data.
+  const sourceStandalone = path.join(root, distDir, 'standalone');
+  const standalone = path.join(temporary, 'runtime');
+  const excluded = ['.openpbl-data', '.openpbl-runtime', '.env', '.env.local', '.env.production', '.env.production.local']
+    .map(name => path.join(sourceStandalone, name));
+  cpSync(sourceStandalone, standalone, { recursive: true, force: true, verbatimSymlinks: true,
+    filter: source => !excluded.some(item => source === item || source.startsWith(`${item}${path.sep}`)) });
   cpSync(path.join(root, 'public'), path.join(standalone, 'public'), { recursive: true, force: true });
   cpSync(path.join(root, distDir, 'static'), path.join(standalone, distDir, 'static'), { recursive: true, force: true });
   server = spawn(process.execPath, [path.join(standalone, 'server.js')],
@@ -215,6 +512,23 @@ try {
   const teacher = await browser.newContext({ viewport: { width: 1366, height: 768 } });
   const student = await browser.newContext({ viewport: { width: 1366, height: 768 } });
 
+  if (resumeSource) {
+    const learner = await db.user.findFirstOrThrow({ where: { username: 'prelaunch-student' } });
+    await db.user.update({ where: { id: learner.id }, data: { passwordHash: await hash(password) } });
+    await db.enrollment.updateMany({ where: { userId: learner.id }, data: { status: 'ACTIVE', withdrawnAt: null } });
+    await db.courseOffering.updateMany({ data: { status: 'OPEN', archivedAt: null } });
+    const instance = await db.classroomInstance.findFirstOrThrow({ where: { status: 'TEACHING' } });
+    await checkedRequest(student, 'POST', '/api/platform/auth/login', { username: 'prelaunch-student', password });
+    const aiRequest = async (context, route, data) => {
+      const response = await context.request.post(`${origin}${route}`, { data, headers: { Origin: origin }, timeout: 180_000 });
+      const result = await response.json();
+      assert.equal(response.status(), 200, `${route}: ${response.status()} ${JSON.stringify(result).slice(0, 250)}`);
+      return result;
+    };
+    await checkPracticeAi(student, instance, learner, aiRequest);
+    await teacher.close();
+    await student.close();
+  } else {
   await checkedRequest(teacher, 'POST', '/api/platform/auth/teacher-register', {
     username: 'prelaunch-teacher', displayName: '上线验收教师', password, confirmPassword: password,
   }, 201);
@@ -509,7 +823,7 @@ try {
     await pblCreatePage?.screenshot({ path: path.join(output, 'teacher-pbl-create-failure.png') }).catch(() => undefined);
     record('teacher-pbl-browser-create-draft-persisted', '失败', String(error.message).slice(0, 350));
   } finally { await pblCreatePage?.close(); }
-  if (process.env.PRELAUNCH_REAL_PROVIDERS === '1') {
+  if (process.env.PRELAUNCH_REAL_PROVIDERS === '1' && process.env.PRELAUNCH_CLASSROOM_AI !== '1') {
     let generationPage;
     try {
       const generatedTitle = '上线验收 AI 生成课程';
@@ -640,7 +954,7 @@ try {
   assert.equal(reloadedWorkspace.workspace.projectState.document, '城市生态调查报告');
   assert.equal(reloadedWorkspace.workspace.projectState.code, 'print("你好，CoTeach")');
   record('classroom-create-start-enter-and-workspace-reload', '通过');
-  if (process.env.PRELAUNCH_REAL_PROVIDERS === '1') {
+  if (process.env.PRELAUNCH_REAL_PROVIDERS === '1' && process.env.PRELAUNCH_CLASSROOM_AI !== '1') {
     try {
       const created = await checkedRequest(student, 'POST', `/api/platform/participations/${participationId}/ai`, {
         op: 'create_conversation', idempotencyKey: randomUUID(), title: '社区生态调查证据讨论',
@@ -682,6 +996,8 @@ try {
   await checkedRequest(teacher, 'POST', `/api/platform/classroom-instances/${instance.id}/finish`, {});
   assert.equal((await db.classroomInstance.findUniqueOrThrow({ where: { id: instance.id } })).status.toLowerCase(), 'finished');
   record('classroom-artifact-stage-reflection-evaluation-finish', '通过');
+  try { await checkFiveStageClassroom(teacher, student, offering, chapter, invitation); }
+  catch (error) { record('five-stage-classroom-functional', '失败', String(error.message).slice(0, 500)); }
 
   await pageCheck(teacher, 'teacher/classes', '/teacher/classes', '上线验收课程');
   await pageCheck(teacher, 'teacher/course-detail', `/teacher/classes/${offering.id}`, '上线验收课程');
@@ -830,12 +1146,25 @@ try {
   record('teacher-logout-invalidates-session', '通过');
   await teacher.close();
   await student.close();
+  }
 } catch (error) {
   record('fatal', '失败', String(error.message).slice(0, 500));
   const diagnostics = serverOutput.split('\n').filter((line) => /Error:|Module not found|Cannot find module/.test(line)).slice(-5);
   if (diagnostics.length) record('server-diagnostics', '失败', diagnostics.join(' | ').replace(/postgres(?:ql)?:\/\/\S+/g, '[database]'));
   process.exitCode = 1;
 } finally {
+  if (server && server.exitCode === null) {
+    try {
+      const metrics = await fetch(`${origin}/api/metrics`, {
+        headers: { Authorization: `Bearer ${env.INTERNAL_MONITOR_TOKEN}` }, signal: AbortSignal.timeout(5_000),
+      });
+      assert.equal(metrics.status, 200);
+      const aiMetrics = (await metrics.text()).split('\n').filter(line => /^classroom_ai_/.test(line));
+      writeFileSync(path.join(output, 'ai-usage-metrics.prom'), `${aiMetrics.join('\n')}\n`);
+      record('classroom-ai-usage-and-cache-metrics', '通过', '保留供应商token和unknown标记，不推算货币费用');
+    } catch (error) { record('classroom-ai-usage-and-cache-metrics', '失败', String(error.message).slice(0, 200)); }
+  }
+  writeFileSync(path.join(output, 'ai-samples.json'), JSON.stringify(aiSamples, null, 2));
   report();
   await browser?.close();
   await db?.$disconnect();
@@ -844,17 +1173,24 @@ try {
     await delay(1000);
     if (server.exitCode === null) try { process.kill(-server.pid, 'SIGKILL'); } catch { /* exited */ }
   }
+  if (started && results.some(entry => entry.status === '失败')) {
+    try {
+      // Preserve only this disposable database for diagnosis; no deployed DB connection is used.
+      writeFileSync(path.join(output, 'isolated-failure-database.sql'), command('docker',
+        ['exec', container, 'pg_dump', '-U', 'postgres', '--dbname', 'postgres'], { maxBuffer: 32 * 1024 * 1024 }));
+    } catch { console.error('Could not preserve disposable database diagnostics'); }
+  }
   if (started) try { command('docker', ['rm', '--force', container]); } catch { /* exited */ }
   if (redisStarted) try { command('docker', ['rm', '--force', redisContainer]); } catch { /* exited */ }
   rmSync(temporary, { recursive: true, force: true });
   // The isolated dev build never owns the deployed production directory.
-  rmSync(path.join(root, distDir), { recursive: true, force: true });
+  if (!reuseBuild) rmSync(path.join(root, distDir), { recursive: true, force: true });
   // Next adds every temporary dist to tsconfig includes. Remove only our two
   // entries so a disposable acceptance run leaves the working tree unchanged.
   const tsconfigFile = path.join(root, 'tsconfig.json');
   const tsconfig = readFileSync(tsconfigFile, 'utf8');
   const generatedIncludes = `,\n    ${JSON.stringify(`${distDir}/types/**/*.ts`)},\n    ${JSON.stringify(`${distDir}/dev/types/**/*.ts`)}`;
-  if (tsconfig.includes(generatedIncludes)) {
+  if (!reuseBuild && tsconfig.includes(generatedIncludes)) {
     writeFileSync(tsconfigFile, tsconfig.replace(generatedIncludes, ''));
   }
   if (results.some((entry) => entry.status === '失败')) process.exitCode = 1;

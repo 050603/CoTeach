@@ -1,3 +1,4 @@
+import { cachedTtsResult } from '@openmaic/lib/server/tts-result-cache';
 /**
  * Single TTS Generation API
  *
@@ -27,25 +28,15 @@ import { createLogger } from '@openmaic/lib/logger';
 import { apiError, apiSuccess } from '@openmaic/lib/server/api-response';
 import { validateUrlForSSRF } from '@openmaic/lib/server/ssrf-guard';
 import { VOXCPM_AUTO_VOICE_ID, VOXCPM_TTS_PROVIDER_ID } from '@openmaic/lib/audio/voxcpm';
-import {
-  ttsLimiter,
-  getClientIp,
-  rateLimitKey,
-  rateLimitedResponse,
-} from '@/lib/auth/rate-limit';
-import { isAuthConfigured } from '@/lib/auth/session';
+import { checkMediaRateLimit } from '@/lib/auth/media-rate-limit';
 
 const log = createLogger('TTS API');
 
 export const maxDuration = 30;
 
 export async function POST(req: NextRequest) {
-  // Stage 3: rate limit TTS (30/min/user).
-  if (isAuthConfigured()) {
-    const ip = getClientIp(req);
-    const rl = ttsLimiter.check(rateLimitKey(req, ip));
-    if (!rl.allowed) return rateLimitedResponse(rl.retryAfterMs);
-  }
+  const limitResponse = await checkMediaRateLimit(req, 'tts');
+  if (limitResponse) return limitResponse;
 
   let ttsProviderId: string | undefined;
   let ttsVoice: string | undefined;
@@ -149,7 +140,8 @@ export async function POST(req: NextRequest) {
     );
 
     // Generate audio
-    const { audio, format } = await generateTTS(config, text);
+    const { audio, format } = await cachedTtsResult(config, text,
+      () => generateTTS({ ...config, signal: AbortSignal.timeout(120_000) }, text));
 
     // Convert to base64
     const base64 = Buffer.from(audio).toString('base64');

@@ -226,6 +226,8 @@ export function deriveKnowledgeLectureSectionsFromOutlines(
       knowledgePointIds: unique(scenes.flatMap((scene) => scene.knowledgePointIds ?? [])),
       sceneOutlineIds: scenes.filter((scene) => scene.type !== "quiz").map((scene) => scene.id),
       quizOutlineId: quiz.id,
+      ...(quiz.quizConfig && typeof quiz.quizConfig === "object" && typeof (quiz.quizConfig as { allocatedPoints?: number }).allocatedPoints === "number"
+        ? { maxScore: (quiz.quizConfig as { allocatedPoints: number }).allocatedPoints } : {}),
       estimatedMinutes: Math.max(2, Math.round(scenes.reduce(
         (sum, scene) => sum + Math.max(0, scene.targetDurationSec ?? scene.estimatedDuration ?? 0),
         0,
@@ -299,6 +301,19 @@ export function verifiedKnowledgeLectureOverallScoreRate(attempts: readonly Know
   return calculateQuizScore(questions, questions.map((question) => ({
     questionId: question.id, earned: question.earned, status: "graded",
   }))).percentage;
+}
+
+export function verifiedKnowledgeLectureScorePoints(attempt: KnowledgeLectureAttempt): number | undefined {
+  return verifiedKnowledgeLectureScoreRate(attempt) === undefined ? undefined
+    : calculateQuizScore(attempt.questions.map((question) => ({ id: question.questionId, points: question.points })),
+      attempt.questions.map((question) => ({ questionId: question.questionId, earned: question.earned, status: "graded" }))).earned;
+}
+
+export function verifiedKnowledgeLectureOverallScorePoints(attempts: readonly KnowledgeLectureAttempt[]): number | undefined {
+  if (!attempts.length) return undefined;
+  const scores = attempts.map(verifiedKnowledgeLectureScorePoints);
+  return scores.some((score) => score === undefined) ? undefined
+    : Math.round(scores.reduce<number>((sum, score) => sum + score!, 0) * 100) / 100;
 }
 
 export function knowledgeLectureQuizEstimate(

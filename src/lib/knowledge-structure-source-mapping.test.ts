@@ -146,21 +146,24 @@ function draft(): Draft {
   };
 }
 
-async function generate(value: Draft, generationContext = context) {
+async function replayLegacy(value: Draft, generationContext = context) {
   const modelCall = vi.fn().mockResolvedValue(JSON.stringify(value));
   const result = await generateKnowledgeStructureOnce(input, generationContext, {
     modelCall,
+    // Historical drafts used the reverse scope field. Fresh planning requests
+    // intentionally require the point-owned mapping instead of reviving it.
+    initialResponse: JSON.stringify(value),
     retrySleep: async () => {},
   });
   return { result, modelCall };
 }
 
 describe("explicit textbook source mappings", () => {
-  it("adopts scope-only mappings on the first draft without changing cases or ownership", async () => {
+  it("replays historical scope-only mappings without changing cases or ownership", async () => {
     const value = draft();
-    const { result, modelCall } = await generate(value);
+    const { result, modelCall } = await replayLegacy(value);
 
-    expect(modelCall).toHaveBeenCalledOnce();
+    expect(modelCall).not.toHaveBeenCalled();
     expect(result.revisionCount).toBe(0);
     expect(result.knowledgePoints.map((point) => point.sourceKnowledgePointIds)).toEqual([
       ["source-theory"], ["source-body"], ["source-environment"],
@@ -195,9 +198,9 @@ describe("explicit textbook source mappings", () => {
       targetKnowledgePointIds: ["target-body", "target-environment"],
       rationale: "核心理论分别在身体机制和环境机制中解释。",
     };
-    const { result, modelCall } = await generate(value);
+    const { result, modelCall } = await replayLegacy(value);
 
-    expect(modelCall).toHaveBeenCalledOnce();
+    expect(modelCall).not.toHaveBeenCalled();
     expect(result.knowledgePoints.map((point) => point.sourceKnowledgePointIds)).toEqual([
       ["source-theory", "source-body"], ["source-theory", "source-environment"],
     ]);
@@ -213,9 +216,9 @@ describe("explicit textbook source mappings", () => {
     const value = draft();
     value.knowledgePoints[0]!.name = "具身认知";
     value.knowledgePoints[1]!.name = "身体参与";
-    const { result, modelCall } = await generate(value);
+    const { result, modelCall } = await replayLegacy(value);
 
-    expect(modelCall).toHaveBeenCalledOnce();
+    expect(modelCall).not.toHaveBeenCalled();
     expect(result.knowledgePoints.map((point) => point.id))
       .toEqual(["source-theory", "source-body", "target-environment"]);
     expect(result.knowledgePoints[1]!.parentKnowledgePointIds).toEqual(["source-theory"]);
@@ -235,9 +238,9 @@ describe("explicit textbook source mappings", () => {
     value.knowledgeScopePlan.decisions[2] = {
       sourceKnowledgePointId: "source-environment", rationale: "原缓存仅保存了映射理由。",
     };
-    const { result, modelCall } = await generate(value);
+    const { result, modelCall } = await replayLegacy(value);
 
-    expect(modelCall).toHaveBeenCalledOnce();
+    expect(modelCall).not.toHaveBeenCalled();
     expect(result.knowledgePoints).toHaveLength(3);
     expect(result.knowledgeScopePlan?.decisions[2]).toMatchObject({
       disposition: "mapped",
@@ -250,12 +253,30 @@ describe("explicit textbook source mappings", () => {
     const value = draft();
     value.knowledgePoints[0]!.name = "身体参与";
     value.knowledgePoints[0]!.sourceKnowledgePointIds = ["source-theory"];
-    const { result } = await generate(value);
+    const { result } = await replayLegacy(value);
 
     expect(result.knowledgePoints[0]).toMatchObject({
       id: "target-theory", sourceKnowledgePointIds: ["source-theory"], teachingRole: "core-concept",
     });
     expect(result.knowledgePoints[1]!.sourceKnowledgePointIds).toEqual(["source-body"]);
+  });
+
+  it("uses explicit point-owned source mappings for a fresh plan without reviving historical reverse decisions", async () => {
+    const value = draft();
+    value.knowledgePoints.forEach((point, index) => {
+      point.sourceKnowledgePointIds = [context.teacherKnowledgePoints![index]!.id];
+    });
+    // An obsolete reverse mapping cannot move a source to another target.
+    value.knowledgeScopePlan.decisions[0]!.targetKnowledgePointIds = ["target-body"];
+    const modelCall = vi.fn().mockResolvedValue(JSON.stringify(value));
+    const result = await generateKnowledgeStructureOnce(input, context, { modelCall });
+    expect(modelCall).toHaveBeenCalledOnce();
+    expect(result.knowledgePoints.map(point => point.sourceKnowledgePointIds)).toEqual([
+      ["source-theory"], ["source-body"], ["source-environment"],
+    ]);
+    expect(result.knowledgeScopePlan?.decisions[0]?.targetKnowledgePointIds).toEqual(["target-theory"]);
+    expect(result.knowledgePoints.map(point => point.evidenceItemIds)).toEqual(value.knowledgePoints.map(point => point.evidenceItemIds));
+    expect(result.knowledgePoints.map(point => point.description)).toEqual(value.knowledgePoints.map(point => point.description));
   });
 
   const invalidMappings: Array<{

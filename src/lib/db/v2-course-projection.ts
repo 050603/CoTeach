@@ -19,24 +19,26 @@ export class ClassroomProjectionError extends Error {
   constructor(readonly code: string, message: string, readonly status = 409) { super(message); this.name = "ClassroomProjectionError"; }
 }
 export function assertImmutableClassroomDesign(before: Course, after: Course) {
-  const { resources: _beforeResources, ...original } = encodePblTemplate(before).design;
-  const { resources: _afterResources, ...updated } = encodePblTemplate({
-    ...after,
-    pblConfig: {
-      ...after.pblConfig,
-      makeArtifactMode: before.pblConfig?.makeArtifactMode,
-      practiceWebSearchEnabled: before.pblConfig?.practiceWebSearchEnabled,
-    } as Course["pblConfig"],
-  }).design;
-  void _beforeResources; void _afterResources;
+  // Runtime overrides must be excluded symmetrically. Older or API-authored
+  // templates may omit these fields, while reducer normalization fills them in.
+  // Restoring only the old values on `after` would reject a harmless stage change.
+  const comparableDesign = (course: Course) => {
+    const { resources, pblConfig, ...design } = encodePblTemplate(course).design;
+    void resources;
+    if (!pblConfig) return design;
+    const { makeArtifactMode, practiceWebSearchEnabled, ...fixedConfig } = pblConfig;
+    void makeArtifactMode; void practiceWebSearchEnabled;
+    return { ...design, pblConfig: fixedConfig };
+  };
+  const original = comparableDesign(before);
+  const updated = comparableDesign(after);
   // Every session action passes through normalizeCourse. Generated templates can
   // still contain their authored stage descriptions and a pre-normalized
   // evaluation plan, so comparing an action result only with the raw snapshot
   // incorrectly treats START_TEACHING (and other runtime-only actions) as a
   // published-design edit. Accept the complete canonical projection of the same
   // snapshot while still rejecting any value that differs from both forms.
-  const canonical = encodePblTemplate(normalizeCourse(before)).design;
-  const { resources: _canonicalResources, ...defaults } = canonical; void _canonicalResources;
+  const defaults = comparableDesign(normalizeCourse(before));
   if (!isDeepStrictEqual(json(original), json(updated)) && !isDeepStrictEqual(json(defaults), json(updated))) throw new ClassroomProjectionError("CLASSROOM_DESIGN_IMMUTABLE", "课堂已固定发布教案，请在课程库编辑新版本并安排新的课堂场次");
 }
 export function json(value: unknown): Prisma.InputJsonValue { return JSON.parse(JSON.stringify(value)); }

@@ -162,6 +162,23 @@ export async function generateTTS(
   config: TTSModelConfig,
   text: string,
 ): Promise<TTSGenerationResult> {
+  config.signal?.throwIfAborted();
+  try {
+    const result = await generateProviderTTS(config, text);
+    config.signal?.throwIfAborted();
+    return result;
+  } catch (error) {
+    // Provider error-body parsing may wrap an AbortError. Preserve cancellation
+    // identity so callers do not retry synthesis after a cancelled request.
+    config.signal?.throwIfAborted();
+    throw error;
+  }
+}
+
+async function generateProviderTTS(
+  config: TTSModelConfig,
+  text: string,
+): Promise<TTSGenerationResult> {
   const provider = TTS_PROVIDERS[config.providerId as keyof typeof TTS_PROVIDERS];
 
   // Validate API key if required (only for built-in providers with known config)
@@ -220,6 +237,7 @@ async function generateOpenAITTS(
   // Use gpt-4o-mini-tts for best quality and intelligent realtime applications
   const response = await proxyFetch(`${baseUrl}/audio/speech`, {
     method: 'POST',
+    signal: config.signal,
     headers: {
       Authorization: `Bearer ${config.apiKey}`,
       'Content-Type': 'application/json; charset=utf-8',
@@ -264,6 +282,7 @@ async function generateLemonadeTTS(
 
   const response = await proxyFetch(`${baseUrl}/audio/speech`, {
     method: 'POST',
+    signal: config.signal,
     headers: {
       'Content-Type': 'application/json; charset=utf-8',
       ...getBackendAuthHeaders(config.apiKey),
@@ -343,9 +362,9 @@ async function generateVoxCPMTTS(
 
   const response =
     backend === 'nano-vllm'
-      ? await postVoxCPMNanoVLLM(baseUrl, request, config.apiKey)
+      ? await postVoxCPMNanoVLLM(baseUrl, request, config.apiKey, config.signal)
       : backend === 'python-api'
-        ? await postVoxCPMPythonAPI(baseUrl, request, config.apiKey)
+        ? await postVoxCPMPythonAPI(baseUrl, request, config.apiKey, config.signal)
         : await postVoxCPMVLLMOmni(baseUrl, request, config);
 
   if (!response.ok) {
@@ -447,6 +466,7 @@ async function postVoxCPMVLLMOmni(
 
   return proxyFetch(getVLLMOmniSpeechUrl(baseUrl), {
     method: 'POST',
+    signal: config.signal,
     headers: {
       'Content-Type': 'application/json; charset=utf-8',
       ...getBackendAuthHeaders(config.apiKey),
@@ -494,6 +514,7 @@ async function postVoxCPMPythonAPI(
     referenceAudioName?: string;
   },
   apiKey?: string,
+  signal?: AbortSignal,
 ): Promise<Response> {
   const formData = new FormData();
   formData.set('text', params.targetText);
@@ -514,6 +535,7 @@ async function postVoxCPMPythonAPI(
 
   return proxyFetch(`${baseUrl}/tts/upload`, {
     method: 'POST',
+    signal,
     headers: getBackendAuthHeaders(apiKey),
     body: formData,
   });
@@ -530,6 +552,7 @@ async function postVoxCPMNanoVLLM(
     referenceAudioName?: string;
   },
   apiKey?: string,
+  signal?: AbortSignal,
 ): Promise<Response> {
   const payload: Record<string, unknown> = {
     target_text: params.targetText,
@@ -549,6 +572,7 @@ async function postVoxCPMNanoVLLM(
 
   return proxyFetch(`${baseUrl}/generate`, {
     method: 'POST',
+    signal,
     headers: {
       'Content-Type': 'application/json; charset=utf-8',
       ...getBackendAuthHeaders(apiKey),
@@ -592,6 +616,7 @@ async function generateAzureTTS(
 
   const response = await proxyFetch(`${baseUrl}/cognitiveservices/v1`, {
     method: 'POST',
+    signal: config.signal,
     headers: {
       'Ocp-Apim-Subscription-Key': config.apiKey!,
       'Content-Type': 'application/ssml+xml; charset=utf-8',
@@ -620,6 +645,7 @@ async function generateGLMTTS(config: TTSModelConfig, text: string): Promise<TTS
 
   const response = await proxyFetch(`${baseUrl}/audio/speech`, {
     method: 'POST',
+    signal: config.signal,
     headers: {
       Authorization: `Bearer ${config.apiKey}`,
       'Content-Type': 'application/json; charset=utf-8',
@@ -923,6 +949,7 @@ async function generateMiniMaxTTS(
   const endpoint = baseUrl.endsWith('/v1/t2a_v2') ? baseUrl : `${baseUrl}/v1/t2a_v2`;
   const response = await proxyFetch(endpoint, {
     method: 'POST',
+    signal: config.signal,
     headers: {
       Authorization: `Bearer ${config.apiKey}`,
       'Content-Type': 'application/json; charset=utf-8',
@@ -998,6 +1025,7 @@ async function generateElevenLabsTTS(
     `${baseUrl}/text-to-speech/${encodeURIComponent(config.voice)}?output_format=${outputFormat}`,
     {
       method: 'POST',
+      signal: config.signal,
       headers: {
         'xi-api-key': config.apiKey!,
         'Content-Type': 'application/json; charset=utf-8',
@@ -1079,6 +1107,7 @@ async function generateDoubaoTTS(
 
   const response = await proxyFetch(`${baseUrl}/unidirectional`, {
     method: 'POST',
+    signal: config.signal,
     headers: {
       'Content-Type': 'application/json',
       'X-Api-App-Id': appId,

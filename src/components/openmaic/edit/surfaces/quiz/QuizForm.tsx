@@ -72,6 +72,7 @@ export function QuizForm() {
                 key={q.id}
                 question={q}
                 index={index}
+                questionCount={questions.length}
                 expanded={expandedId === q.id}
                 onToggle={() => setExpandedId((id) => (id === q.id ? null : q.id))}
               />

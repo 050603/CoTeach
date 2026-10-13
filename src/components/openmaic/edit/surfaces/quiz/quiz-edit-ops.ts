@@ -175,6 +175,7 @@ export function addQuestion(
 }
 
 export function deleteQuestion(content: QuizContent, id: string): QuizContent {
+  if (content.scoring?.policy === 'course-100-v1' && content.questions.length === 1 && content.questions[0].id === id) return content;
   return { ...content, questions: content.questions.filter((q) => q.id !== id) };
 }
 
@@ -199,7 +200,7 @@ export function updateQuestion(
   content: QuizContent,
   id: string,
   patch: Partial<
-    Pick<QuizQuestion, 'question' | 'analysis' | 'commentPrompt' | 'points' | 'hasAnswer'>
+    Pick<QuizQuestion, 'question' | 'analysis' | 'commentPrompt' | 'points' | 'hasAnswer' | 'scoringRubric' | 'referenceAnswer'>
     & Pick<QuizQuestion, 'matchingPairs' | 'answer'>
   >,
 ): QuizContent {

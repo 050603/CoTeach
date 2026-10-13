@@ -76,6 +76,10 @@ async function initialize(): Promise<void> {
   const { startAiAuditOutbox } = await import("@/lib/ai-collaboration/audit-outbox");
   startAiAuditOutbox();
 
+  const { startKnowledgeExplanationWorker, stopKnowledgeExplanationWorker } = await import("@/lib/courses/knowledge-explanation-warmup");
+  startKnowledgeExplanationWorker();
+  registerShutdownHook("knowledge-explanation-worker", stopKnowledgeExplanationWorker);
+
   // Register graceful-shutdown signal handlers (Stage 7).
   await installShutdownHandlers();
 }

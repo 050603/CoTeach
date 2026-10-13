@@ -4,7 +4,7 @@ import type { Course, KnowledgeLectureAttempt } from "@/lib/session/types";
 import type { PersistedClassroomData } from "@openmaic/lib/server/classroom-storage";
 import { callLLM } from "@openmaic/lib/ai/llm";
 import { getKnowledgeLectureTutorSettings } from "@/lib/knowledge-lecture-settings";
-import { resolveModelFromRequest } from "@openmaic/lib/server/resolve-model";
+import { resolveModel, resolveModelFromRequest } from "@openmaic/lib/server/resolve-model";
 
 const store = vi.hoisted(() => ({
   course: null as Course | null,
@@ -63,6 +63,7 @@ describe("knowledge lecture server-authoritative grading", () => {
     store.authenticate.mockImplementation(async () => store.claims ? { claims: { ...store.claims, sv: 1 } } : { response: Response.json({ code: "UNAUTHORIZED" }, { status: 401 }) });
     store.scope.mockResolvedValue({ accessible: true });
     store.access.mockResolvedValue(true);
+    vi.mocked(resolveModel).mockResolvedValue({ model: {}, modelString: "test/model", thinkingConfig: undefined } as never);
     vi.mocked(resolveModelFromRequest).mockResolvedValue({ model: {}, thinkingConfig: undefined } as never);
     vi.mocked(getKnowledgeLectureTutorSettings).mockResolvedValue({ modelString: "" } as never);
     vi.mocked(callLLM).mockResolvedValue({ text: '{"score":5,"comment":"理解了核心概念"}' } as never);
@@ -248,7 +249,7 @@ describe("knowledge lecture server-authoritative grading", () => {
     vi.mocked(callLLM).mockClear();
     const tutor = await POST(request({}, { action: "tutor-message", attemptId: attempt.id, questionId: "choice-1", message: "为什么", requestId: "stable-request" }));
     expect(tutor.status).toBe(200);
-    expect(await tutor.json()).toEqual({ thread });
+    expect(await tutor.json()).toEqual({ thread, resultSource: "personalized" });
     expect(callLLM).not.toHaveBeenCalled();
   });
 
@@ -273,7 +274,7 @@ describe("knowledge lecture server-authoritative grading", () => {
     expect(store.finishTutor.mock.calls.at(-1)?.[3]).toBe(raw);
     store.claimTutor.mockResolvedValue({ run: false, status: "COMPLETED", thread });
     vi.mocked(callLLM).mockClear();
-    expect(await (await POST(request({}, args))).json()).toEqual({ thread });
+    expect(await (await POST(request({}, args))).json()).toEqual({ thread, resultSource: "personalized" });
     expect(callLLM).not.toHaveBeenCalled();
   });
   it.each(["问".repeat(1001), " ".repeat(1000) + "问"])("rejects oversized input instead of silently truncating it", async (message) => {
@@ -288,6 +289,28 @@ describe("knowledge lecture server-authoritative grading", () => {
     expect(callLLM).not.toHaveBeenCalled();
   });
 
+
+  it("shares an unchanged authored question but does not apply edited answers to an older attempt", async () => {
+    const { attempt } = await (await POST(request({ "choice-1": "A", "short-1": "" }))).json();
+    vi.mocked(callLLM).mockResolvedValue({ text: '{"answer":"题目解析","boardNotes":[]}' } as never);
+    const args = { action: "tutor-explain", attemptId: attempt.id, questionId: "choice-1" };
+    expect(await (await POST(request({}, args))).json()).toMatchObject({ resultSource: "shared" });
+    const scene = store.classroom!.scenes[0];
+    if (scene.content.type !== "quiz") throw new Error("fixture");
+    scene.content.questions[0].answer = ["B"];
+    expect(await (await POST(request({}, args))).json()).toMatchObject({ resultSource: "personalized" });
+  });
+
+  it("retains malformed tutor output as a failure instead of completing a generic explanation", async () => {
+    const { attempt } = await (await POST(request({ "choice-1": "A", "short-1": "" }))).json();
+    store.durable = true;
+    store.claimTutor.mockResolvedValue({ run: true, token: "token" });
+    vi.mocked(callLLM).mockResolvedValue({ text: "broken-json" } as never);
+    const response = await POST(request({}, { action: "tutor-message", attemptId: attempt.id, questionId: "choice-1", message: "为什么", requestId: "invalid" }));
+    expect(response.status).toBe(503);
+    expect(store.finishTutor).not.toHaveBeenCalled();
+    expect(store.failTutor).toHaveBeenCalledWith(expect.anything(), "token", false, "broken-json", "TUTOR_INVALID_OUTPUT");
+  });
   it("requires a stable request id before starting durable tutoring", async () => {
     const response = await POST(request({ "choice-1": "B", "short-1": "因为" }));
     const { attempt } = await response.json() as { attempt: KnowledgeLectureAttempt };

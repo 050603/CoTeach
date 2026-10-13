@@ -887,6 +887,7 @@ export type StudentAiProgress = {
 };
 
 export type KnowledgeLectureSection = {
+  maxScore?: number;
   id: string;
   title: string;
   order: number;
@@ -1117,6 +1118,7 @@ export type TeachingTimingAudit = {
 };
 
 export type KnowledgeLectureQuestionReview = {
+  scoringRubric?: import("@openmaic/dsl").QuizScoringRubric;
   questionId: string;
   prompt: string;
   /** The choices shown to the student when this quiz was submitted. */
@@ -1127,6 +1129,8 @@ export type KnowledgeLectureQuestionReview = {
   /** Exact submitted value, retained for retries and multi-select review. */
   rawAnswer?: string | string[];
   questionType?: "single" | "multiple" | "matching" | "short_answer";
+  /** Authored question plus adopted source version at immutable submission time. */
+  authoredQuestionFingerprint?: string;
   gradingRubric?: string;
   gradingStatus?: "graded" | "pending" | "failed";
   points: number;

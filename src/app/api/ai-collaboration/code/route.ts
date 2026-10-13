@@ -20,7 +20,12 @@ import {
   parseCodeArtifact,
   type CodeArtifactLanguage,
 } from "@/lib/ai-collaboration/code-artifact";
-import { appendDurableAiInteractionEvents } from "@/lib/ai-collaboration/audit-outbox";
+import { beginCodeRequest, codeBackgroundRequestId, codeRequestDigest } from "@/lib/ai-collaboration/code-request";
+import { COLLABORATION_EXECUTION_TIMEOUT_MS } from "@/lib/ai-collaboration/request-budget";
+import { readDocumentRequestReceipt, type DocumentRequestInput } from "@/lib/ai-collaboration/document-request-store";
+import type { AiInteractionEventInput } from "@/lib/ai-collaboration/audit-store";
+import { ProactiveReviewCapacityError, withProactiveReviewCapacity } from "@/lib/ai-collaboration/proactive-review-capacity";
+import { withClassroomAiUsage } from "@/lib/observability/classroom-ai";
 import {
   activeConversationId,
   modelConversationHistory,
@@ -30,7 +35,6 @@ import {
   companionLimiter,
   codeSuggestionLimiter,
   rateLimitKey,
-  rateLimitedResponse,
 } from "@/lib/auth/rate-limit";
 import {
   type StudentClaims,
@@ -75,12 +79,6 @@ const CODE_COMMENT_REVIEW_VERSION = 2;
 const MAX_ARTIFACT_LENGTH = 120_000;
 const TRANSIENT_RETRIES = 2;
 
-async function recordInteractionEvents(
-  events: Parameters<typeof appendDurableAiInteractionEvents>[0],
-): Promise<void> {
-  await appendDurableAiInteractionEvents(events);
-}
-
 type CodeCollaborationRequest = {
   courseId?: unknown;
   studentId?: unknown;
@@ -95,6 +93,7 @@ type CodeCollaborationRequest = {
   conversationId?: unknown;
   commentThreadId?: unknown;
   mode?: unknown;
+  requestId?: unknown;
 };
 
 type CodeCommentMeta = Omit<CodeAiCommentThread, "comments" | "readAt" | "resolvedAt">;
@@ -302,7 +301,7 @@ async function callCodeModel(
 }
 
 function failureResponse(error: unknown): Response {
-  if (error instanceof LlmRateLimitError) {
+  if (error instanceof LlmRateLimitError || error instanceof ProactiveReviewCapacityError) {
     const seconds = Math.max(1, Math.ceil(error.retryAfterMs / 1_000));
     return Response.json(
       { error: "AI_RATE_LIMITED", message: `AI 组员当前请求较多，请在 ${seconds} 秒后重试。本次没有修改代码。` },
@@ -339,6 +338,13 @@ export async function GET(request: NextRequest) {
   }
   const scope = await loadScope({ request, courseId, requestedStudentId: studentId, stageKey });
   if (scope instanceof Response) return scope;
+  const requestId = clean(url.searchParams.get("requestId"), 160);
+  if (requestId) {
+    const receipt = await readDocumentRequestReceipt({ requestId, courseId, studentId: scope.student.id,
+      participationId: scope.authentication.participationId, stageKey, workspaceKind: `code:${language}`,
+      conversationId: clean(url.searchParams.get("conversationId"), 160) });
+    return Response.json(receipt.body, { status: receipt.status, headers: { "Cache-Control": "private, no-store" } });
+  }
   const thread = await getCompanionThread(courseId, scope.student.id, threadKey(stageKey, language));
   const commentStore = await getCompanionThread(courseId, scope.student.id, commentThreadKey(stageKey, language));
   const conversationId = activeConversationId(thread?.messages ?? []);
@@ -387,7 +393,7 @@ export async function DELETE(request: NextRequest) {
 }
 
 export async function POST(request: NextRequest) {
-  const requestId = request.headers.get("x-request-id") ?? randomUUID();
+  let requestId = request.headers.get("x-request-id") ?? randomUUID();
   let body: CodeCollaborationRequest;
   try {
     body = await request.json() as CodeCollaborationRequest;
@@ -402,6 +408,7 @@ export async function POST(request: NextRequest) {
   const message = clean(body.message, 1_600);
   const commentThreadId = clean(body.commentThreadId, 160);
   const mode = body.mode === "task" ? "task" : "discuss";
+  requestId = clean(body.requestId, 160) || clean(requestId, 160) || randomUUID();
   const intent = isCodeCollaborationIntent(body.intent) ? body.intent : undefined;
   if (!courseId || !stageKey || !language || (!action && (!intent || (intent !== "proactive-review" && !message)))) {
     return Response.json({ error: "INVALID_REQUEST" }, { status: 400 });
@@ -465,9 +472,45 @@ export async function POST(request: NextRequest) {
     return Response.json({ ok: true, at });
   }
 
+  const background = action === "code-task-starters" || intent === "proactive-review";
+  const executionDeadline = AbortSignal.timeout(COLLABORATION_EXECUTION_TIMEOUT_MS);
+  const signal = background ? AbortSignal.any([request.signal, executionDeadline]) : executionDeadline;
+  const model = (prompts: { system: string; user: string }) => withClassroomAiUsage({
+    courseId, studentId: scope.student.id, requestId, feature: "code-collaboration",
+  }, () => {
+    const limiter = background ? codeSuggestionLimiter : companionLimiter;
+    const admission = limiter.check(rateLimitKey(request, scope.student.id));
+    if (!admission.allowed) throw new LlmRateLimitError(admission.retryAfterMs, "AI 请求较多，请稍后重试");
+    const operation = () => callCodeModel([{ role: "system", content: prompts.system }, { role: "user", content: prompts.user }], signal);
+    return background ? withProactiveReviewCapacity(operation) : operation();
+  });
+  const begin = async (prompts: { system: string; user: string }, history: DocumentRequestInput["history"], comments = false) => {
+    const ownGroups = (scope.course.groups ?? []).filter(group => group.members.some(member => member.studentId === scope.student.id));
+    const context = { artifact, selection: body.selection ?? null, run: body.run ?? null, mode,
+      requirements: { name: scope.course.name, grade: scope.course.grade,
+        drivingQuestion: scope.course.drivingQuestion, learningObjectives: scope.course.learningObjectives,
+        expectedOutcome: scope.course.expectedOutcome, content: scope.course.content, pblConfig: scope.course.pblConfig,
+        stage: scope.course.stages.find(stage => stage.key === stageKey), groups: ownGroups,
+        feedback: (scope.course.feedback ?? []).filter(item => item.stageKey === stageKey && (item.targetType === "course" || item.targetId === scope.student.id || ownGroups.some(group => group.id === item.targetId))),
+        directives: (scope.course.teacherAgentDirectives ?? []).filter(item => item.stageKey === stageKey && (item.targetScope === "course" || item.targetStudentIds.includes(scope.student.id))),
+        evidence: (scope.course.learningEvidence ?? []).filter(item => item.studentId === scope.student.id && item.stageKey === stageKey),
+      } };
+    if (background) requestId = await codeBackgroundRequestId({ prompts, action: action || intent!, language, context });
+    return beginCodeRequest({ requestId, participationId: scope.authentication.participationId, courseId,
+      studentId: scope.student.id, stageKey, workspaceKind: `code:${language}`,
+      threadStageKey: comments ? commentThreadKey(stageKey, language) : key,
+      conversationId: action === "reply-code-comment" ? commentThreadId : currentConversationId,
+      documentVersion: codeRequestDigest(artifact), message, intent: action || intent!, history,
+      fingerprint: codeRequestDigest(background ? { prompts, action, intent, language, context } : {
+        action, intent, courseId, stageKey, language, message, artifact, selection, run, commentThreadId,
+        conversationId: clean(body.conversationId, 160) || currentConversationId,
+      }),
+    });
+  };
+  const events: AiInteractionEventInput[] = [];
+  const recordInteractionEvents = async (input: AiInteractionEventInput[]) => { events.push(...input); };
+
   if (action === "code-task-starters") {
-    const starterLimit = codeSuggestionLimiter.check(rateLimitKey(request, scope.student.id));
-    if (!starterLimit.allowed) return rateLimitedResponse(starterLimit.retryAfterMs);
     const prompts = buildCodeTaskStarterPrompts({
       course: scope.course,
       studentId: scope.student.id,
@@ -476,20 +519,13 @@ export async function POST(request: NextRequest) {
       run,
       mode,
     });
+    const task = await begin(prompts, []);
+    if (task.response) return task.response;
     try {
-      const raw = await callCodeModel([
-        { role: "system", content: prompts.system },
-        { role: "user", content: prompts.user },
-      ], request.signal);
-      return Response.json({ starters: normalizeCodeTaskStarters(parseLLMJson(raw)) });
-    } catch (error) {
-      if (request.signal.aborted) return Response.json({ error: "REQUEST_ABORTED" }, { status: 499 });
-      return failureResponse(error);
-    }
+      const raw = await model(prompts);
+      return await task.finish!({ starters: normalizeCodeTaskStarters(parseLLMJson(raw)) }, []);
+    } catch (error) { return task.fail!(error, failureResponse(error)); }
   }
-
-  const limit = companionLimiter.check(rateLimitKey(request, scope.student.id));
-  if (!limit.allowed) return rateLimitedResponse(limit.retryAfterMs);
 
   if (action === "reply-code-comment") {
     if (!commentThreadId || !message) return Response.json({ error: "INVALID_COMMENT_REPLY" }, { status: 400 });
@@ -500,7 +536,7 @@ export async function POST(request: NextRequest) {
       ? "edit"
       : "discuss";
     const protectedBoundary = detectProtectedCodeWorkRequest(message);
-    const prompts = buildCodeCollaborationPrompts({
+    let prompts = buildCodeCollaborationPrompts({
       course: scope.course,
       studentId: scope.student.id,
       studentName: scope.student.name,
@@ -516,11 +552,13 @@ export async function POST(request: NextRequest) {
       })),
       protectedBoundary,
     });
+    const task = await begin(prompts, existing.comments.slice(-8).map(item => ({ role: item.role === "student" ? "user" : "assistant", content: item.content })), true);
+    if (task.response) return task.response;
+    prompts = buildCodeCollaborationPrompts({ course: scope.course, studentId: scope.student.id,
+      studentName: scope.student.name, stageKey, intent: replyIntent, request: message, artifact,
+      selection: threadSelection(existing, artifact), run, history: task.history, protectedBoundary });
     try {
-      const raw = await callCodeModel([
-        { role: "system", content: prompts.system },
-        { role: "user", content: prompts.user },
-      ], request.signal);
+      const raw = await model(prompts);
       const result = normalizeCodeCollaborationResponse({
         raw: parseLLMJson(raw) as Record<string, unknown>,
         artifact,
@@ -542,12 +580,6 @@ export async function POST(request: NextRequest) {
         conversationId: commentThreadId,
         companionId: "critic",
         authorName: "AI 组员",
-      });
-      await appendCompanionMessages({
-        courseId,
-        studentId: scope.student.id,
-        stageKey: commentThreadKey(stageKey, language),
-        messages: [studentMessage, agentMessage],
       });
       await recordInteractionEvents([
         {
@@ -588,7 +620,7 @@ export async function POST(request: NextRequest) {
           requestId,
         },
       ]);
-      return Response.json({
+      return await task.finish!({
         commentThread: {
           ...existing,
           comments: [
@@ -598,11 +630,8 @@ export async function POST(request: NextRequest) {
           ],
         } satisfies CodeAiCommentThread,
         result,
-      });
-    } catch (error) {
-      if (request.signal.aborted) return Response.json({ error: "REQUEST_ABORTED" }, { status: 499 });
-      return failureResponse(error);
-    }
+      }, [studentMessage, agentMessage], events);
+    } catch (error) { return task.fail!(error, failureResponse(error)); }
   }
 
   if (!intent) return Response.json({ error: "INVALID_INTENT" }, { status: 400 });
@@ -619,9 +648,9 @@ export async function POST(request: NextRequest) {
       message,
       history,
       allowRetrieval: intent !== "proactive-review" && ["discuss", "review", "delegate"].includes(intent),
-      signal: request.signal,
+      signal,
     });
-    const prompts = buildCodeCollaborationPrompts({
+    let prompts = buildCodeCollaborationPrompts({
       course: scope.course,
       studentId: scope.student.id,
       studentName: scope.student.name,
@@ -635,203 +664,195 @@ export async function POST(request: NextRequest) {
       protectedBoundary,
       projectSupportContext: projectSupportContext.promptContext,
     });
-    const raw = await callCodeModel([
-      { role: "system", content: prompts.system },
-      { role: "user", content: prompts.user },
-    ], request.signal);
-    const parsed = parseLLMJson(raw) as Record<string, unknown>;
-    const result = normalizeCodeCollaborationResponse({
-      raw: parsed,
-      artifact,
-      intent,
-      protectedBoundary,
-    });
-    const normalizedSupport = normalizeProjectSupportOutput(
-      parsed.support,
-      projectSupportContext.sources,
-      projectSupportContext,
-      projectSupportContext.knowledgePointLabels,
-    );
-    result.support = normalizedSupport.details;
-    if (normalizedSupport.details.replyBlocks?.length) {
-      result.message = normalizedSupport.details.replyBlocks.map((block) => block.content).join("\n\n");
-    }
-    if (intent === "proactive-review") {
-      const commentStore = await getCompanionThread(courseId, scope.student.id, commentThreadKey(stageKey, language));
-      const existingThreads = codeCommentThreads(commentStore?.messages ?? []);
-      const existingFingerprints = new Set(existingThreads.filter((item) => !item.resolvedAt).map((item) => [
-        item.filePath,
-        item.startLine,
-        item.endLine,
-        item.title,
-        item.quotedCode,
-      ].join(":")));
-      const commentThreads: CodeAiCommentThread[] = [];
-      const messages: CompanionMessage[] = [];
-      result.findings.forEach((finding) => {
-        const fingerprint = [
-          finding.filePath,
-          finding.startLine,
-          finding.endLine,
-          finding.title,
-          finding.quotedCode,
-        ].join(":");
-        if (existingFingerprints.has(fingerprint)) return;
-        existingFingerprints.add(fingerprint);
-        const id = `code-comment-${randomUUID()}`;
-        const createdAt = new Date().toISOString();
-        const meta: CodeCommentMeta = {
-          id,
-          filePath: finding.filePath,
-          startLine: finding.startLine,
-          endLine: finding.endLine,
-          severity: finding.severity,
-          title: finding.title,
-          quotedCode: finding.quotedCode,
-          createdAt,
-          reviewVersion: CODE_COMMENT_REVIEW_VERSION,
-        };
-        const metaMessage = companionMessage({
-          role: "system-trigger",
-          content: encodeCodeCommentMeta(meta),
-          visibility: "teacher-only",
-          triggerKind: "document-saved",
-          conversationId: id,
-          authorName: "系统",
-        });
-        const agentMessage = companionMessage({
-          role: "agent",
-          content: finding.message,
-          visibility: "student-and-teacher",
-          companionId: "critic",
-          conversationId: id,
-          authorName: "AI 组员",
-        });
-        messages.push(metaMessage, agentMessage);
-        commentThreads.push({
-          ...meta,
-          comments: [{
-            id: agentMessage.id,
-            role: "assistant",
-            content: agentMessage.content,
-            createdAt: agentMessage.createdAt,
-          }],
-        });
+    const task = await begin(prompts, history, intent === "proactive-review");
+    if (task.response) return task.response;
+    if (!background) prompts = buildCodeCollaborationPrompts({ course: scope.course, studentId: scope.student.id,
+      studentName: scope.student.name, stageKey, intent, request: message, artifact, selection, run,
+      history: task.history, protectedBoundary, projectSupportContext: projectSupportContext.promptContext });
+    try {
+      const raw = await model(prompts);
+      const parsed = parseLLMJson(raw) as Record<string, unknown>;
+      const result = normalizeCodeCollaborationResponse({
+        raw: parsed,
+        artifact,
+        intent,
+        protectedBoundary,
       });
-      if (messages.length) {
-        await appendCompanionMessages({
-          courseId,
-          studentId: scope.student.id,
-          stageKey: commentThreadKey(stageKey, language),
-          messages,
-        });
-        await recordInteractionEvents(commentThreads.map((thread) => ({
-          courseId,
-          studentId: scope.student.id,
-          stageKey,
-          conversationId: thread.id,
-          source: "proactive-comment" as const,
-          eventType: "comment" as const,
-          actorRole: "ai" as const,
-          content: thread.comments[0]?.content ?? "AI 组员发起了代码批注。",
-          payload: {
-            commentThreadId: thread.id,
-            filePath: thread.filePath,
-            startLine: thread.startLine,
-            endLine: thread.endLine,
-            issueType: thread.title,
-            targetText: thread.quotedCode,
-            initialComment: true,
-          },
-          requestId,
-        })));
+      const normalizedSupport = normalizeProjectSupportOutput(
+        parsed.support,
+        projectSupportContext.sources,
+        projectSupportContext,
+        projectSupportContext.knowledgePointLabels,
+      );
+      result.support = normalizedSupport.details;
+      if (normalizedSupport.details.replyBlocks?.length) {
+        result.message = normalizedSupport.details.replyBlocks.map((block) => block.content).join("\n\n");
       }
-      return Response.json({ result, commentThreads });
-    }
+      if (intent === "proactive-review") {
+        const commentStore = await getCompanionThread(courseId, scope.student.id, commentThreadKey(stageKey, language));
+        const existingThreads = codeCommentThreads(commentStore?.messages ?? []);
+        const existingFingerprints = new Set(existingThreads.filter((item) => !item.resolvedAt).map((item) => [
+          item.filePath,
+          item.startLine,
+          item.endLine,
+          item.title,
+          item.quotedCode,
+        ].join(":")));
+        const commentThreads: CodeAiCommentThread[] = [];
+        const messages: CompanionMessage[] = [];
+        result.findings.forEach((finding) => {
+          const fingerprint = [
+            finding.filePath,
+            finding.startLine,
+            finding.endLine,
+            finding.title,
+            finding.quotedCode,
+          ].join(":");
+          if (existingFingerprints.has(fingerprint)) return;
+          existingFingerprints.add(fingerprint);
+          const id = `code-comment-${randomUUID()}`;
+          const createdAt = new Date().toISOString();
+          const meta: CodeCommentMeta = {
+            id,
+            filePath: finding.filePath,
+            startLine: finding.startLine,
+            endLine: finding.endLine,
+            severity: finding.severity,
+            title: finding.title,
+            quotedCode: finding.quotedCode,
+            createdAt,
+            reviewVersion: CODE_COMMENT_REVIEW_VERSION,
+          };
+          const metaMessage = companionMessage({
+            role: "system-trigger",
+            content: encodeCodeCommentMeta(meta),
+            visibility: "teacher-only",
+            triggerKind: "document-saved",
+            conversationId: id,
+            authorName: "系统",
+          });
+          const agentMessage = companionMessage({
+            role: "agent",
+            content: finding.message,
+            visibility: "student-and-teacher",
+            companionId: "critic",
+            conversationId: id,
+            authorName: "AI 组员",
+          });
+          messages.push(metaMessage, agentMessage);
+          commentThreads.push({
+            ...meta,
+            comments: [{
+              id: agentMessage.id,
+              role: "assistant",
+              content: agentMessage.content,
+              createdAt: agentMessage.createdAt,
+            }],
+          });
+        });
+        if (messages.length) {
+          await recordInteractionEvents(commentThreads.map((thread) => ({
+            courseId,
+            studentId: scope.student.id,
+            stageKey,
+            conversationId: thread.id,
+            source: "proactive-comment" as const,
+            eventType: "comment" as const,
+            actorRole: "ai" as const,
+            content: thread.comments[0]?.content ?? "AI 组员发起了代码批注。",
+            payload: {
+              commentThreadId: thread.id,
+              filePath: thread.filePath,
+              startLine: thread.startLine,
+              endLine: thread.endLine,
+              issueType: thread.title,
+              targetText: thread.quotedCode,
+              initialComment: true,
+            },
+            requestId,
+          })));
+        }
+        return await task.finish!({ result, commentThreads }, messages, events);
+      }
 
-    const userMessage = companionMessage({
-      role: "student",
-      content: message,
-      visibility: "student-and-teacher",
-      conversationId: currentConversationId,
-      authorName: scope.student.name,
-    });
-    const agentMessage = companionMessage({
-      role: "agent",
-      content: assistantRecord(result),
-      visibility: "student-and-teacher",
-      conversationId: currentConversationId,
-      companionId: intent === "review" ? "critic" : intent === "delegate" ? "knowledge" : "planner",
-      authorName: "AI 组员",
-      projectSupport: result.support,
-    });
-    await appendCompanionMessages({
-      courseId,
-      studentId: scope.student.id,
-      stageKey: key,
-      messages: [userMessage, agentMessage],
-    });
-    let memories = await listProjectMemories(scope.authentication.participationId);
-    if (normalizedSupport.memoryCandidates.length) {
-      try {
-        memories = await saveProjectMemoryCandidates({
-          participationId: scope.authentication.participationId,
-          stageKey,
-          studentId: scope.student.id,
-          studentMessage: message,
-          sourceMessageIds: [userMessage.id, agentMessage.id],
-          candidates: normalizedSupport.memoryCandidates,
-        });
-      } catch (memoryError) {
-        console.error("[ai-code-collaboration] project memory write failed", memoryError);
-      }
-    }
-    const source = selection ? "selection" as const : "sidebar" as const;
-    await recordInteractionEvents([
-      {
-        courseId,
-        studentId: scope.student.id,
-        stageKey,
-        conversationId: currentConversationId,
-        source,
-        eventType: "request",
-        actorRole: "student",
-        actorId: scope.student.id,
+      const userMessage = companionMessage({
+        role: "student",
         content: message,
-        payload: { intent, language, selection: selection ?? null },
-        requestId,
-      },
-      {
-        courseId,
-        studentId: scope.student.id,
-        stageKey,
+        visibility: "student-and-teacher",
         conversationId: currentConversationId,
-        source,
-        eventType: "policy",
-        actorRole: "system",
-        content: protectedBoundary ? `命中代码协作边界：${protectedBoundary}` : "本轮未命中强制代码协作边界。",
-        payload: { ...(protectedBoundary ? { protectedCapability: protectedBoundary } : {}), outcome: result.kind },
-        requestId,
-      },
-      {
-        courseId,
-        studentId: scope.student.id,
-        stageKey,
-        conversationId: currentConversationId,
-        source,
-        eventType: "response",
-        actorRole: "ai",
+        authorName: scope.student.name,
+      });
+      const agentMessage = companionMessage({
+        role: "agent",
         content: assistantRecord(result),
-        payload: { kind: result.kind, language, support: result.support ?? null },
-        requestId,
-      },
-    ]);
-    return Response.json({
-      result,
-      conversationId: currentConversationId,
-      messages: [userMessage, agentMessage],
-      memories,
-    });
+        visibility: "student-and-teacher",
+        conversationId: currentConversationId,
+        companionId: intent === "review" ? "critic" : intent === "delegate" ? "knowledge" : "planner",
+        authorName: "AI 组员",
+        projectSupport: result.support,
+      });
+      let memories = await listProjectMemories(scope.authentication.participationId);
+      if (normalizedSupport.memoryCandidates.length) {
+        try {
+          memories = await saveProjectMemoryCandidates({
+            participationId: scope.authentication.participationId,
+            stageKey,
+            studentId: scope.student.id,
+            studentMessage: message,
+            sourceMessageIds: [userMessage.id, agentMessage.id],
+            candidates: normalizedSupport.memoryCandidates,
+          });
+        } catch (memoryError) {
+          console.error("[ai-code-collaboration] project memory write failed", memoryError);
+        }
+      }
+      const source = selection ? "selection" as const : "sidebar" as const;
+      await recordInteractionEvents([
+        {
+          courseId,
+          studentId: scope.student.id,
+          stageKey,
+          conversationId: currentConversationId,
+          source,
+          eventType: "request",
+          actorRole: "student",
+          actorId: scope.student.id,
+          content: message,
+          payload: { intent, language, selection: selection ?? null },
+          requestId,
+        },
+        {
+          courseId,
+          studentId: scope.student.id,
+          stageKey,
+          conversationId: currentConversationId,
+          source,
+          eventType: "policy",
+          actorRole: "system",
+          content: protectedBoundary ? `命中代码协作边界：${protectedBoundary}` : "本轮未命中强制代码协作边界。",
+          payload: { ...(protectedBoundary ? { protectedCapability: protectedBoundary } : {}), outcome: result.kind },
+          requestId,
+        },
+        {
+          courseId,
+          studentId: scope.student.id,
+          stageKey,
+          conversationId: currentConversationId,
+          source,
+          eventType: "response",
+          actorRole: "ai",
+          content: assistantRecord(result),
+          payload: { kind: result.kind, language, support: result.support ?? null },
+          requestId,
+        },
+      ]);
+      return await task.finish!({
+        result,
+        conversationId: currentConversationId,
+        messages: [userMessage, agentMessage],
+        memories,
+      }, [userMessage, agentMessage], events);
+    } catch (error) { return task.fail!(error, failureResponse(error)); }
   } catch (error) {
     if (request.signal.aborted) return Response.json({ error: "REQUEST_ABORTED" }, { status: 499 });
     return failureResponse(error);

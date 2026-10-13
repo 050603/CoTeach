@@ -161,6 +161,7 @@ describe("serialized content changes", () => {
 
   it("allocates template revisions and classroom run numbers under their parent locks", async () => {
     mocks.tx.classroomTemplate.findFirst.mockResolvedValue({ versions: [{ version: 5 }] });
+    mocks.tx.classroomTemplateVersion.create.mockResolvedValue({ id: "version-6", version: 6 });
     await createTemplateVersion(teacherClaims, "template", { snapshot: {} });
     expectLockedBefore(mocks.tx.classroomTemplate.findFirst, "ClassroomTemplate");
     expect(mocks.tx.classroomTemplateVersion.create).toHaveBeenCalledWith({ data: expect.objectContaining({ version: 6 }) });

@@ -1,18 +1,20 @@
 import type { QuizMatchingPair, QuizOption, QuizQuestion } from '@openmaic/lib/types/stage';
 import type { SceneOutline } from '@openmaic/lib/types/generation';
+import { ensureScoringRubric, validScoringRubric } from './rubric';
 
 /** Publish the actual generated count; the outline count is only a planning estimate. */
 export function withGeneratedQuizQuestionCounts<T extends SceneOutline>(
   outlines: readonly T[],
-  scenes: readonly { outlineId?: string; content: { type: string; questions?: QuizQuestion[] } }[],
+  scenes: readonly { outlineId?: string; content: { type: string; questions?: QuizQuestion[]; scoring?: { sectionPoints: number } } }[],
 ): T[] {
   const counts = new Map(scenes.flatMap((scene) => scene.content.type === 'quiz'
     && scene.outlineId && Array.isArray(scene.content.questions)
-    ? [[scene.outlineId, scene.content.questions.length] as const] : []));
+    ? [[scene.outlineId, { count: scene.content.questions.length, points: scene.content.scoring?.sectionPoints }] as const] : []));
   return outlines.map((outline) => {
     const actual = counts.get(outline.id);
     return outline.type === 'quiz' && outline.quizConfig && actual !== undefined
-      ? { ...outline, quizConfig: { ...outline.quizConfig, questionCount: actual, generatedQuestionCount: actual } }
+      ? { ...outline, quizConfig: { ...outline.quizConfig, questionCount: actual.count, generatedQuestionCount: actual.count,
+        ...(actual.points !== undefined ? { allocatedPoints: actual.points } : {}) } }
       : outline;
   });
 }
@@ -203,7 +205,10 @@ export function compileAuthoredQuizQuestions(input: unknown): QuizQuestion[] {
       const authoredRubric = typeof record.commentPrompt === 'string' ? record.commentPrompt : '';
       const referenceAnswer = typeof record.referenceAnswer === 'string' ? record.referenceAnswer : '';
       const commentPrompt = [authoredRubric, referenceAnswer ? `参考答案：${referenceAnswer}` : ''].filter(Boolean).join('\n');
-      return { ...base, type: 'short_answer', ...(commentPrompt ? { commentPrompt } : {}), hasAnswer: false };
+      const compiled: QuizQuestion = { ...base, type: 'short_answer', ...(commentPrompt ? { commentPrompt } : {}),
+        ...(referenceAnswer ? { referenceAnswer } : {}),
+        ...(validScoringRubric(record.scoringRubric) ? { scoringRubric: record.scoringRubric } : {}), hasAnswer: false };
+      return { ...compiled, scoringRubric: ensureScoringRubric(compiled) };
     }
     if (format === 'matching') {
       const rawPairs = record.matchingPairs ?? record.pairs;

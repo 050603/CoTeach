@@ -1,4 +1,4 @@
-import { render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { KnowledgeLectureAttempt, KnowledgeLectureTutorThread } from "@/lib/session/types";
 import { KnowledgeLectureBoard } from "./knowledge-lecture-board";
@@ -48,6 +48,23 @@ describe("KnowledgeLectureBoard question context", () => {
     expect(choices.getByText("同向变化")).toBeInTheDocument();
     expect(choices.getByText("B")).toBeInTheDocument();
     expect(choices.getByText("反向变化")).toBeInTheDocument();
+  });
+
+  it("lets a failed initial explanation retry while retaining the original question analysis", async () => {
+    vi.stubGlobal("speechSynthesis", { speak: vi.fn(), cancel: vi.fn() });
+    vi.stubGlobal("SpeechSynthesisUtterance", class { constructor(public text: string) {} });
+    let explanations = 0;
+    vi.stubGlobal("fetch", vi.fn(async (url: string) => {
+      if (url.endsWith("/settings")) return Response.json({ settings: {} });
+      if (++explanations === 1) return Response.json({ error: "TUTOR_REQUEST_FAILED" }, { status: 503 });
+      return Response.json({ thread });
+    }));
+    render(<KnowledgeLectureBoard attempt={attempt} courseId="course-1" studentId="student-1" knowledgePointNames={new Map()} initialThreads={[]} onClose={vi.fn()} />);
+    const retry = await screen.findByRole("button", { name: "重试讲解" });
+    expect(screen.getByText("变量变化方向是什么？")).toBeInTheDocument();
+    fireEvent.click(retry);
+    await waitFor(() => expect(explanations).toBe(2));
+    await waitFor(() => expect(screen.queryByRole("button", { name: "重试讲解" })).not.toBeInTheDocument());
   });
 
   it("shows both sets of matching candidates", () => {

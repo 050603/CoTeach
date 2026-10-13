@@ -449,6 +449,7 @@
     }
   },
   "classroomComplete": {
+    "quizScorePoints": "小测总成绩 {{score}} / {{total}} 分",
     "quizScorePercent": "小测总成绩 {{score}} / 100 分",
     "quizPending": "小测总成绩待完成批阅",
     "title": "课程完成",
@@ -482,6 +483,9 @@
     "elementCount": "{{count}} 个元素"
   },
   "quiz": {
+    "sectionTotalPrefix": "本节满分",
+    "courseTotal": "全课小测合计 {{total}} 分，本节得分计入课程总分。",
+    "partialCorrect": "部分正确",
     "rawTotalPrefix": "原始满分",
     "normalizedScoring": "成绩按原始分值换算为百分制",
     "rawScore": "原始得分 {{score}} / {{total}} 分",

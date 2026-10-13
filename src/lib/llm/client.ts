@@ -31,7 +31,8 @@ import type {
 } from "../session/types";
 import { DEFAULT_EVALUATION_FLOWS } from "../session/types";
 import { getActiveAiSettings } from "./settings";
-import { withClassroomAiCapacity } from "./classroom-capacity";
+import { withClassroomAiCapacity, withClassroomAiStream } from "./classroom-capacity";
+import { startClassroomAiCall } from "@/lib/observability/classroom-ai";
 import { proxyFetch } from "@openmaic/lib/server/proxy-fetch";
 import { validatePblKnowledgeAlignment } from "@/lib/pbl-outline-validation";
 import {
@@ -159,6 +160,13 @@ export async function* callLLMStream(
   messages: ChatMessage[],
   opts: { abortSignal?: AbortSignal; requestClass?: LlmRequestClass } = {},
 ): AsyncGenerator<string, void, void> {
+  yield* withClassroomAiStream(signal => callLLMStreamWithoutCapacity(messages, { ...opts, abortSignal: signal }), opts.abortSignal);
+}
+
+async function* callLLMStreamWithoutCapacity(
+  messages: ChatMessage[],
+  opts: { abortSignal?: AbortSignal; requestClass?: LlmRequestClass } = {},
+): AsyncGenerator<string, void, void> {
   opts.abortSignal?.throwIfAborted();
   if (isLlmCoolingDown()) {
     throw new LlmRateLimitError(Math.max(0, llmCooldownUntil - Date.now()));
@@ -171,108 +179,123 @@ export async function* callLLMStream(
 
   if (!endpoint || !apiKey || !model) throw new LlmNotConfiguredError();
 
-  const url = endpoint.replace(/\/+$/, "") + "/chat/completions";
-  const timeoutMs = resolveLlmRequestTimeoutMs(opts.requestClass ?? "standard");
-  const { signal, timeoutSignal } = withTimeout(opts.abortSignal, timeoutMs);
-
-  let res: Response;
+  const observe = startClassroomAiCall("legacy-chat-stream", "openai.chat", model);
+  let outcome: "response" | "failed" | "aborted" = "aborted";
+  let streamUsage: LegacyChatCompletion["usage"];
   try {
-    res = await proxyFetch(url, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${apiKey}`,
-      },
-      body: JSON.stringify({
-        model,
-        messages,
-        temperature: 0.5,
-        stream: true,
-      }),
-      signal,
-    }, settings.proxy);
-  } catch (err) {
-    opts.abortSignal?.throwIfAborted();
-    if (timeoutSignal.aborted) throw new LlmTimeoutError(timeoutMs);
-    throw err;
-  }
+    const url = endpoint.replace(/\/+$/, "") + "/chat/completions";
+    const timeoutMs = resolveLlmRequestTimeoutMs(opts.requestClass ?? "standard");
+    const { signal, timeoutSignal } = withTimeout(opts.abortSignal, timeoutMs);
 
-  if (!res.ok) {
-    const text = await res.text().catch(() => "");
-    if (res.status === 429) throw setRateLimitCooldown(res, text);
-    throw new LlmCallFailedError(`LLM 调用失败：${res.status}`, {
-      status: res.status,
-      upstreamSummary: summarizeUpstream(text),
-    });
-  }
-
-  const reader = res.body?.getReader();
-  if (!reader) throw new LlmEmptyResponseError();
-
-  const decoder = new TextDecoder();
-  let buffer = "";
-  let malformedChunkCount = 0;
-  let finishReason: string | undefined;
-
-  try {
-    while (true) {
+    let res: Response;
+    try {
+      res = await proxyFetch(url, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${apiKey}`,
+        },
+        body: JSON.stringify({
+          model,
+          messages,
+          temperature: 0.5,
+          stream: true,
+          stream_options: { include_usage: true },
+        }),
+        signal,
+      }, settings.proxy);
+    } catch (err) {
       opts.abortSignal?.throwIfAborted();
-      let readResult: ReadableStreamReadResult<Uint8Array>;
-      try {
-        readResult = await reader.read();
-      } catch (err) {
-        opts.abortSignal?.throwIfAborted();
-        if (timeoutSignal.aborted) throw new LlmTimeoutError(timeoutMs);
-        throw err;
-      }
-      const { done, value } = readResult;
-      opts.abortSignal?.throwIfAborted();
-      buffer += done ? `${decoder.decode()}\n` : decoder.decode(value, { stream: true });
-      const lines = buffer.split("\n");
-      buffer = lines.pop() || "";
-
-      for (const line of lines) {
-        opts.abortSignal?.throwIfAborted();
-        const trimmed = line.trim();
-        if (!trimmed.startsWith("data:")) continue;
-        const data = trimmed.slice(5).trimStart();
-        if (data === "[DONE]") return;
-
-        let parsed: { choices?: { delta?: { content?: string }; finish_reason?: string | null }[] };
-        try {
-          parsed = JSON.parse(data);
-        } catch {
-          // Record malformed chunk instead of silently skipping. Once the
-          // stream exceeds the malformed-chunk budget the response is
-          // considered corrupted and we abort so the caller can surface a
-          // targeted error rather than silently producing partial output.
-          malformedChunkCount += 1;
-          const preview = data.length > 200 ? `${data.slice(0, 200)}…` : data;
-          console.warn(
-            `[LLM] Malformed stream chunk (${malformedChunkCount}/${MAX_MALFORMED_STREAM_CHUNKS}): ${preview}`,
-          );
-          if (malformedChunkCount > MAX_MALFORMED_STREAM_CHUNKS) {
-            throw new LlmStreamCorruptedError(malformedChunkCount);
-          }
-          continue;
-        }
-        const choice = parsed?.choices?.[0];
-        if (choice?.finish_reason) finishReason = choice.finish_reason;
-        if (finishReason === "length" || finishReason === "content_filter") {
-          throw new LlmCallFailedError(`LLM 流式回答未完成（${finishReason}）`);
-        }
-        if (choice?.delta?.content) yield choice.delta.content;
-      }
-      if (done) {
-        if (!finishReason) throw new LlmCallFailedError("LLM 流式连接提前结束，回答未完成");
-        return;
-      }
+      if (timeoutSignal.aborted) throw new LlmTimeoutError(timeoutMs);
+      throw err;
     }
+
+    if (!res.ok) {
+      const text = await res.text().catch(() => "");
+      if (res.status === 429) throw setRateLimitCooldown(res, text);
+      throw new LlmCallFailedError(`LLM 调用失败：${res.status}`, {
+        status: res.status,
+        upstreamSummary: summarizeUpstream(text),
+      });
+    }
+
+    const reader = res.body?.getReader();
+    if (!reader) throw new LlmEmptyResponseError();
+
+    const decoder = new TextDecoder();
+    let buffer = "";
+    let malformedChunkCount = 0;
+    let finishReason: string | undefined;
+
+    try {
+      while (true) {
+        opts.abortSignal?.throwIfAborted();
+        let readResult: ReadableStreamReadResult<Uint8Array>;
+        try {
+          readResult = await reader.read();
+        } catch (err) {
+          opts.abortSignal?.throwIfAborted();
+          if (timeoutSignal.aborted) throw new LlmTimeoutError(timeoutMs);
+          throw err;
+        }
+        const { done, value } = readResult;
+        opts.abortSignal?.throwIfAborted();
+        buffer += done ? `${decoder.decode()}\n` : decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() || "";
+
+        for (const line of lines) {
+          opts.abortSignal?.throwIfAborted();
+          const trimmed = line.trim();
+          if (!trimmed.startsWith("data:")) continue;
+          const data = trimmed.slice(5).trimStart();
+          if (data === "[DONE]") { outcome = "response"; return; }
+
+          let parsed: { usage?: LegacyChatCompletion["usage"]; choices?: { delta?: { content?: string }; finish_reason?: string | null }[] };
+          try {
+            parsed = JSON.parse(data);
+          } catch {
+            // Record malformed chunk instead of silently skipping. Once the
+            // stream exceeds the malformed-chunk budget the response is
+            // considered corrupted and we abort so the caller can surface a
+            // targeted error rather than silently producing partial output.
+            malformedChunkCount += 1;
+            const preview = data.length > 200 ? `${data.slice(0, 200)}…` : data;
+            console.warn(
+              `[LLM] Malformed stream chunk (${malformedChunkCount}/${MAX_MALFORMED_STREAM_CHUNKS}): ${preview}`,
+            );
+            if (malformedChunkCount > MAX_MALFORMED_STREAM_CHUNKS) {
+              throw new LlmStreamCorruptedError(malformedChunkCount);
+            }
+            continue;
+          }
+          if (parsed.usage) streamUsage = parsed.usage;
+          const choice = parsed?.choices?.[0];
+          if (choice?.finish_reason) finishReason = choice.finish_reason;
+          if (finishReason === "length" || finishReason === "content_filter") {
+            throw new LlmCallFailedError(`LLM 流式回答未完成（${finishReason}）`);
+          }
+          if (choice?.delta?.content) yield choice.delta.content;
+        }
+        if (done) {
+          if (!finishReason) throw new LlmCallFailedError("LLM 流式连接提前结束，回答未完成");
+          outcome = "response";
+          return;
+        }
+      }
+    } finally {
+      // Releasing the lock alone leaves an unfinished response occupying its
+      // connection when a consumer stops iterating or a terminal SSE event arrives.
+      await reader.cancel().catch(() => undefined);
+      reader.releaseLock();
+    }
+  } catch (error) {
+    outcome = opts.abortSignal?.aborted ? "aborted" : "failed";
+    throw error;
   } finally {
-    // Releasing the lock alone leaves an unfinished response occupying its
-    // connection when a consumer stops iterating or a terminal SSE event arrives.
-    await reader.cancel().catch(() => undefined);
-    reader.releaseLock();
+    observe(outcome, { inputTokens: streamUsage?.prompt_tokens, outputTokens: streamUsage?.completion_tokens,
+      totalTokens: streamUsage?.total_tokens, cacheReadTokens: streamUsage?.prompt_tokens_details?.cached_tokens,
+      reasoningTokens: streamUsage?.completion_tokens_details?.reasoning_tokens });
   }
 }
 
@@ -370,6 +393,7 @@ async function callChatCompletionsWithoutCourseLimit(
   const url = endpoint.replace(/\/+$/, "") + "/chat/completions";
   const { signal, timeoutSignal } = withTimeout(opts.abortSignal, opts.timeoutMs);
   const courseGeneration = isCourseGenerationLlmContext();
+  const finishObservation = startClassroomAiCall("legacy-chat", "openai.chat", model);
   const inputCharacters = messages.reduce((sum, message) => sum + message.content.length, 0);
   let data: LegacyChatCompletion | undefined;
   let content: string | undefined;
@@ -380,6 +404,12 @@ async function callChatCompletionsWithoutCourseLimit(
     // Mark before persistence: callback failures must never record the call
     // twice or turn a completed response into a second network request.
     usageRecorded = true;
+    finishObservation(outcome, {
+      totalTokens: data?.usage?.total_tokens, inputTokens: data?.usage?.prompt_tokens,
+      outputTokens: data?.usage?.completion_tokens,
+      cacheReadTokens: data?.usage?.prompt_tokens_details?.cached_tokens ?? data?.usage?.prompt_cache_hit_tokens,
+      cacheWriteTokens: data?.usage?.cache_write_tokens, reasoningTokens: data?.usage?.completion_tokens_details?.reasoning_tokens,
+    });
     const hasProviderCounts = data?.usage?.total_tokens !== undefined
       || data?.usage?.prompt_tokens !== undefined || data?.usage?.completion_tokens !== undefined;
     const outputCharacters = content?.length ?? rawResponse?.length ?? 0;
@@ -489,7 +519,7 @@ async function callChatCompletionsWithoutCourseLimit(
     return content;
   } catch (error) {
     let failure: unknown = timeoutSignal.aborted && !opts.abortSignal?.aborted ? new LlmTimeoutError(opts.timeoutMs) : error;
-    if (courseGeneration && !usageRecorded) {
+    if (!usageRecorded) {
       const rejected = !content?.length && reasoningCharacters === 0 && isFirstPassProviderRejection(failure);
       try { await recordUsage(opts.abortSignal?.aborted ? "aborted" : "failed", rejected); }
       catch (usageError) { failure = usageError; }

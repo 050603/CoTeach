@@ -1,3 +1,4 @@
+import { COLLABORATION_EXECUTION_TIMEOUT_MS } from "@/lib/ai-collaboration/request-budget";
 import { createHash, randomUUID } from "node:crypto";
 import { NextRequest } from "next/server";
 import {
@@ -67,6 +68,9 @@ import {
   softDeleteCompanionMessage,
 } from "@/lib/companion/server-store";
 import { callLLM, parseLLMJson } from "@/lib/llm/client";
+import { getActiveAiSettings } from "@/lib/llm/settings";
+import { withClassroomAiUsage } from "@/lib/observability/classroom-ai";
+import { buildDocumentSuggestionRequest, cachedDocumentSuggestions } from "@/lib/ai-collaboration/document-suggestion-cache";
 import {
   LlmCallFailedError,
   LlmJsonModeUnsupportedError,
@@ -104,6 +108,7 @@ import {
   failDocumentRequest,
   getDocumentRequest,
   readDocumentRequestReceipt,
+  prepareDocumentRequestResponse,
   listDocumentRequests,
   type DocumentRequestInput,
 } from "@/lib/ai-collaboration/document-request-store";
@@ -766,7 +771,7 @@ export async function GET(request: NextRequest) {
       conversationId: "",
     });
     if (!state) return Response.json({ error: "REQUEST_NOT_FOUND" }, { status: 404 });
-    if (!["comment-reply", "proactive-document-comment", "proactive-document-comments"].includes(state.intent) && state.status !== "completed") {
+    if (!["comment-reply", "proactive-document-comment", "proactive-document-comments", "suggest-delegated-work"].includes(state.intent) && state.status !== "completed") {
       const current = await getCompanionThread(
         courseId, scope.student.id, collaborationThreadKey(stageKey, workspaceKind),
       );
@@ -918,6 +923,8 @@ export async function POST(request: NextRequest) {
     workspaceKind,
   });
   if (scope instanceof Response) return scope;
+
+  return withClassroomAiUsage({ feature: "document-collaboration", courseId, studentId: scope.student.id, requestId }, async () => {
 
   if (!proactiveReviewEnabled() && action === "proactive-document-comments") {
     return Response.json({ commentThreads: [], reviewedCandidateIds: [], complete: true, proactiveReviewEnabled: false });
@@ -1142,8 +1149,8 @@ export async function POST(request: NextRequest) {
         candidates,
         reviewFocus: "comprehensive",
       });
-      reviewDeadline = AbortSignal.timeout(40_000);
-      const reviewSignal = AbortSignal.any([request.signal, reviewDeadline]);
+      reviewDeadline = AbortSignal.timeout(COLLABORATION_EXECUTION_TIMEOUT_MS);
+      const reviewSignal = reviewDeadline;
       const structured = await withProactiveReviewCapacity(() => {
         if (activeDocumentRequests.size > 0) throw new ProactiveReviewCapacityError(5_000);
         return callStructuredCollaborationModel([
@@ -1296,7 +1303,7 @@ export async function POST(request: NextRequest) {
         id: `document-review-error:${reviewClaim.token}`, courseId, studentId: scope.student.id, stageKey,
         participationId: scope.authentication.participationId, conversationId: "proactive-document-comments",
         source: "proactive-comment", eventType: "error", actorRole: "system", requestId, content: errorCode,
-        payload: { action, requestAttemptId: reviewClaim.token, documentVersion: reviewTask.documentVersion, rawOutputs, failureKind: failure.kind, elapsedMs: Math.round(performance.now() - reviewStartedAt), deadlineMs: 40_000 },
+        payload: { action, requestAttemptId: reviewClaim.token, documentVersion: reviewTask.documentVersion, rawOutputs, failureKind: failure.kind, elapsedMs: Math.round(performance.now() - reviewStartedAt), deadlineMs: COLLABORATION_EXECUTION_TIMEOUT_MS },
       }], workspaceKind);
       if (failure.kind === "capacity" && error instanceof ProactiveReviewCapacityError) {
         const retryAfterSeconds = Math.max(1, Math.ceil(error.retryAfterMs / 1_000));
@@ -1383,8 +1390,8 @@ export async function POST(request: NextRequest) {
       if (activeDocumentRequests.size > 0) throw new ProactiveReviewCapacityError(5_000);
       const documentText = documentHtmlToPlainText(documentHtml);
       const evidenceContext = { targetText, documentText, courseText: buildAuthoritativeCourseContext(scope.course, scope.student.id, stageKey) };
-      reviewDeadline = AbortSignal.timeout(40_000);
-      const singleReviewSignal = AbortSignal.any([request.signal, reviewDeadline]);
+      reviewDeadline = AbortSignal.timeout(COLLABORATION_EXECUTION_TIMEOUT_MS);
+      const singleReviewSignal = reviewDeadline;
       const parsed = await withProactiveReviewCapacity(() => singleReviewResponse({
         signal: singleReviewSignal, parse: parseLLMJson, evidenceContext,
         generate: repairInstruction => callCollaborationModel([
@@ -1462,7 +1469,7 @@ export async function POST(request: NextRequest) {
         id: `document-review-error:${reviewClaim.token}`, courseId, studentId: scope.student.id, stageKey,
         participationId: scope.authentication.participationId, conversationId: "proactive-document-comment",
         source: "proactive-comment", eventType: "error", actorRole: "system", requestId, content: errorCode,
-        payload: { action, requestAttemptId: reviewClaim.token, documentVersion: reviewTask.documentVersion, rawOutputs, failureKind: failure.kind, elapsedMs: Math.round(performance.now() - reviewStartedAt), deadlineMs: 40_000 },
+        payload: { action, requestAttemptId: reviewClaim.token, documentVersion: reviewTask.documentVersion, rawOutputs, failureKind: failure.kind, elapsedMs: Math.round(performance.now() - reviewStartedAt), deadlineMs: COLLABORATION_EXECUTION_TIMEOUT_MS },
       }], workspaceKind);
       if (failure.kind === "capacity" && error instanceof ProactiveReviewCapacityError) {
         return Response.json({ error: "AI_PROACTIVE_REVIEW_BUSY", message: "当前主动求助较多，系统会稍后重新检查。" }, {
@@ -1663,54 +1670,64 @@ export async function POST(request: NextRequest) {
     }
   }
   if (action === "suggest-delegated-work") {
-    const prompts = buildDelegatedWorkStarterPrompts({
+    const suggestionContext = {
       course: scope.course,
       studentId: scope.student.id,
       stageKey,
       documentText: documentHtmlToPlainText(documentHtml),
+    };
+    const preparePrompts = (prompts: { system: string; user: string }) => ({
+      ...prompts, system: withWorkspaceInstruction(prompts.system, workspaceKind),
     });
+    const prompts = preparePrompts(buildDelegatedWorkStarterPrompts(suggestionContext));
     try {
-      if (activeDocumentRequests.size > 0) throw new ProactiveReviewCapacityError(5_000);
-      const suggestionSignal = AbortSignal.any([request.signal, AbortSignal.timeout(40_000)]);
-      const raw = await withProactiveReviewCapacity(() => callDelegatedWorkModel([
-        { role: "system", content: withWorkspaceInstruction(prompts.system, workspaceKind) },
-        { role: "user", content: prompts.user },
-      ], suggestionSignal));
-      const candidates = normalizeDelegatedWorkStarters(parseLLMJson(raw));
-      if (!candidates.length) return Response.json({ starters: [] });
-      const reviewPrompts = buildDelegatedWorkStarterReviewPrompts({
-        course: scope.course,
-        studentId: scope.student.id,
-        stageKey,
-        documentText: documentHtmlToPlainText(documentHtml),
-        candidates,
+      const task = buildDocumentSuggestionRequest({
+        courseId, studentId: scope.student.id, participationId: scope.authentication.participationId,
+        stageKey, workspaceKind, threadStageKey: collaborationThreadKey(stageKey, workspaceKind), documentHtml,
+        generationPrompts: prompts,
+        reviewPrompts: preparePrompts(buildDelegatedWorkStarterReviewPrompts({ ...suggestionContext, candidates: [] })),
+        model: await getActiveAiSettings(),
       });
-      const reviewedRaw = await withProactiveReviewCapacity(() => callDelegatedWorkModel([
-        { role: "system", content: withWorkspaceInstruction(reviewPrompts.system, workspaceKind) },
-        { role: "user", content: reviewPrompts.user },
-      ], suggestionSignal));
-      const reviewed = normalizeDelegatedWorkStarters(parseLLMJson(reviewedRaw));
-      await recordInteractionEvents([{
-        courseId: scope.course.id,
-        studentId: scope.student.id,
-        stageKey,
-        source: "sidebar",
-        eventType: "response",
-        actorRole: "ai",
-        content: reviewed.join("\n"),
-        payload: { action: "suggest-delegated-work", starters: reviewed },
-        requestId,
-      }], workspaceKind);
-      return Response.json({ starters: reviewed });
+      const receipt = await cachedDocumentSuggestions(task, async (token, candidateStarters) => {
+        if (activeDocumentRequests.size > 0) throw new ProactiveReviewCapacityError(5_000);
+        // A disconnected browser may retrieve the completed durable result on retry.
+        // Two reasoning calls share the existing 125-second durable lease.
+        // Leave 15 seconds for committing the receipt after generation + review.
+        const suggestionSignal = AbortSignal.timeout(COLLABORATION_EXECUTION_TIMEOUT_MS);
+        try { return await withProactiveReviewCapacity(async () => {
+          const generate = (step: "generation" | "review", messages: { system: string; user: string }) =>
+            callStructuredCollaborationModel([
+              { role: "system", content: messages.system },
+              { role: "user", content: messages.user },
+            ], suggestionSignal,
+            value => Array.isArray(value.starters) && value.starters.every(item => typeof item === "string"),
+            attempt => recordInteractionEvents([{
+              id: `document-suggestions-model:${token}:${step}:${attempt.attempt}`,
+              courseId, studentId: scope.student.id, participationId: scope.authentication.participationId,
+              stageKey, source: "sidebar", eventType: "response", actorRole: "system",
+              requestId: task.requestId, content: attempt.raw,
+              payload: { kind: "model-output", action, modelStep: step, requestAttemptId: token,
+                modelAttempt: attempt.attempt, validation: attempt.validation, rawSha256: attempt.sha256,
+                rawLength: attempt.raw.length, documentVersion: task.documentVersion },
+            }], workspaceKind));
+          const candidates = candidateStarters ?? normalizeDelegatedWorkStarters(await generate("generation", prompts));
+          if (!candidateStarters && !await prepareDocumentRequestResponse({ ...task, token, response: { candidateStarters: candidates } })) {
+            throw new Error("SUGGESTION_LEASE_LOST");
+          }
+          if (!candidates.length) return [];
+          const reviewPrompts = preparePrompts(buildDelegatedWorkStarterReviewPrompts({ ...suggestionContext, candidates }));
+          return normalizeDelegatedWorkStarters(await generate("review", reviewPrompts));
+        }); } catch (error) {
+          throw suggestionSignal.aborted ? new LlmTimeoutError(COLLABORATION_EXECUTION_TIMEOUT_MS) : error;
+        }
+      });
+      return Response.json(receipt.body, { status: receipt.status });
     } catch (error) {
       if (error instanceof ProactiveReviewCapacityError) {
         return Response.json({ error: "AI_PROACTIVE_REVIEW_BUSY", message: "当前主动求助较多，稍后会重新准备任务建议。" }, {
           status: 503,
           headers: { "Retry-After": String(Math.max(1, Math.ceil(error.retryAfterMs / 1_000))) },
         });
-      }
-      if (request.signal.aborted) {
-        return Response.json({ error: "REQUEST_ABORTED" }, { status: 499 });
       }
       return collaborationFailureResponse(error, "delegate");
     }
@@ -2086,4 +2103,5 @@ export async function POST(request: NextRequest) {
   } finally {
     if (activeDocumentRequests.get(activeKey) === controller) activeDocumentRequests.delete(activeKey);
   }
+  });
 }

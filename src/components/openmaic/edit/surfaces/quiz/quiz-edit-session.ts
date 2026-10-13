@@ -22,6 +22,7 @@
 import { create } from 'zustand';
 import { useStageStore } from '@openmaic/lib/store/stage';
 import type { QuizContent } from '@openmaic/lib/types/stage';
+import { rebalanceSectionQuiz } from '@openmaic/lib/quiz/course-scoring';
 import {
   commitQuizContent,
   createQuizEditHistory,
@@ -77,13 +78,14 @@ export const useQuizEditSession = create<QuizEditSessionState>((set, get) => {
     commit: (next) => {
       const { history } = get();
       if (!history) return;
-      replace(commitQuizContent(history, next));
+      replace(commitQuizContent(history, next === history.present ? next : rebalanceSectionQuiz(next)));
     },
 
     commitText: (next, coalesceKey) => {
       const { history, coalesceKey: activeKey } = get();
       if (!history) return;
       if (next === history.present) return;
+      next = rebalanceSectionQuiz(next);
       writeThrough(next);
       if (activeKey === coalesceKey) {
         // Continue the current burst: replace present, no new undo step.

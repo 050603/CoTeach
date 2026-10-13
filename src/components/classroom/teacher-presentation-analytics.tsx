@@ -39,10 +39,7 @@ function KnowledgePresentationOverview({ course, degraded, onDetails, onStudentD
   const quizCompletion = possibleQuizCompletions > 0
     ? Math.round(completedQuizzes / possibleQuizCompletions * 100)
     : undefined;
-  const scoredStudents = data.sectionRows.reduce((sum, row) => sum + row.gradedCount, 0);
-  const averageScore = scoredStudents
-    ? Math.round(data.sectionRows.reduce((sum, row) => sum + (row.averageScoreExact ?? 0) * row.gradedCount, 0) / scoredStudents)
-    : undefined;
+  const averageScore = data.overallAverageScore;
   return (
     <section className={`${styles.root} ${styles.knowledgeRoot}`} aria-label="班级学情大屏">
       <header className={styles.header}>
@@ -74,11 +71,11 @@ function KnowledgePresentationOverview({ course, degraded, onDetails, onStudentD
             </span>
           </button>
           <button className={styles.knowledgePanel} onClick={onDetails} type="button">
-            <span className={styles.panelHeading}>章节测验均分 <strong>{averageScore === undefined ? "—" : `${averageScore}分`}</strong></span>
-            <span className={`${styles.barChart} ${styles.scoreChart}`} role="img" aria-label={`章节测验班级均分${averageScore === undefined ? "暂无数据" : `${averageScore}分`}`}>
-              {data.sectionRows.length ? data.sectionRows.map((row, index) => <span className={styles.barRow} key={row.id}><small title={row.title}>{compactSectionTitle(row.title, index)}</small><span><i style={{ width: `${row.averageScore ?? 0}%` }} /></span><strong>{row.averageScore === undefined ? "—" : row.averageScore}</strong></span>) : <small className={styles.chartEmpty}>等待章节测验作答</small>}
+            <span className={styles.panelHeading}>小测累计均分 <strong>{averageScore === undefined ? "—" : `${averageScore}分`}</strong></span>
+            <span className={`${styles.barChart} ${styles.scoreChart}`} role="img" aria-label={`小测累计班级均分${averageScore === undefined ? "暂无数据" : `${averageScore}分`}`}>
+              {data.sectionRows.length ? data.sectionRows.map((row, index) => <span className={styles.barRow} key={row.id}><small title={row.title}>{compactSectionTitle(row.title, index)}</small><span><i style={{ width: `${row.maxScore ? (row.averageScore ?? 0) / row.maxScore * 100 : 0}%` }} /></span><strong>{row.averageScore === undefined ? "—" : row.averageScore}</strong></span>) : <small className={styles.chartEmpty}>等待章节测验作答</small>}
             </span>
-            <span className={styles.scoreScale}><small>0</small><small>班级均分（百分制）</small><small>100</small></span>
+            <span className={styles.scoreScale}><small>0</small><small>班级累计均分</small><small>100</small></span>
           </button>
           <KnowledgeLearningMountain course={course} data={data} onDetails={onDetails} onStudentDetails={onStudentDetails} />
         </div>

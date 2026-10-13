@@ -1,4 +1,5 @@
 import { withClassroomAiCapacity } from "@/lib/llm/classroom-capacity";
+import { startClassroomAiCall } from '@/lib/observability/classroom-ai';
 /**
  * Unified LLM Call Layer
  *
@@ -357,6 +358,7 @@ async function callLLMWithoutCourseLimit<T extends GenerateTextParams>(
   let lastError: unknown;
 
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    const observe = startClassroomAiCall(source, getModelProviderId(params) ?? 'unknown', getModelId(params), attempt);
     let receivedResult: GenerateTextResult<any, any, any> | undefined; // eslint-disable-line @typescript-eslint/no-explicit-any
     let usageRecorded = false;
     try {
@@ -377,6 +379,9 @@ async function callLLMWithoutCourseLimit<T extends GenerateTextParams>(
       const details = usageDetails(params, source, usage);
       const reasoningCharacters = result.reasoningText?.length ?? 0;
       const incomplete = ['length', 'content-filter', 'error'].includes(result.finishReason);
+      observe(params.abortSignal?.aborted ? 'aborted' : incomplete ? 'failed' : 'response', {
+        ...details, totalTokens: usage?.totalTokens,
+      });
       await reportCourseGenerationTokenUsage(
         usage?.totalTokens,
         details.inputCharacters + result.text.length + reasoningCharacters,
@@ -401,6 +406,7 @@ async function callLLMWithoutCourseLimit<T extends GenerateTextParams>(
 
       return result;
     } catch (error) {
+      observe(params.abortSignal?.aborted ? 'aborted' : 'failed');
       lastError = error;
       if (courseGeneration && !usageRecorded) {
         usageRecorded = true;
@@ -458,7 +464,19 @@ export function streamLLM<T extends StreamTextParams>(
   const effectiveThinking = thinking ?? getGlobalThinkingConfig();
   const injectedParams = injectProviderOptions(isCourseGenerationLlmContext()
     ? { ...params, maxRetries: 0 } : params, effectiveThinking);
-  const result = thinkingContext.run(effectiveThinking, () => streamText(injectedParams));
+  const observe = startClassroomAiCall(source, getModelProviderId(params) ?? 'unknown', getModelId(params));
+  const result = thinkingContext.run(effectiveThinking, () => streamText({
+    ...injectedParams,
+    onFinish: async (event) => {
+      const usage = event.totalUsage;
+      observe(['length', 'content-filter', 'error'].includes(event.finishReason) ? 'failed' : 'response', {
+        ...usageDetails(params, source, usage), totalTokens: usage?.totalTokens,
+      });
+      await injectedParams.onFinish?.(event);
+    },
+    onAbort: async (event) => { observe('aborted'); await injectedParams.onAbort?.(event); },
+    onError: async (event) => { observe('failed'); await injectedParams.onError?.(event); },
+  }));
 
   return result;
 }
@@ -488,6 +506,10 @@ export async function callStreamingLLMText<T extends StreamTextParams>(
   } = {},
 ): Promise<string> {
   const run = async () => {
+    const controller = new AbortController();
+    const streamSignal = params.abortSignal ? AbortSignal.any([params.abortSignal, controller.signal]) : controller.signal;
+    let iterator: AsyncIterator<Awaited<ReturnType<typeof streamLLM>>['stream'] extends AsyncIterable<infer P> ? P : never> | undefined;
+
     const modelMetadata = typeof params.model === 'string'
       ? { provider: 'registry', modelId: params.model }
       : params.model as unknown as { provider?: string; modelId?: string };
@@ -512,13 +534,17 @@ export async function callStreamingLLMText<T extends StreamTextParams>(
       });
     };
     try {
-      const result = streamLLM(params, source, thinking);
+      const result = streamLLM({ ...params, abortSignal: streamSignal }, source, thinking);
       // Consume the complete event stream instead of awaiting `result.text` so
       // reasoning deltas count as useful transport activity too. Deep-reasoning
       // models can spend several minutes emitting reasoning before the first
       // visible HTML token; treating that interval as a dead request caused
       // valid interactive pages to be aborted at a fixed wall-clock deadline.
-      for await (const part of result.stream) {
+      iterator = result.stream[Symbol.asyncIterator]();
+      for (;;) {
+        const next = await iterator.next();
+        if (next.done) break;
+        const part = next.value;
         if (part.type === 'text-delta') {
           text += part.text;
           textCharacters += part.text.length;
@@ -598,9 +624,14 @@ export async function callStreamingLLMText<T extends StreamTextParams>(
         + `events=${activityEvents}, reasoningChars=${reasoningCharacters}, textChars=${textCharacters})`,
       );
       throw retainModelOutput(failure, text, reasoningCharacters);
+    } finally {
+      // Abort before closing a tee-backed SDK iterator; the unused branch may
+      // otherwise wait for a provider that will never finish after an error.
+      controller.abort();
+      await iterator?.return?.().catch(() => undefined);
     }
   };
-  return lifecycle.bypassCourseGenerationLimit
+  return withClassroomAiCapacity(() => lifecycle.bypassCourseGenerationLimit
     ? run()
-    : withCourseGenerationLlmSlot(run, { signal: params.abortSignal });
+    : withCourseGenerationLlmSlot(run, { signal: params.abortSignal }), params.abortSignal);
 }

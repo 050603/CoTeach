@@ -26,7 +26,7 @@ const course = {
   },
 } as unknown as Course;
 
-it("weights the teacher's overall quiz average by authored points", () => {
+it("shows the teacher's cumulative points without per-section normalization", () => {
   const weighted = structuredClone(course);
   weighted.stages = [];
   const attempts = weighted.aiLearningProgress!.student.knowledgeLectureAttempts!;
@@ -35,7 +35,7 @@ it("weights the teacher's overall quiz average by authored points", () => {
   attempts[1].questions[0].points = 45;
   attempts[1].questions[0].earned = 0;
   render(<KnowledgeLectureAnalytics course={weighted} showSectionSummaryChart={false} />);
-  expect(screen.getByText("班级均分 44分")).toBeInTheDocument();
+  expect(screen.getByText("班级均分 35分")).toBeInTheDocument();
 });
 
 it("renders both real Recharts series and recovers when a hidden chart becomes visible or resizes", async () => {
@@ -66,8 +66,8 @@ it("renders both real Recharts series and recovers when a hidden chart becomes v
     }
     await waitFor(() => expect([...container.querySelectorAll(".recharts-surface .cursor-help text")].map((tick) => tick.getAttribute("text-anchor"))).toEqual(["start", "end"]));
   }
-  expect(screen.getByRole("img")).toHaveAttribute("aria-label", expect.stringContaining("均分60分"));
-  expect(screen.getByRole("img")).toHaveAttribute("aria-label", expect.stringContaining("均分80分"));
+  expect(screen.getByRole("img")).toHaveAttribute("aria-label", expect.stringContaining("均分6/10分"));
+  expect(screen.getByRole("img")).toHaveAttribute("aria-label", expect.stringContaining("均分8/10分"));
   const sections = course.content.knowledgeLectureSections!;
   const longTitle = "社区生态调查证据分析与实践方案评价";
   rerender(<KnowledgeLectureAnalytics course={{ ...course, content: { ...course.content, knowledgeLectureSections: [...sections, { ...sections[1], id: "section-2", title: longTitle, order: 2 }] } }} />);

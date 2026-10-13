@@ -6,7 +6,7 @@ import type {
   Student,
 } from "@/lib/session/types";
 import { summarizeAiLearningStudent } from "@/components/views/teacher/ai-learning";
-import { aggregateKnowledgePointMastery, firstKnowledgeLectureAttempts, isCurrentAiLearningEntry, verifiedKnowledgeLectureScoreRate } from "@/lib/knowledge-lecture";
+import { aggregateKnowledgePointMastery, firstKnowledgeLectureAttempts, isCurrentAiLearningEntry, verifiedKnowledgeLectureScorePoints, verifiedKnowledgeLectureOverallScorePoints } from "@/lib/knowledge-lecture";
 import {
   latestReflectionByStudent,
   normalizeReflectionSurvey,
@@ -103,6 +103,7 @@ export type LaunchDashboardMetrics = {
 };
 
 export type KnowledgeDashboardMetrics = {
+  overallAverageScore?: number;
   headlines: TeacherDashboardMetric[];
   stateCounts: { notStarted: number; learning: number; completed: number; unverified: number };
   masteryRows: ReturnType<typeof aggregateKnowledgePointMastery>;
@@ -113,6 +114,7 @@ export type KnowledgeDashboardMetrics = {
     gradedCount: number;
     averageScore?: number;
     averageScoreExact?: number;
+    maxScore?: number;
     estimatedMinutes: number;
   }>;
   attentionRows: ReturnType<typeof summarizeAiLearningStudent>[];
@@ -287,13 +289,17 @@ export function deriveKnowledgeDashboardMetrics(course: Course): KnowledgeDashbo
       .filter((attempt) => attempt.sectionId === section.id)
       .map((attempt) => ({ studentId, attempt })));
     const verifiedScores = sectionAttempts.flatMap(({ attempt }) => {
-      const score = verifiedKnowledgeLectureScoreRate(attempt);
+      const score = verifiedKnowledgeLectureScorePoints(attempt);
       return score === undefined ? [] : [score];
     });
     const averageScoreExact = verifiedScores.length
       ? verifiedScores.reduce((sum, score) => sum + score, 0) / verifiedScores.length
       : undefined;
-    return { id: section.id, title: section.title, answeredCount: new Set(sectionAttempts.map((item) => item.studentId)).size, gradedCount: verifiedScores.length, averageScore: averageScoreExact === undefined ? undefined : Math.round(averageScoreExact), averageScoreExact, estimatedMinutes: section.estimatedMinutes };
+    return { id: section.id, title: section.title, answeredCount: new Set(sectionAttempts.map((item) => item.studentId)).size, gradedCount: verifiedScores.length, averageScore: averageScoreExact === undefined ? undefined : Math.round(averageScoreExact * 100) / 100, averageScoreExact, maxScore: section.maxScore ?? sectionAttempts[0]?.attempt.questions.reduce((sum, question) => sum + question.points, 0), estimatedMinutes: section.estimatedMinutes };
+  });
+  const overallScores = progressEntries.flatMap(([, entry]) => {
+    const score = verifiedKnowledgeLectureOverallScorePoints(firstKnowledgeLectureAttempts(entry));
+    return score === undefined ? [] : [score];
   });
   const progressValues = studentRows.flatMap((row) => row.preciseProgress === undefined ? [] : [row.preciseProgress]);
   const hasProgressEvidence = studentRows.some((row) => row.hasEvidence || row.progress > 0 || row.accuracy !== undefined);
@@ -306,6 +312,7 @@ export function deriveKnowledgeDashboardMetrics(course: Course): KnowledgeDashbo
       { metricId: "knowledge-high-priority", label: "高优先级信号", value: hasSignalEvidence ? `${highPriorityStudentIds.size} 人` : "—", helper: hasSignalEvidence ? "需要教师优先判断的学习信号" : "尚无可排序的学习信号", tone: highPriorityStudentIds.size ? "warning" : "success" },
     ],
     stateCounts,
+    overallAverageScore: overallScores.length ? Math.round(overallScores.reduce((sum, score) => sum + score, 0) / overallScores.length * 100) / 100 : undefined,
     masteryRows,
     sectionRows,
     attentionRows: [...studentRows]

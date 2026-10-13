@@ -159,7 +159,9 @@ try {
     'server-only': [path.join(root, 'node_modules/next/dist/compiled/server-only/empty.js')],
   } } }));
   environment.NODE_OPTIONS = [environment.NODE_OPTIONS, "--conditions=import"].filter(Boolean).join(" ");
-  if (process.env.OPENPBL_VERIFY_REVIEW_ONLY === "1") {
+  if (process.env.OPENPBL_VERIFY_EXPLANATION_ONLY === "1") {
+    console.log(command("pnpm", ["exec", "tsx", "--tsconfig", verificationConfig, "scripts/verify-knowledge-explanation-worker.ts"], { cwd: root, env: { ...environment, DATABASE_URL: `${databaseUrl}&connection_limit=12&pool_timeout=20`, PROVIDER_CONFIG_DATABASE_URL: databaseUrl, REDIS_URL: "", OPENPBL_VERIFICATION_MARKER: container }, timeout: 180_000 }));
+  } else if (process.env.OPENPBL_VERIFY_REVIEW_ONLY === "1") {
     console.log(command("pnpm", ["exec", "tsx", "--tsconfig", verificationConfig, "scripts/verify-capacity-document-review-worker.ts"], { cwd: root, env: { ...environment, DATABASE_URL: `${databaseUrl}&connection_limit=12&pool_timeout=20`, OPENPBL_VERIFICATION_MARKER: container }, timeout: 180_000 }));
   } else if (process.env.OPENPBL_VERIFY_ARCHIVE_ONLY === "1") {
     console.log(command("node", ["scripts/build-document-converter-worker.mjs"], { cwd: root, timeout: 120_000 }));

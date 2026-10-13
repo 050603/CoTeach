@@ -1,4 +1,5 @@
 import { hasExplicitFillBlankSlot } from './quality';
+import { validScoringRubric } from './rubric';
 
 /** Authoring data is checked before conversion to the student-facing QuizQuestion. */
 export type QuizQuestionDraft = Record<string, unknown> & {
@@ -87,6 +88,9 @@ export function validateQuizQuestionDrafts(
       }
     }
     if (isText) {
+      if (!validScoringRubric(item.scoringRubric)) {
+        issues.push(`${label}: text response needs explicit criterion weights and full/partial/no-credit conditions`);
+      }
       if (!value(item.referenceAnswer) || !value(item.commentPrompt)) {
         issues.push(`${label}: text response requires referenceAnswer and specific grading rubric`);
       }

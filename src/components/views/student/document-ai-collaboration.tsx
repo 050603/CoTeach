@@ -1,5 +1,7 @@
 "use client";
 
+import { COLLABORATION_BROWSER_TIMEOUT_MS } from "@/lib/ai-collaboration/request-budget";
+
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { uploadMultipartWithReceipt } from '@/lib/browser/upload-request';
@@ -693,7 +695,7 @@ export function DocumentAiCollaboration({
         method: "POST",
         headers: { "Content-Type": "application/json", "X-OpenPBL-Role": "student" },
         body: review.body,
-      }, 50_000).then(async (response) => {
+      }, COLLABORATION_BROWSER_TIMEOUT_MS).then(async (response) => {
         const payload = await response.json().catch(() => ({})) as {
           requestId?: string;
           status?: "processing" | "completed" | "failed" | "cancelled";

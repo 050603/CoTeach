@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { LlmRateLimitError } from './errors';
+import { recordAiAdmission } from '@/lib/observability/classroom-ai';
 
 type Waiter = { start: () => void; reject: (error: unknown) => void; cleanup: () => void };
 const priorityContext = new AsyncLocalStorage<'background'>();
@@ -46,6 +47,7 @@ export function createClassroomAiCapacity(limit: number, maxPending = 80, waitMs
   }
   return {
     snapshot: () => ({ active, pending: queue.length, limit }),
+    acquire,
     async run<T>(operation: () => Promise<T>, signal?: AbortSignal): Promise<T> {
       const release = await acquire(signal);
       try { signal?.throwIfAborted(); return await operation(); } finally { release(); }
@@ -59,7 +61,46 @@ const capacity = globalThis.__openPblClassroomAiCapacity ??= createClassroomAiCa
   Number.isInteger(configured) && configured > 0 ? Math.min(80, configured) : 40,
 );
 export const classroomAiCapacitySnapshot = capacity.snapshot;
-export const withClassroomAiCapacity = capacity.run;
+export async function withClassroomAiCapacity<T>(operation: () => Promise<T>, signal?: AbortSignal): Promise<T> {
+  const release = await acquireClassroomAiCapacity(signal);
+  try { signal?.throwIfAborted(); return await operation(); } finally { release(); }
+}
+export async function acquireClassroomAiCapacity(signal?: AbortSignal): Promise<() => void> {
+  const started = performance.now();
+  const priority = priorityContext.getStore() === 'background' ? 'background' : 'interactive';
+  try {
+    const release = await capacity.acquire(signal);
+    recordAiAdmission(priority, 'admitted', (performance.now() - started) / 1000);
+    return release;
+  } catch (error) {
+    recordAiAdmission(priority, 'rejected', (performance.now() - started) / 1000);
+    throw error;
+  }
+}
+
+/** Holds capacity for the whole stream, including consumer cancellation. */
+export async function* withClassroomAiStream<T>(
+  operation: (signal: AbortSignal) => AsyncIterable<T>, signal?: AbortSignal,
+): AsyncGenerator<T> {
+  const controller = new AbortController();
+  const combined = signal ? AbortSignal.any([signal, controller.signal]) : controller.signal;
+  const release = await acquireClassroomAiCapacity(combined);
+  let iterator: AsyncIterator<T> | undefined;
+  try {
+    combined.throwIfAborted();
+    iterator = operation(combined)[Symbol.asyncIterator]();
+    for (;;) {
+      const next = await iterator.next();
+      if (next.done) return;
+      yield next.value;
+    }
+  } finally {
+    // SDK streams may await upstream completion in iterator.return(). Abort
+    // first, otherwise cancelling a tee branch can deadlock with that cleanup.
+    controller.abort();
+    try { await iterator?.return?.(); } finally { release(); }
+  }
+}
 export function withBackgroundAiPriority<T>(operation: () => Promise<T>): Promise<T> {
   return priorityContext.run('background', operation);
 }

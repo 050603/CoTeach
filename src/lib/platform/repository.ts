@@ -1,3 +1,4 @@
+import { enqueueKnowledgeExplanationSnapshot } from "@/lib/courses/knowledge-explanation-enqueue";
 import { publicResourcePackageSnapshot } from "@/lib/resource-package/privacy";
 import { isValidNewPasswordLength, PASSWORD_LENGTH_HINT } from "@/lib/auth/password-policy";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
@@ -608,9 +609,15 @@ export async function listPrivateTemplates(claims: AuthClaims) {
 }
 
 export async function createPrivateTemplate(claims: AuthClaims, input: { title: string; description?: string; snapshot: unknown; mediaRefs?: unknown }) {
-  const teacher = await requireTeacherUser(claims);
-  await assertTemplateReviewForPublication(input.snapshot, teacher.id);
-  return prisma.classroomTemplate.create({ data: { ownerId: teacher.id, title: input.title, description: input.description, status: "ACTIVE", versions: { create: { version: 1, status: "PUBLISHED", snapshot: jsonValue(input.snapshot), mediaRefs: input.mediaRefs === undefined ? undefined : jsonValue(input.mediaRefs) } } }, include: { versions: true } });
+  return runMutationTransaction(async tx => {
+    const teacher = await requireTeacherUser(claims, tx);
+    await assertTemplateReviewForPublication(input.snapshot, teacher.id);
+    const created = await tx.classroomTemplate.create({ data: { ownerId: teacher.id, title: input.title, description: input.description, status: "ACTIVE", versions: { create: { version: 1, status: "PUBLISHED", snapshot: jsonValue(input.snapshot), mediaRefs: input.mediaRefs === undefined ? undefined : jsonValue(input.mediaRefs) } } }, include: { versions: true } });
+    for (const version of created.versions) {
+      await enqueueKnowledgeExplanationSnapshot(tx, { snapshot: version.snapshot, courseId: created.id, identity: `template-version:${version.id}` });
+    }
+    return created;
+  });
 }
 
 /** V2 deliberately does not import legacy Course rows. */
@@ -630,6 +637,7 @@ export async function createTemplateVersion(claims: AuthClaims, templateId: stri
     await assertTemplateReviewForPublication(input.snapshot, teacher.id);
     const version = (template.versions[0]?.version ?? 0) + 1;
     const created = await tx.classroomTemplateVersion.create({ data: { templateId, version, status: "PUBLISHED", snapshot: jsonValue(input.snapshot), mediaRefs: input.mediaRefs === undefined ? undefined : jsonValue(input.mediaRefs) } });
+    await enqueueKnowledgeExplanationSnapshot(tx, { snapshot: input.snapshot, courseId: templateId, identity: `template-version:${created.id}` });
     await tx.classroomTemplate.update({ where: { id: templateId }, data: { updatedAt: new Date() } });
     return created;
   });

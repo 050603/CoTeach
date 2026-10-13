@@ -50,9 +50,16 @@ const mocks = vi.hoisted(() => {
 
 vi.mock("@/lib/db/client", () => ({ prisma: mocks.db }));
 vi.mock("@/lib/realtime/event-bus", () => ({ publishCourseEvent: mocks.publish }));
-vi.mock("@/lib/db/transaction-retry", () => ({
-  runMutationTransaction: (operation: (tx: typeof mocks.db) => unknown) => operation(mocks.db),
-}));
+vi.mock("@/lib/observability/classroom-ai", () => ({ recordAiCacheEvent: vi.fn() }));
+vi.mock("@/lib/db/transaction-retry", () => {
+  // Model the participation row lock held by the real database transaction.
+  let previous: Promise<unknown> = Promise.resolve();
+  return { runMutationTransaction: (operation: (tx: typeof mocks.db) => unknown) => {
+    const result = previous.then(() => operation(mocks.db));
+    previous = result.catch(() => undefined);
+    return result;
+  } };
+});
 vi.mock("@/lib/companion/server-store", () => ({
   appendCompanionMessagesWithinTransaction: mocks.append,
   ensureCompanionThreadWithinTransaction: async () => ({
@@ -61,11 +68,14 @@ vi.mock("@/lib/companion/server-store", () => ({
   }),
 }));
 
+import { buildDocumentSuggestionRequest, cachedDocumentSuggestions } from "./document-suggestion-cache";
+
 import {
   cancelDocumentRequest,
   claimDocumentRequest,
   completeDocumentRequest,
   failDocumentRequest,
+  prepareDocumentRequestResponse,
   getDocumentRequest,
   readDocumentRequestReceipt,
   type DocumentRequestInput,
@@ -198,5 +208,94 @@ describe("document collaboration request receipts", () => {
     expect(await completeDocumentRequest({ ...input(), token: first.token, messages: [], response: {} })).toBe(false);
     expect(await claimDocumentRequest(input())).toMatchObject({ kind: "existing", state: { status: "cancelled" } });
     expect(mocks.append).not.toHaveBeenCalled();
+  });
+});
+
+
+describe("persistent document work suggestions", () => {
+  const context = () => ({
+    courseId: "course-1", studentId: "student-1", participationId: "participation-1", stageKey: "make",
+    workspaceKind: "document", threadStageKey: "ai-collaboration:make", documentHtml: "<p>调查记录</p>",
+    generationPrompts: { system: "生成任务", user: "完整课程要求和文稿" },
+    reviewPrompts: { system: "审核边界", user: "完整课程要求和文稿" },
+    model: { endpoint: "https://example.test", model: "configured-model" },
+  });
+  beforeEach(() => { mocks.rows.clear(); vi.clearAllMocks(); });
+
+  it("invalidates reuse for every relevant identity, complete document, prompt and model change", () => {
+    const original = context();
+    const first = buildDocumentSuggestionRequest(original);
+    expect(buildDocumentSuggestionRequest(context())).toEqual(first);
+    for (const change of [
+      { studentId: "other-student" }, { participationId: "another-class" }, { courseId: "course-2" },
+      { stageKey: "proposal" }, { workspaceKind: "external-artifact" },
+      { documentHtml: `${original.documentHtml}<p>新增中间段落</p>` },
+      { generationPrompts: { ...original.generationPrompts, user: "新的课程要求" } },
+      { reviewPrompts: { ...original.reviewPrompts, system: "新版审核规则" } },
+      { model: { ...original.model, model: "updated-model" } },
+    ]) expect(buildDocumentSuggestionRequest({ ...original, ...change }).requestId).not.toBe(first.requestId);
+  });
+
+  it("merges 30 simultaneous requests and reuses a completed no-suggestion decision", async () => {
+    const task = buildDocumentSuggestionRequest(context());
+    let release!: () => void;
+    let started!: () => void;
+    const startedPromise = new Promise<void>(resolve => { started = resolve; });
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const generate = vi.fn(async () => { started(); await gate; return []; });
+    const first = cachedDocumentSuggestions(task, generate);
+    await startedPromise;
+    const joined = await Promise.all(Array.from({ length: 29 }, () => cachedDocumentSuggestions(task, generate)));
+    expect(joined.every(result => result.status === 202)).toBe(true);
+    release();
+    expect(await first).toMatchObject({ status: 200, body: { starters: [], resultSource: "generated" } });
+    const replayed = await Promise.all(Array.from({ length: 30 }, () => cachedDocumentSuggestions(task, generate)));
+    expect(replayed.every(result => result.status === 200 && result.body.resultSource === "reused")).toBe(true);
+    expect(generate).toHaveBeenCalledOnce();
+    expect(mocks.db.aiInteractionEvent.createMany).toHaveBeenCalledOnce();
+  });
+
+  it("retains successful model work if committing its decision audit fails", async () => {
+    const task = buildDocumentSuggestionRequest(context());
+    const generate = vi.fn(async () => ["整理文稿中已有数据的记录表"]);
+    mocks.db.aiInteractionEvent.createMany.mockRejectedValueOnce(new Error("audit unavailable"));
+    await expect(cachedDocumentSuggestions(task, generate)).rejects.toThrow("audit unavailable");
+    expect(await cachedDocumentSuggestions(task, generate)).toMatchObject({
+      status: 200, body: { starters: ["整理文稿中已有数据的记录表"] },
+    });
+    expect(generate).toHaveBeenCalledOnce();
+  });
+
+  it("does not treat generation failure as a cached empty answer", async () => {
+    const task = buildDocumentSuggestionRequest(context());
+    const generate = vi.fn().mockRejectedValueOnce(new Error("upstream timeout")).mockResolvedValueOnce([]);
+    await expect(cachedDocumentSuggestions(task, generate)).rejects.toThrow("upstream timeout");
+    expect(await cachedDocumentSuggestions(task, generate)).toMatchObject({ status: 200, body: { starters: [] } });
+    expect(generate).toHaveBeenCalledTimes(2);
+  });
+
+  it("resumes paid candidates after a review timeout but never publishes unreviewed suggestions", async () => {
+    const task = buildDocumentSuggestionRequest(context());
+    const generate = vi.fn(async () => ["未审核候选"]);
+    const review = vi.fn().mockRejectedValueOnce(new Error("review timed out")).mockResolvedValueOnce(["已审核建议"]);
+    const work = async (token: string, prepared?: string[]) => {
+      const candidates = prepared ?? await generate();
+      if (!prepared) await prepareDocumentRequestResponse({ ...task, token, response: { candidateStarters: candidates } });
+      return review(candidates);
+    };
+    await expect(cachedDocumentSuggestions(task, work)).rejects.toThrow("review timed out");
+    expect(await readDocumentRequestReceipt(task)).toMatchObject({ body: { status: "failed" } });
+    expect((await readDocumentRequestReceipt(task)).body).not.toHaveProperty("starters");
+    expect(await cachedDocumentSuggestions(task, work)).toMatchObject({ status: 200, body: { starters: ["已审核建议"] } });
+    expect(generate).toHaveBeenCalledOnce();
+    expect(review).toHaveBeenCalledTimes(2);
+  });
+
+  it("never gives another student's saved suggestion to a changed authenticated identity", async () => {
+    const generate = vi.fn(async () => ["整理当前文稿中已有的引用来源清单"]);
+    const task = buildDocumentSuggestionRequest(context());
+    await cachedDocumentSuggestions(task, generate);
+    expect(await cachedDocumentSuggestions({ ...task, studentId: "student-2" }, generate)).toMatchObject({ status: 409 });
+    expect(generate).toHaveBeenCalledOnce();
   });
 });

@@ -56,6 +56,8 @@ describe('quiz authoring evidence', () => {
       knowledgePointIds: ['kp-test'], assessmentEvidence: evidence('kp-test', '填写独立检验'),
       analysis: '测试集在模型确定后用于独立检验。', referenceAnswer: '独立检验',
       commentPrompt: '独立检验或语义等价短语得满分。',
+      scoringRubric: { version: 1, criteria: [{ id: 'purpose', description: '测试集用途', weight: 100,
+        fullCredit: '识别独立检验，接受等价表述', noCredit: '用途错误或未作答' }] },
     };
     expect(validateQuizQuestionDrafts([item], ['kp-test'])).toEqual([]);
     expect(validateQuizQuestionDrafts([{ ...item, question: '解释测试集用途。', referenceAnswer: '' }], ['kp-test']).join(' '))

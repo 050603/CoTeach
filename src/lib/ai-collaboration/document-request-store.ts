@@ -1,3 +1,4 @@
+import { COLLABORATION_REQUEST_LEASE_MS } from "./request-budget";
 import { createHash, randomUUID } from "node:crypto";
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db/client";
@@ -10,7 +11,7 @@ import {
 import type { CompanionMessage } from "@/lib/session/types";
 
 const TASK_TYPE = "DOCUMENT_COLLABORATION";
-const LEASE_MS = 125_000;
+const LEASE_MS = COLLABORATION_REQUEST_LEASE_MS;
 
 function record(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value)
@@ -134,7 +135,7 @@ export async function listDocumentRequests(input: Omit<DocumentRequestIdentity, 
 }
 
 export type ClaimResult =
-  | { kind: "run"; token: string; history: DocumentRequestInput["history"] }
+  | { kind: "run"; token: string; history: DocumentRequestInput["history"]; preparedResponse?: Record<string, unknown> }
   | { kind: "existing"; state: DocumentRequestState }
   | { kind: "conflict" };
 
@@ -169,6 +170,9 @@ export async function claimDocumentRequest(input: DocumentRequestInput): Promise
         });
       }
     }
+    const prepared = record(existing?.output).preparedResponse;
+    const preparedResponse = prepared && typeof prepared === "object" && !Array.isArray(prepared)
+      ? prepared as Record<string, unknown> : undefined;
     const token = randomUUID();
     const taskInput = {
       schemaVersion: 1,
@@ -187,7 +191,9 @@ export async function claimDocumentRequest(input: DocumentRequestInput): Promise
     if (existing) {
       await tx.aiTask.update({
         where: { id },
-        data: { status: "RUNNING", input: taskInput, output: Prisma.JsonNull, error: null, startedAt: new Date(), completedAt: null },
+        data: { status: "RUNNING", input: taskInput,
+          output: preparedResponse ? { preparedResponse } as Prisma.InputJsonObject : Prisma.JsonNull,
+          error: null, startedAt: new Date(), completedAt: null },
       });
     } else {
       await tx.aiTask.create({
@@ -203,15 +209,31 @@ export async function claimDocumentRequest(input: DocumentRequestInput): Promise
         },
       });
     }
-    return { kind: "run", token, history };
-  });
+    return { kind: "run", token, history, ...(preparedResponse ? { preparedResponse } : {}) };
+  }, { lowPriorityCourseId: input.courseId });
+}
+
+/** Retain expensive successful work if committing its receipt/audit later fails. */
+export async function prepareDocumentRequestResponse(input: DocumentRequestInput & {
+  token: string; response: Record<string, unknown>;
+}): Promise<boolean> {
+  return runMutationTransaction(async (tx) => {
+    await tx.$queryRaw`SELECT id FROM "ClassroomParticipation" WHERE id = ${input.participationId} FOR UPDATE`;
+    const id = taskId(input.participationId, input.requestId);
+    const task = await tx.aiTask.findUnique({ where: { id } });
+    if (!task || task.status !== "RUNNING" || record(task.input).token !== input.token) return false;
+    await tx.aiTask.update({ where: { id }, data: {
+      output: { preparedResponse: input.response } as Prisma.InputJsonObject,
+    } });
+    return true;
+  }, { lowPriorityCourseId: input.courseId });
 }
 
 export async function completeDocumentRequest(input: DocumentRequestInput & {
   token: string;
   messages: CompanionMessage[];
   response: Record<string, unknown>;
-  auditEvents?: Array<{ idempotencyKey: string; eventType: string; actor: "system" | "assistant";
+  auditEvents?: Array<{ idempotencyKey: string; eventType: string; actor: "system" | "assistant" | "student" | "teacher";
     content: string; payload: Record<string, unknown> }>;
 }): Promise<boolean> {
   const committed = await runMutationTransaction(async (tx) => {
@@ -245,7 +267,7 @@ export async function completeDocumentRequest(input: DocumentRequestInput & {
       },
     });
     return true;
-  });
+  }, { lowPriorityCourseId: input.courseId });
   if (committed && input.auditEvents?.length) {
     try {
       await publishCourseEvent(input.courseId, { type: "companion-message", courseId: input.courseId,
@@ -264,7 +286,7 @@ export async function failDocumentRequest(input: DocumentRequestIdentity & { tok
     if (!task || task.status !== "RUNNING" || record(task.input).token !== input.token) return false;
     await tx.aiTask.update({ where: { id }, data: { status: "FAILED", error: input.error, completedAt: new Date() } });
     return true;
-  });
+  }, { lowPriorityCourseId: input.courseId });
 }
 
 export async function cancelDocumentRequest(input: DocumentRequestIdentity): Promise<DocumentRequestState | null> {
@@ -281,5 +303,5 @@ export async function cancelDocumentRequest(input: DocumentRequestIdentity): Pro
     if (task.status !== "RUNNING") return projectTask(task);
     const updated = await tx.aiTask.update({ where: { id }, data: { status: "CANCELLED", completedAt: new Date() } });
     return projectTask(updated);
-  });
+  }, { lowPriorityCourseId: input.courseId });
 }

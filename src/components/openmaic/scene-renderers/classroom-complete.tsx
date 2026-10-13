@@ -250,56 +250,6 @@ function AnimatedCounter({
   return <>{prefersReducedMotion ? value : display}</>;
 }
 
-function QuizRing({ pct, delay = 0 }: { pct: number; delay?: number }) {
-  const prefersReducedMotion = useReducedMotion();
-  const radius = 34;
-  const circumference = 2 * Math.PI * radius;
-  return (
-    <div className="relative shrink-0" style={{ width: 88, height: 88 }}>
-      <svg viewBox="0 0 88 88" className="w-full h-full -rotate-90">
-        <defs>
-          <linearGradient id="tc-ring-gold" x1="0" y1="0" x2="1" y2="1">
-            <stop offset="0%" stopColor="#fbbf24" />
-            <stop offset="100%" stopColor="#f97316" />
-          </linearGradient>
-        </defs>
-        <circle
-          cx="44"
-          cy="44"
-          r={radius}
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="8"
-          className="text-amber-200/70 dark:text-amber-900/40"
-        />
-        <motion.circle
-          cx="44"
-          cy="44"
-          r={radius}
-          fill="none"
-          stroke="url(#tc-ring-gold)"
-          strokeWidth="8"
-          strokeLinecap="round"
-          initial={{ strokeDashoffset: circumference }}
-          animate={{ strokeDashoffset: circumference * (1 - pct / 100) }}
-          transition={{
-            duration: prefersReducedMotion ? 0 : 1.1,
-            delay,
-            ease: [0.16, 1, 0.3, 1],
-          }}
-          style={{ strokeDasharray: circumference }}
-        />
-      </svg>
-      <div className="absolute inset-0 flex items-center justify-center">
-        <span className="text-xl font-bold text-amber-700 dark:text-amber-300">
-          <AnimatedCounter value={pct} delay={delay} duration={1.0} />
-          <span className="text-sm font-bold">%</span>
-        </span>
-      </div>
-    </div>
-  );
-}
-
 interface ClassroomCompletePageProps {
   readonly scenes: Scene[];
   readonly title: string;
@@ -475,15 +425,11 @@ export function ClassroomCompletePage({ scenes, title }: ClassroomCompletePagePr
               className="w-full rounded-2xl bg-gradient-to-br from-amber-100 via-orange-50 to-amber-100 dark:from-amber-950/50 dark:via-orange-950/30 dark:to-amber-950/50 border border-amber-200 dark:border-amber-900/50 px-6 py-5 shadow-md shadow-amber-200/30 dark:shadow-amber-950/20"
             >
               <div className="flex items-center gap-5">
-                {summary.quiz.pct !== undefined && <QuizRing pct={summary.quiz.pct} delay={1.3} />}
                 <div className="flex-1 min-w-0">
                   <div className="text-base font-bold text-amber-700 dark:text-amber-300">
                     {summary.quiz.pct === undefined ? t('classroomComplete.quizPending')
-                      : t('classroomComplete.quizScorePercent', { score: summary.quiz.pct })}
+                      : t('classroomComplete.quizScorePoints', { score: summary.quiz.score, total: summary.quiz.total })}
                   </div>
-                  <p className="mt-1 text-sm text-amber-700/80 dark:text-amber-300/80">
-                    {t('quiz.rawScore', { score: summary.quiz.score, total: summary.quiz.total })}
-                  </p>
                   <div className="mt-1 text-sm text-amber-700/80 dark:text-amber-300/80">
                     {summary.quiz.pct !== undefined && t(`classroomComplete.encouragement.${encouragementKey(summary.quiz.pct)}`)}
                   </div>

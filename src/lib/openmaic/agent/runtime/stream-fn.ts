@@ -1,3 +1,4 @@
+import { withClassroomAiStream } from "@/lib/llm/classroom-capacity";
 /**
  * MAIC Agent — pi StreamFn adapter (promoted from PoC).
  *
@@ -231,7 +232,7 @@ async function pump(
   };
 
   try {
-    const result = streamLLM(
+    const parts = withClassroomAiStream(signal => streamLLM(
       {
         model: opts.languageModel,
         system: context.systemPrompt,
@@ -241,16 +242,16 @@ async function pump(
         // pi's loop owns multi-step; one LLM turn per streamFn call.
         stopWhen: stepCountIs(1),
         maxOutputTokens: opts.maxOutputTokens,
-        abortSignal: opts.abortSignal,
+        abortSignal: signal,
       },
       opts.source ?? 'maic-agent',
       opts.thinkingConfig,
-    );
+    ).fullStream as AsyncIterable<Record<string, unknown>>, opts.abortSignal);
 
     stream.push({ type: 'start', partial });
 
     const mapper = createPartMapper(partial, (event) => stream.push(event));
-    for await (const part of result.fullStream as AsyncIterable<Record<string, unknown>>) {
+    for await (const part of parts) {
       mapper.handle(part);
     }
     mapper.finalize();

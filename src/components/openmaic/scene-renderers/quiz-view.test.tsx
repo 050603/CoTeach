@@ -10,7 +10,7 @@ import { gradeShortAnswerQuestion } from "./quiz-grade-client";
 vi.mock("./quiz-grade-client", () => ({ gradeShortAnswerQuestion: vi.fn() }));
 
 describe("QuizView single-attempt review", () => {
-  it("shows a 100-point grade and retains the raw score for a restored weighted quiz", () => {
+  it("shows only the section score rather than a second percentage or raw score", () => {
     const sceneId = "weighted-report";
     const questions: QuizQuestion[] = [
       { id: "choice", type: "single", question: "选择", points: 15 },
@@ -26,9 +26,9 @@ describe("QuizView single-attempt review", () => {
     render(<I18nProvider><KnowledgeLectureQuizLockProvider attemptsBySceneId={new Map()}>
       <QuizView questions={questions} sceneId={sceneId} />
     </KnowledgeLectureQuizLockProvider></I18nProvider>);
-    expect(screen.getByText("/ 100")).toBeInTheDocument();
-    expect(screen.getByRole("img", { name: "100%" })).toBeInTheDocument();
-    expect(screen.getByText(/Raw points 35 \/ 35|原始得分 35 \/ 35 分/)).toBeInTheDocument();
+    expect(screen.getByText(/\/ 35 (Points|分)/)).toBeInTheDocument();
+    expect(screen.queryByRole("img", { name: "100%" })).toBeNull();
+    expect(screen.queryByText(/Raw points|原始得分/)).toBeNull();
     localStorage.removeItem(`quizAnswers:${sceneId}`);
     localStorage.removeItem(`quizResults:${sceneId}`);
   });

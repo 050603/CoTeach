@@ -42,6 +42,7 @@ interface QuizViewProps {
   readonly sceneId: string;
   readonly quizOutlineId?: string;
   readonly stagedPlayback?: boolean;
+  readonly courseTotalPoints?: number;
 }
 
 export const KNOWLEDGE_LECTURE_QUIZ_REVIEWED_EVENT = 'openpbl:knowledge-lecture-quiz-reviewed';
@@ -117,10 +118,12 @@ function startMatchingDrag(event: React.DragEvent<HTMLElement>, rightId: string)
 function QuizCover({
   questionCount,
   totalPoints,
+  courseTotalPoints,
   onStart,
 }: {
   questionCount: number;
   totalPoints: number;
+  courseTotalPoints?: number;
   onStart: () => void;
 }) {
   const { t } = useI18n();
@@ -145,10 +148,10 @@ function QuizCover({
           </div>
           <div className="flex items-center gap-2">
             <ClipboardCheck className="size-4 text-[var(--pbl-student)]" aria-hidden="true" />
-            <span>{t('quiz.rawTotalPrefix')} {totalPoints} {t('quiz.pointsSuffix')}</span>
+            <span>{t('quiz.sectionTotalPrefix')} {totalPoints} {t('quiz.pointsSuffix')}</span>
           </div>
         </div>
-        <p className="mt-2 text-xs text-[var(--pbl-text-muted)]">{t('quiz.normalizedScoring')}</p>
+        {courseTotalPoints && <p className="mt-2 text-xs text-[var(--pbl-text-muted)]">{t('quiz.courseTotal', { total: courseTotalPoints })}</p>}
 
         <button
           type="button"
@@ -705,7 +708,7 @@ function QuestionCard({
                 : 'bg-[var(--pbl-danger-soft)] text-[var(--pbl-danger)]',
           )}>
             {result.status === 'correct' ? <CheckCircle2 className="size-3.5" aria-hidden="true" /> : result.status === 'pending' ? <Loader2 className="size-3.5" aria-hidden="true" /> : result.status === 'graded' ? <ClipboardCheck className="size-3.5" aria-hidden="true" /> : <XCircle className="size-3.5" aria-hidden="true" />}
-            {result.status === 'pending' ? '待批阅' : result.status === 'graded' ? '已评分' : result.status === 'correct' ? '回答正确' : '需要复习'}
+            {result.status === 'pending' ? '待批阅' : result.earned > 0 && result.earned < pts ? t('quiz.partialCorrect') : result.status === 'graded' ? '已评分' : result.status === 'correct' ? '回答正确' : '需要复习'}
           </div>
         )}
       </div>
@@ -739,9 +742,11 @@ function QuestionCard({
 function ScoreBanner({
   questions,
   results,
+  courseTotalPoints,
 }: {
   questions: QuizQuestion[];
   results: QuestionResult[];
+  courseTotalPoints?: number;
 }) {
   const { t } = useI18n();
   const { earned: score, possible: total, percentage } = calculateQuizScore(questions, results);
@@ -762,10 +767,10 @@ function ScoreBanner({
         <div>
           <p className="text-sm font-semibold text-[var(--pbl-student)]">{summary}</p>
           <div className="mt-1 flex items-baseline gap-1 text-[var(--pbl-text-strong)]">
-            <span className="text-4xl font-bold">{hasPending ? '—' : pct}</span>
-            <span className="text-lg text-[var(--pbl-text-muted)]">{hasPending ? '待完成批阅' : '/ 100'}</span>
+            <span className="text-4xl font-bold">{hasPending ? '—' : score}</span>
+            <span className="text-lg text-[var(--pbl-text-muted)]">{hasPending ? '待完成批阅' : `/ ${total} ${t('quiz.pointsSuffix')}`}</span>
           </div>
-          <p className="mt-1 text-xs text-[var(--pbl-text-muted)]">{t('quiz.rawScore', { score, total })}</p>
+          {courseTotalPoints && <p className="mt-1 text-xs text-[var(--pbl-text-muted)]">{t('quiz.courseTotal', { total: courseTotalPoints })}</p>}
           <div className="mt-3 flex flex-wrap gap-3 text-xs">
             <span className="flex items-center gap-1 text-[var(--pbl-success)]">
               <CheckCircle2 className="size-3.5" aria-hidden="true" /> {correctCount} {t('quiz.correct')}
@@ -776,35 +781,7 @@ function ScoreBanner({
           </div>
         </div>
 
-        {/* Percentage ring */}
-        {!hasPending && <div className="relative size-20 shrink-0" aria-label={`${pct}%`} role="img">
-          <svg className="size-20 -rotate-90" viewBox="0 0 80 80" aria-hidden="true">
-            <circle
-              cx="40"
-              cy="40"
-              r="34"
-              fill="none"
-              stroke="var(--pbl-border)"
-              strokeWidth="6"
-            />
-            <motion.circle
-              cx="40"
-              cy="40"
-              r="34"
-              fill="none"
-              stroke="var(--pbl-student)"
-              strokeWidth="6"
-              strokeLinecap="round"
-              strokeDasharray={`${2 * Math.PI * 34}`}
-              initial={{ strokeDashoffset: 2 * Math.PI * 34 }}
-              animate={{ strokeDashoffset: 2 * Math.PI * 34 * (1 - pct / 100) }}
-              transition={{ duration: 1, ease: 'easeOut', delay: 0.3 }}
-            />
-          </svg>
-          <div className="absolute inset-0 flex items-center justify-center">
-            <span className="text-lg font-bold text-[var(--pbl-text-strong)]">{pct}%</span>
-          </div>
-        </div>}
+
       </div>
     </motion.div>
   );
@@ -824,7 +801,7 @@ function isQuestionAnswered(question: QuizQuestion, answer: string | string[] | 
     && [...expectedLeftIds].every((id) => answeredLeftIds.has(id));
 }
 
-export function QuizView({ questions, sceneId, quizOutlineId, stagedPlayback = false }: QuizViewProps) {
+export function QuizView({ questions, sceneId, quizOutlineId, stagedPlayback = false, courseTotalPoints }: QuizViewProps) {
   const { t, locale } = useI18n();
   const prefersReducedMotion = useReducedMotion();
   const lockedAttempt = useLockedKnowledgeLectureAttempt(sceneId, quizOutlineId);
@@ -1032,6 +1009,7 @@ export function QuizView({ questions, sceneId, quizOutlineId, stagedPlayback = f
               <QuizCover
                 questionCount={questions.length}
                 totalPoints={totalPoints}
+                courseTotalPoints={courseTotalPoints}
                 onStart={() => setPhase('answering')}
               />
             </motion.div>
@@ -1182,7 +1160,7 @@ export function QuizView({ questions, sceneId, quizOutlineId, stagedPlayback = f
 
               <main className="flex-1 overflow-y-auto">
                 <div className="mx-auto max-w-4xl space-y-4 px-3 py-4 sm:px-6 sm:py-6">
-                  <ScoreBanner questions={questions} results={results} />
+                  <ScoreBanner questions={questions} results={results} courseTotalPoints={courseTotalPoints} />
 
                   {questions.map((q, i) => {
                     const r = resultMap[q.id];

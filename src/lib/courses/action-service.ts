@@ -1,3 +1,4 @@
+import { enqueueKnowledgeExplanationWarmup } from "./knowledge-explanation-warmup";
 import { createHash } from "node:crypto";
 import { Prisma } from "@prisma/client";
 import type { AuthClaims } from "@/lib/auth/session";
@@ -195,6 +196,9 @@ export async function executeCourseAction(courseId: string, envelope: ActionEnve
       if (error instanceof CourseReflectionValidationError) throw new CourseActionError("INVALID_COURSE_REFLECTION", error.message, 422);
       if (error instanceof CourseRubricValidationError) throw new CourseActionError("INVALID_COURSE_RUBRIC", error.message, 422);
       throw error;
+    }
+    if (after && ["PUBLISH_COURSE", "START_TEACHING", "RESTART_TEACHING"].includes(envelope.action.type)) {
+      await enqueueKnowledgeExplanationWarmup(tx, after);
     }
     const instance = await tx.classroomInstance.findUnique({ where: { id: courseId }, include: { activity: { include: { chapter: true } } } });
     const participation = instance && claims.role === "student" ? await tx.classroomParticipation.findFirst({ where: { instanceId: instance.id, enrollment: { userId: claims.sub } }, include: { enrollment: true } }) : null;

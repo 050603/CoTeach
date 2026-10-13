@@ -30,6 +30,8 @@ export async function gradeShortAnswerQuestion(
         userAnswer,
         points: pts,
         commentPrompt: q.commentPrompt,
+        referenceAnswer: q.referenceAnswer,
+        scoringRubric: q.scoringRubric,
         language,
       }),
     });

@@ -11,6 +11,7 @@ vi.mock('@/lib/observability/metrics', () => ({}));
 vi.mock('@/lib/course-generation/capability', () => ({ isBackgroundCourseGenerationEnabled: () => false }));
 vi.mock('@/lib/realtime/event-bus', () => ({ initializeEventBus: mocks.eventBus }));
 vi.mock('@/lib/realtime/websocket-server', () => ({ startWebSocketServer: mocks.ws }));
+vi.mock('@/lib/courses/knowledge-explanation-warmup', () => ({ startKnowledgeExplanationWorker: vi.fn(), stopKnowledgeExplanationWorker: vi.fn() }));
 vi.mock('@/lib/ai-collaboration/audit-outbox', () => ({ startAiAuditOutbox: mocks.audit }));
 vi.mock('@/lib/observability/logger', () => ({ logger: { error: vi.fn(), warn: vi.fn() } }));
 beforeEach(() => {

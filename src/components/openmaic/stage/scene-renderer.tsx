@@ -28,6 +28,7 @@ export function SceneRenderer({ scene, mode }: SceneRendererProps) {
         return <QuizView
           key={scene.id}
           questions={scene.content.questions}
+          courseTotalPoints={scene.content.scoring?.courseTotal}
           quizOutlineId={scene.outlineId}
           sceneId={scene.id}
           stagedPlayback={scene.actions?.some((action) => action.type === 'speech'

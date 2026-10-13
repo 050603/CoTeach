@@ -19,6 +19,9 @@ vi.mock('@openmaic/lib/server/provider-config', () => ({
   resolveTTSVoice: mocks.resolveTTSVoice,
 }));
 vi.mock('@/lib/auth/session', () => ({ isAuthConfigured: () => false }));
+vi.mock('@openmaic/lib/server/tts-result-cache', () => ({
+  cachedTtsResult: (_config: unknown, _text: string, generate: () => Promise<unknown>) => generate(),
+}));
 
 import { POST } from './route';
 

@@ -63,7 +63,7 @@ describe("TeacherPresentationAnalytics", () => {
 
     expect(screen.getByRole("img", { name: "班级整体学习进度38%" })).toBeTruthy();
     expect(screen.getByRole("img", { name: "章节测验完成率75%" })).toBeTruthy();
-    expect(screen.getByRole("img", { name: "章节测验班级均分80分" })).toBeTruthy();
+    expect(screen.getByRole("img", { name: "小测累计班级均分12分" })).toBeTruthy();
     expect(screen.getByRole("img", { name: /学习进度分布：.*20–29% 1人.*50–59% 1人/ })).toBeTruthy();
     expect(screen.getByRole("button", { name: "查看全部明细" })).toBeTruthy();
     expect(container.textContent).toContain("小明");
