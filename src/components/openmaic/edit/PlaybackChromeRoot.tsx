@@ -75,6 +75,7 @@ export interface PlaybackChromeRootHandle {
 }
 
 interface PlaybackChromeRootProps {
+  readonly active?: boolean;
   readonly onRetryOutline?: (outlineId: string) => Promise<void>;
   /** Retained for Stage API compatibility; student playback no longer renders a top header. */
   readonly canEnterProMode?: boolean;
@@ -108,6 +109,7 @@ interface PlaybackChromeRootProps {
  */
 export const PlaybackChromeRoot = forwardRef<PlaybackChromeRootHandle, PlaybackChromeRootProps>(
   function PlaybackChromeRoot({
+    active = true,
     onRetryOutline,
     experience = 'student-course',
     autoplaySceneId,
@@ -278,6 +280,8 @@ export const PlaybackChromeRoot = forwardRef<PlaybackChromeRootHandle, PlaybackC
     }, [selectedAgentIds]);
 
     const engineRef = useRef<PlaybackEngine | null>(null);
+    const activeRef = useRef(active);
+    activeRef.current = active;
     const appliedProjectionRef = useRef<AppliedProjectedPlayback | null>(null);
     const audioPlayerRef = useRef(createAudioPlayer());
     const chatAreaRef = useRef<ChatAreaRef>(null);
@@ -319,7 +323,7 @@ export const PlaybackChromeRoot = forwardRef<PlaybackChromeRootHandle, PlaybackC
       autoAdvanceTimerRef.current = setTimeout(() => {
         autoAdvanceTimerRef.current = null;
         setAutoAdvancePending(false);
-        if (modalPlaybackBlockedRef.current) return;
+        if (modalPlaybackBlockedRef.current || !activeRef.current) return;
         if (!confirmedQuiz && !useSettingsStore.getState().autoPlayLecture) return;
         if (engineRef.current && engineRef.current.getMode() !== 'idle') return;
         const stageState = useStageStore.getState();
@@ -361,7 +365,7 @@ export const PlaybackChromeRoot = forwardRef<PlaybackChromeRootHandle, PlaybackC
           engineRef.current,
           detail,
           useStageStore.getState().currentSceneId,
-          modalPlaybackBlockedRef.current,
+          modalPlaybackBlockedRef.current || !activeRef.current,
           (sceneId) => {
             if (!isStagedQuiz) advanceCompletedScene(sceneId, true);
           },
@@ -832,7 +836,7 @@ export const PlaybackChromeRoot = forwardRef<PlaybackChromeRootHandle, PlaybackC
       onPlaybackStateChangeRef.current?.({ engineMode: engine.getMode(), snapshot: engine.getSnapshot() });
 
       // Auto-start if triggered by auto-play scene advance
-      if (autoStartRef.current) {
+      if (autoStartRef.current && activeRef.current) {
         autoStartRef.current = false;
         (async () => {
           if (preparePlaybackRef.current && !await preparePlaybackRef.current(currentScene.id)) return;
@@ -842,7 +846,7 @@ export const PlaybackChromeRoot = forwardRef<PlaybackChromeRootHandle, PlaybackC
             lectureSessionIdRef.current = sessionId;
             lectureActionCounterRef.current = 0;
           }
-          if (useStageStore.getState().currentSceneId === currentScene.id) engineRef.current?.start();
+          if (activeRef.current && useStageStore.getState().currentSceneId === currentScene.id) engineRef.current?.start();
         })();
       } else {
         // Load saved playback state and restore position (but never auto-play).
@@ -856,7 +860,7 @@ export const PlaybackChromeRoot = forwardRef<PlaybackChromeRootHandle, PlaybackC
         currentScene?.id !== autoplaySceneId ||
         handledAutoplaySceneIdRef.current === autoplaySceneId
       ) return;
-      if (modalPlaybackBlockedRef.current) return;
+      if (modalPlaybackBlockedRef.current || !active) return;
       const engine = engineRef.current;
       if (!engine) return;
       handledAutoplaySceneIdRef.current = autoplaySceneId;
@@ -869,9 +873,9 @@ export const PlaybackChromeRoot = forwardRef<PlaybackChromeRootHandle, PlaybackC
           lectureSessionIdRef.current = sessionId;
           lectureActionCounterRef.current = 0;
         }
-        if (useStageStore.getState().currentSceneId === currentScene.id) engineRef.current?.start();
+        if (activeRef.current && useStageStore.getState().currentSceneId === currentScene.id) engineRef.current?.start();
       })();
-    }, [autoplaySceneId, currentScene]);
+    }, [active, autoplaySceneId, currentScene]);
 
     useEffect(() => {
       if (!isProjectedReadonly || !playbackState || !engineRef.current) return;
@@ -1098,13 +1102,14 @@ export const PlaybackChromeRoot = forwardRef<PlaybackChromeRootHandle, PlaybackC
 
     // play/pause toggle
     const handlePlayPause = useCallback(async () => {
+      if (!activeRef.current) return;
       let engine = engineRef.current;
       if (!engine) return;
 
       const mode = engine.getMode();
       if (mode === 'idle' && currentScene && preparePlaybackRef.current) {
         if (!await preparePlaybackRef.current(currentScene.id)) return;
-        if (useStageStore.getState().currentSceneId !== currentScene.id) return;
+        if (!activeRef.current || useStageStore.getState().currentSceneId !== currentScene.id) return;
         engine = engineRef.current;
         if (!engine) return;
       }
@@ -1128,7 +1133,7 @@ export const PlaybackChromeRoot = forwardRef<PlaybackChromeRootHandle, PlaybackC
           const sessionId = await chatAreaRef.current.startLecture(currentScene.id);
           lectureSessionIdRef.current = sessionId;
         }
-        if (currentScene && useStageStore.getState().currentSceneId !== currentScene.id) return;
+        if (!activeRef.current || (currentScene && useStageStore.getState().currentSceneId !== currentScene.id)) return;
         if (wasCompleted) {
           // Restart from beginning (user clicked restart after completion)
           lectureActionCounterRef.current = 0;
@@ -1139,6 +1144,16 @@ export const PlaybackChromeRoot = forwardRef<PlaybackChromeRootHandle, PlaybackC
         }
       }
     }, [playbackCompleted, currentScene]);
+
+    useEffect(() => {
+      if (active) return;
+      clearAutoAdvanceTimer();
+      autoStartRef.current = false;
+      engineRef.current?.pause();
+      if (lectureSessionIdRef.current) chatAreaRef.current?.pauseBuffer(lectureSessionIdRef.current);
+      if (chatAreaRef.current?.pauseActiveLiveBuffer()) setIsDiscussionPaused(true);
+      discussionTTS.pause();
+    }, [active, currentScene, clearAutoAdvanceTimer, discussionTTS]);
 
     // get scene information
     const isPendingScene = currentSceneId === PENDING_SCENE_ID;
@@ -1219,6 +1234,7 @@ export const PlaybackChromeRoot = forwardRef<PlaybackChromeRootHandle, PlaybackC
 
     useEffect(() => {
       const onKeyDown = (event: KeyboardEvent) => {
+        if (!activeRef.current || event.isComposing || modalPlaybackBlockedRef.current) return;
         if (isProjectedReadonly) return;
         if (event.defaultPrevented) return;
         // Let modifier-key combos (Ctrl+C, Ctrl+S, etc.) pass through to the browser
@@ -1317,6 +1333,7 @@ export const PlaybackChromeRoot = forwardRef<PlaybackChromeRootHandle, PlaybackC
     // This way ESC can exit fullscreen (browser F11 fullscreen requires F11 to exit)
     useEffect(() => {
       const onF11 = (event: KeyboardEvent) => {
+        if (!activeRef.current || event.defaultPrevented || modalPlaybackBlockedRef.current || isProjectedReadonly) return;
         if (event.key === 'F11') {
           event.preventDefault();
           togglePresentation();
@@ -1325,7 +1342,7 @@ export const PlaybackChromeRoot = forwardRef<PlaybackChromeRootHandle, PlaybackC
 
       window.addEventListener('keydown', onF11);
       return () => window.removeEventListener('keydown', onF11);
-    }, [togglePresentation]);
+    }, [isProjectedReadonly, togglePresentation]);
 
     // Map engine mode to the CanvasArea's expected engine state
     const canvasEngineState = (() => {

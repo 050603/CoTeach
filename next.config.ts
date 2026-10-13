@@ -228,6 +228,14 @@ const nextConfig: NextConfig = {
           },
         ],
       },
+      {
+        // Only the embedded resource runtime may be framed, and only by this app.
+        source: "/internal/resource-player",
+        headers: [
+          { key: "X-Frame-Options", value: "SAMEORIGIN" },
+          { key: "Content-Security-Policy", value: contentSecurityPolicy().replace("frame-ancestors 'none'", "frame-ancestors 'self'") },
+        ],
+      },
     ];
   },
 };

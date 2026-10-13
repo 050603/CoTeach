@@ -18,6 +18,7 @@ import { NewShowcaseTeacherView } from "./showcase-reporting";
  *  - 实时打分与评价
  */
 export function TeacherStageView({
+  active = true,
   view,
   course,
   onSelectStudent,
@@ -27,6 +28,7 @@ export function TeacherStageView({
   immersive = false,
   projectTimerControls,
 }: {
+  active?: boolean;
   presentation?: TeacherPresentationMode;
   immersive?: boolean;
   view: StageViewKey;
@@ -50,6 +52,7 @@ export function TeacherStageView({
     case "ai-learning":
       return (
         <AiLearningTeacherView
+          active={active}
           immersive={immersive}
           presentation={presentation}
           course={course}

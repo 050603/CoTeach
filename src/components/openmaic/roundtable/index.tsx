@@ -38,6 +38,7 @@ import {
 } from '@openmaic/components/roundtable/lecture-subtitle-dock';
 import { useDisplayScale } from '@/hooks/use-display-scale';
 import { useInstructorIdentity } from '@/components/openmaic-bridge/instructor-identity-context';
+import { CourseKnowledgeGraphButton } from './course-knowledge-graph-button';
 
 export interface DiscussionRequest {
   topic: string;
@@ -751,6 +752,10 @@ export function Roundtable({
   if (isPresenting) {
     return (
       <div className="h-0 w-full relative z-10 overflow-visible">
+        {hideCompanionArea ? <div
+          className="fixed top-3 z-40 rounded-full border border-slate-200/60 bg-white/85 shadow-sm backdrop-blur-md pointer-events-auto dark:border-white/10 dark:bg-slate-900/85"
+          style={{ right: chatCollapsed === false ? displayedChatAreaWidth + 12 : 12 }}
+        ><CourseKnowledgeGraphButton /></div> : null}
         {/* Speech overlay — fills the full stage area via absolute positioning */}
         <PresentationSpeechOverlay
           instructorIdentity={instructorIdentity ?? undefined}

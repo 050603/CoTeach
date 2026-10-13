@@ -63,6 +63,7 @@ import { useProjectMemory } from "@/components/views/student/use-project-memory"
 import { useCodeDraft } from "./use-code-draft";
 import { acknowledgeCodeAiRequest, readPendingCodeAiRequest, requestBackgroundCodeAi, requestCodeAi, type PendingCodeAiRequest } from "@/lib/browser/code-ai-request";
 import { loadCodeEditorRuntime } from "@/lib/browser/code-editor-runtime";
+import collaborationStyles from "./collaboration-responsive.module.css";
 const PROACTIVE_REVIEW_IDLE_MS = 9_000;
 const RUNNER_MARKER_OWNER = "openpbl-code-runner";
 
@@ -979,13 +980,13 @@ export function CodeAiCollaboration({
         role="student"
         userName={session.studentName ?? session.user.name}
       />
-      <header className="sticky top-16 z-[60] h-16 border-b border-[var(--pbl-border)] bg-[color-mix(in_srgb,var(--pbl-surface)_96%,transparent)] backdrop-blur-sm">
-        <div className="flex h-full w-full items-center justify-between gap-3 px-2 sm:px-3 lg:px-4">
-          <div className="min-w-0">
+      <header className={cn(collaborationStyles.workspaceHeader, "sticky top-16 z-[60] min-h-16 border-b border-[var(--pbl-border)] bg-[color-mix(in_srgb,var(--pbl-surface)_96%,transparent)] backdrop-blur-sm")}>
+        <div className="flex min-h-16 w-full flex-wrap items-center justify-between gap-3 px-2 py-2 sm:px-3 lg:px-4">
+          <div className="min-w-0 flex-[1_1_12rem]">
             <p className="text-[10px] font-medium leading-none text-stone-500">选题方向</p>
             <h1 className="mt-1 truncate text-base font-bold leading-tight text-stone-950 sm:text-lg">{projectTitle}</h1>
           </div>
-          <div className="flex shrink-0 items-center gap-2 sm:gap-3">
+          <div className={cn(collaborationStyles.headerActions, "flex items-center gap-2 sm:gap-3")}>
             {pendingAiRecovery && <button disabled={aiBusy || Boolean(pendingChangeSet)} type="button" className="min-h-11 text-xs underline" onClick={() => { void submitAiRequest({ message: String(pendingAiRecovery.body.message), intent: pendingAiRecovery.body.intent as CodeCollaborationIntent, selection: pendingAiRecovery.body.selection as CodeSelection | undefined }); }}>恢复上次 AI 结果</button>}
             {pendingCommentRecovery && <button disabled={commentBusy || Boolean(pendingChangeSet)} type="button" className="min-h-11 text-xs underline" onClick={() => { void submitCommentReply(undefined, pendingCommentRecovery); }}>恢复批注回复</button>}
             {codeDraft.error && <span role="alert" className="max-w-md text-xs text-red-700">{codeDraft.error}<button type="button" onClick={codeDraft.download} className="ml-2 min-h-11 underline">下载本机代码草稿</button></span>}
@@ -1034,7 +1035,7 @@ export function CodeAiCollaboration({
               ))}
               {addingFile ? (
                 <div className="mx-2 mt-1 rounded-md border border-stone-200 bg-white p-2 shadow-sm">
-                  <div className="flex items-center gap-1.5"><input aria-label="新文件名" autoFocus className="h-8 min-w-0 flex-1 rounded border border-stone-300 px-2 text-xs outline-none focus:border-stone-500" onChange={(event) => { setNewFileName(event.target.value); setFileError(null); }} onKeyDown={(event) => { if (event.key === "Enter") addFile(); if (event.key === "Escape") setAddingFile(false); }} placeholder={language === "python" ? "例如 utils.py" : "例如 helper.c"} value={newFileName} /><button aria-label="创建文件" className="grid h-8 w-8 place-items-center rounded bg-stone-800 text-white" onClick={addFile} type="button"><Check size={14} /></button><button aria-label="取消新建" className="grid h-8 w-8 place-items-center rounded text-stone-500 hover:bg-stone-100" onClick={() => setAddingFile(false)} type="button"><X size={14} /></button></div>
+                  <div className="flex items-center gap-1.5"><input aria-label="新文件名" autoFocus className="h-8 min-w-0 flex-1 rounded border border-stone-300 px-2 text-xs outline-none focus:border-stone-500" onChange={(event) => { setNewFileName(event.target.value); setFileError(null); }} onKeyDown={(event) => { if (event.nativeEvent.isComposing || event.keyCode === 229) return; if (event.key === "Enter") addFile(); if (event.key === "Escape") setAddingFile(false); }} placeholder={language === "python" ? "例如 utils.py" : "例如 helper.c"} value={newFileName} /><button aria-label="创建文件" className="grid h-8 w-8 place-items-center rounded bg-stone-800 text-white" onClick={addFile} type="button"><Check size={14} /></button><button aria-label="取消新建" className="grid h-8 w-8 place-items-center rounded text-stone-500 hover:bg-stone-100" onClick={() => setAddingFile(false)} type="button"><X size={14} /></button></div>
                   {fileError ? <p className="mt-1.5 text-[11px] text-red-600">{fileError}</p> : null}
                 </div>
               ) : null}

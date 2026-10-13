@@ -1,10 +1,12 @@
 // Sequential browser acceptance; keeps business writes inside verify-prelaunch-functional.mjs.
-// Run: node scripts/run-prelaunch-audit.mjs [--with-providers] [--browser-only] [--with-zoom]
+// Run: node scripts/run-prelaunch-audit.mjs [--with-providers] [--with-classroom-ai] [--browser-only] [--with-zoom]
 // --with-zoom covers equivalent CSS viewports. Run native-browser-zoom.spec.ts
 // separately for actual Chromium page zoom; DPR-only runs below test HiDPI.
 import { spawnSync } from 'node:child_process';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
+import { chromium } from 'playwright';
+import { browserConfiguration, inspectBrowserIdentity } from './lib/prelaunch-browser.mjs';
 
 const root = path.resolve(import.meta.dirname, '..');
 const output = path.resolve(process.env.PRELAUNCH_OUTPUT_DIR || path.join(root, 'test-results/prelaunch'));
@@ -12,9 +14,20 @@ mkdirSync(output, { recursive: true });
 const baseURL = process.env.PRELAUNCH_BASE_URL || 'http://127.0.0.1:3000';
 if (!['127.0.0.1', 'localhost', '[::1]'].includes(new URL(baseURL).hostname)) throw new Error('Browser audit requires a local instance');
 const browsers = (process.env.PRELAUNCH_BROWSERS || 'chromium,firefox,webkit').split(',').map(value => value.trim()).filter(Boolean);
-if (browsers.some(value => !['chromium', 'firefox', 'webkit'].includes(value))) throw new Error('Unknown browser');
+if (browsers.some(value => !['chromium', 'firefox', 'webkit', 'google-chrome', 'microsoft-edge'].includes(value))) throw new Error('Unknown browser');
+const profiles = browsers.map(label => {
+  if (label === 'google-chrome' || label === 'microsoft-edge') {
+    return { engine: 'chromium', ...browserConfiguration({
+      PRELAUNCH_E2E_BROWSER_LABEL: label,
+      PRELAUNCH_E2E_EXECUTABLE_PATH: label === 'google-chrome'
+        ? process.env.PRELAUNCH_CHROME_EXECUTABLE_PATH || '/usr/bin/google-chrome'
+        : process.env.PRELAUNCH_EDGE_EXECUTABLE_PATH || '/usr/bin/microsoft-edge',
+    }) };
+  }
+  return { engine: label, label, executablePath: undefined };
+});
 const desktopProfiles = 'desktop-768x576,desktop-768x768,desktop-1024x576,desktop-1024x768,desktop-1280x720,desktop-1366x768,desktop-1440x900,desktop-1920x1080,desktop-2560x1440,desktop-3840x2160';
-const teachingProfiles = 'desktop-split,desktop-laptop,desktop-1280x720,desktop-1366x768,desktop,desktop-1920x1080,desktop-4k';
+const teachingProfiles = 'desktop-split,desktop-laptop,desktop-1024x768,desktop-1280x720,desktop-1366x768,desktop,desktop-1920x1080,desktop-2560x1440,desktop-4k';
 const zoomFactors = (process.env.PRELAUNCH_ZOOM_FACTORS || '1.25,1.5').split(',').map(Number);
 if (zoomFactors.some(value => !Number.isFinite(value) || value < 1 || value > 2)) throw new Error('Zoom factors must be between 1 and 2');
 const results = [];
@@ -37,15 +50,27 @@ function execute(name, script, extra = {}, timeout = 3_600_000) {
   const summaryPath = extra.LAYOUT_OUTPUT_DIR || extra.TEACHING_OUTPUT_DIR || extra.PRELAUNCH_OUTPUT_DIR;
   let summary = null;
   try { summary = summaryPath ? JSON.parse(readFileSync(path.join(summaryPath, extra.PRELAUNCH_OUTPUT_DIR ? 'report.json' : 'summary.json'), 'utf8')) : null; } catch { /* startup failed */ }
-  const entry = { name, status: result.status === 0 ? '通过' : '失败', exitCode: result.status, summary };
+  const entry = { name, status: result.status === 0 ? '通过' : '失败', exitCode: result.status,
+    evidence: extra.PRELAUNCH_OUTPUT_DIR ? 'isolated-backend-and-optional-real-provider' : 'browser-fixtures',
+    error: result.error?.message ?? null, signal: result.signal, summary };
   results.push(entry);
   writeFileSync(path.join(output, 'summary.json'), JSON.stringify({ baseURL, results }, null, 2));
   return entry;
 }
 
-for (const browser of browsers) {
+for (const { engine, label: browser, executablePath } of profiles) {
+  if (executablePath) {
+    const instance = await chromium.launch({ executablePath });
+    try {
+      const identity = await inspectBrowserIdentity({ label: browser, executablePath }, await instance.newContext());
+      results.push({ name: `browser-identity-${browser}`, status: '通过', evidence: 'installed-browser-and-runtime', identity });
+      writeFileSync(path.join(output, 'summary.json'), JSON.stringify({ baseURL, results }, null, 2));
+    } finally { await instance.close(); }
+  }
+  const layoutBrowser = { LAYOUT_BROWSER: engine, LAYOUT_BROWSER_LABEL: browser, ...(executablePath ? { LAYOUT_EXECUTABLE_PATH: executablePath } : {}) };
+  const teachingBrowser = { TEACHING_BROWSER: engine, TEACHING_BROWSER_LABEL: browser, ...(executablePath ? { TEACHING_EXECUTABLE_PATH: executablePath } : {}) };
   execute(`platform-${browser}-dpr1`, 'scripts/check-desktop-layout.mjs', {
-    LAYOUT_BROWSER: browser,
+    ...layoutBrowser,
     LAYOUT_ZOOM: '1',
     LAYOUT_DPR: '1',
     LAYOUT_OUTPUT_DIR: path.join(output, 'layout', browser, 'dpr1'),
@@ -53,7 +78,7 @@ for (const browser of browsers) {
     ...(process.env.PRELAUNCH_LAYOUT_SCENARIOS ? { LAYOUT_SCENARIOS: process.env.PRELAUNCH_LAYOUT_SCENARIOS } : {}),
   });
   execute(`teaching-${browser}-dpr1`, 'scripts/check-teaching-layout.mjs', {
-    TEACHING_BROWSER: browser,
+    ...teachingBrowser,
     TEACHING_ZOOM: '1',
     TEACHING_DPR: '1',
     TEACHING_OUTPUT_DIR: path.join(output, 'teaching', browser, 'dpr1'),
@@ -61,7 +86,7 @@ for (const browser of browsers) {
     ...(process.env.PRELAUNCH_TEACHING_SCENARIOS ? { TEACHING_SCENARIOS: process.env.PRELAUNCH_TEACHING_SCENARIOS } : {}),
   });
   execute(`platform-${browser}-dpr2`, 'scripts/check-desktop-layout.mjs', {
-    LAYOUT_BROWSER: browser,
+    ...layoutBrowser,
     LAYOUT_ZOOM: '1',
     LAYOUT_DPR: '2',
     LAYOUT_OUTPUT_DIR: path.join(output, 'layout', browser, 'dpr2'),
@@ -69,7 +94,7 @@ for (const browser of browsers) {
     ...(process.env.PRELAUNCH_LAYOUT_SCENARIOS ? { LAYOUT_SCENARIOS: process.env.PRELAUNCH_LAYOUT_SCENARIOS } : {}),
   });
   execute(`teaching-${browser}-dpr2`, 'scripts/check-teaching-layout.mjs', {
-    TEACHING_BROWSER: browser,
+    ...teachingBrowser,
     TEACHING_ZOOM: '1',
     TEACHING_DPR: '2',
     TEACHING_OUTPUT_DIR: path.join(output, 'teaching', browser, 'dpr2'),
@@ -79,13 +104,13 @@ for (const browser of browsers) {
   if (process.argv.includes('--with-zoom')) {
     for (const zoom of zoomFactors) {
       execute(`platform-${browser}-zoom${zoom}`, 'scripts/check-desktop-layout.mjs', {
-        LAYOUT_BROWSER: browser, LAYOUT_ZOOM: String(zoom), LAYOUT_DPR: String(zoom),
+        ...layoutBrowser, LAYOUT_ZOOM: String(zoom), LAYOUT_DPR: String(zoom),
         LAYOUT_OUTPUT_DIR: path.join(output, 'layout', browser, `zoom${zoom}`),
         LAYOUT_DEVICES: process.env.PRELAUNCH_ZOOM_DEVICES || 'desktop-1366x768,desktop-1920x1080',
         ...(process.env.PRELAUNCH_LAYOUT_SCENARIOS ? { LAYOUT_SCENARIOS: process.env.PRELAUNCH_LAYOUT_SCENARIOS } : {}),
       });
       execute(`teaching-${browser}-zoom${zoom}`, 'scripts/check-teaching-layout.mjs', {
-        TEACHING_BROWSER: browser, TEACHING_ZOOM: String(zoom), TEACHING_DPR: String(zoom),
+        ...teachingBrowser, TEACHING_ZOOM: String(zoom), TEACHING_DPR: String(zoom),
         TEACHING_OUTPUT_DIR: path.join(output, 'teaching', browser, `zoom${zoom}`),
         TEACHING_DEVICES: process.env.PRELAUNCH_ZOOM_DEVICES || 'desktop-1366x768,desktop-1920x1080',
         ...(process.env.PRELAUNCH_TEACHING_SCENARIOS ? { TEACHING_SCENARIOS: process.env.PRELAUNCH_TEACHING_SCENARIOS } : {}),
@@ -94,9 +119,15 @@ for (const browser of browsers) {
   }
 }
 if (!process.argv.includes('--browser-only')) {
-  execute('isolated-functional', 'scripts/verify-prelaunch-functional.mjs', {
-    PRELAUNCH_OUTPUT_DIR: path.join(output, 'functional'),
-    PRELAUNCH_REAL_PROVIDERS: process.argv.includes('--with-providers') ? '1' : '0',
-  }, 1_800_000);
+  const branded = profiles.filter(profile => profile.executablePath);
+  for (const profile of branded.length ? branded : [browserConfiguration()]) {
+    execute(`isolated-functional-${profile.label}`, 'scripts/verify-prelaunch-functional.mjs', {
+      PRELAUNCH_OUTPUT_DIR: path.join(output, 'functional', profile.label),
+      PRELAUNCH_E2E_BROWSER_LABEL: profile.label,
+      PRELAUNCH_E2E_EXECUTABLE_PATH: profile.executablePath || '',
+      PRELAUNCH_REAL_PROVIDERS: process.argv.includes('--with-providers') || process.argv.includes('--with-classroom-ai') ? '1' : '0',
+      PRELAUNCH_CLASSROOM_AI: process.argv.includes('--with-classroom-ai') ? '1' : process.env.PRELAUNCH_CLASSROOM_AI || '0',
+    }, 1_800_000);
+  }
 }
 if (results.some(result => result.status !== '通过')) process.exitCode = 1;

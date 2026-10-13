@@ -4,6 +4,7 @@ import { afterEach, expect, it, vi } from 'vitest';
 vi.mock('next/navigation', () => ({ usePathname: () => '/teacher/teach/course-1/classroom' }));
 vi.mock('sonner', () => ({ toast: { error: vi.fn(), success: vi.fn(), warning: vi.fn() } }));
 import { SessionProvider, useSession } from './store';
+import { PROJECTION_REQUEST_TIMEOUT_MS } from '@/lib/realtime/projection-state';
 function deferred() { let resolve!: (response: Response) => void; const promise = new Promise<Response>(done => { resolve = done; }); return { promise, resolve }; }
 const course = { id: 'course-1', name: 'Course', status: 'teaching', version: 1, updatedAt: '2026-09-27T00:00:00Z', students: [], stages: [], currentStageIndex: 0, resources: [], groups: [], submissions: [], activityLog: [], uiState: {}, content: { lessonOutline: [], evaluationPlan: { dimensions: [], overallRubric: '' } } };
 function Probe() {
@@ -13,7 +14,7 @@ function Probe() {
   return <><span data-testid="version">{current?.version}</span><span data-testid="projection">{current?.uiState?.projectionVersion ?? 0}</span><span data-testid="saved">{session.saveState}</span><button onClick={() => session.setStage('course-1', 0)}>save</button></>;
 }
 async function flush() { await act(async () => { for (let i = 0; i < 30; i++) await Promise.resolve(); }); }
-afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); window.history.replaceState({}, '', '/'); });
+afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); vi.restoreAllMocks(); window.history.replaceState({}, '', '/'); });
 
 it('serializes polling and WS invalidations while projection and save acknowledgements remain immediate', async () => {
   vi.useFakeTimers(); vi.setSystemTime(new Date('2026-09-27T00:00:00Z'));
@@ -54,5 +55,153 @@ it('serializes polling and WS invalidations while projection and save acknowledg
   await act(async () => { first.resolve(Response.json({ course, eventCursor: '1' })); }); await flush();
   await act(async () => { await vi.advanceTimersByTimeAsync(750); }); await flush();
   expect(snapshots).toBe(2); expect(screen.getByTestId('version').textContent).toBe('44'); expect(screen.getByTestId('projection').textContent).toBe('7');
+  mounted.unmount();
+});
+
+function projectionTransport() {
+  vi.useFakeTimers();
+  window.history.replaceState({}, '', '/teacher/teach/course-1/classroom');
+  const reads: Array<{ resolve: (response: Response) => void; signal: AbortSignal }> = [];
+  vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    if (url.startsWith('/api/courses?')) return Promise.resolve(Response.json({ courses: [course], user: { role: 'teacher', name: 'teacher' }, updatedAt: course.updatedAt }));
+    if (url.endsWith('/state')) return Promise.resolve(Response.json({ course, eventCursor: '0' }));
+    if (url.includes('/events?')) return Promise.resolve(Response.json({ events: [], nextCursor: '0', hasMore: false }));
+    if (url.endsWith('/projection')) return new Promise<Response>((resolve, reject) => {
+      const signal = init!.signal!;
+      reads.push({ resolve, signal });
+      signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+    });
+    throw new Error(`Unexpected ${url}`);
+  }));
+  class Socket {
+    static CONNECTING = 0; static OPEN = 1; static current: Socket;
+    readyState = 0; onopen: (() => void) | null = null; onmessage: ((event: { data: string }) => void) | null = null;
+    constructor() { Socket.current = this; }
+    send() {}
+    close() { this.readyState = 3; }
+    emit(value: unknown) { this.onmessage?.({ data: JSON.stringify(value) }); }
+  }
+  vi.stubGlobal('WebSocket', Socket);
+  return { reads, Socket };
+}
+
+it('does not report replaced projection reads as failures when the socket opens and subscribes', async () => {
+  const { reads, Socket } = projectionTransport();
+  const errors = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+  const mounted = render(<SessionProvider><Probe /></SessionProvider>);
+  await flush();
+  await act(async () => { Socket.current.readyState = 1; Socket.current.onopen?.(); });
+  await flush();
+  await act(async () => { Socket.current.emit({ type: 'subscribed', courseId: course.id }); });
+  await flush();
+  expect(reads.filter(read => read.signal.aborted).length).toBeGreaterThanOrEqual(2);
+  const latest = reads.at(-1)!;
+  expect(latest.signal.aborted).toBe(false);
+  latest.resolve(Response.json({ courseId: course.id, courseVersion: 1, projectionVersion: 7, projectionUpdatedAt: course.updatedAt, serverTime: course.updatedAt }));
+  await flush();
+  expect(screen.getByTestId('projection').textContent).toBe('7');
+  mounted.unmount();
+  await flush();
+  expect(errors).not.toHaveBeenCalled();
+});
+
+it('still reports a timeout of the current projection read after subscription', async () => {
+  const { Socket } = projectionTransport();
+  const errors = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+  const mounted = render(<SessionProvider><Probe /></SessionProvider>);
+  await flush();
+  await act(async () => {
+    Socket.current.readyState = 1;
+    Socket.current.onopen?.();
+    Socket.current.emit({ type: 'subscribed', courseId: course.id });
+  });
+  await flush();
+  errors.mockClear();
+  await act(async () => { await vi.advanceTimersByTimeAsync(PROJECTION_REQUEST_TIMEOUT_MS); });
+  expect(errors).toHaveBeenCalledTimes(1);
+  expect(errors.mock.calls[0]?.[0]).toBe('[session] Course synchronization failed:');
+  mounted.unmount();
+});
+
+function courseEventsTransport() {
+  vi.useFakeTimers();
+  vi.spyOn(Math, 'random').mockReturnValue(0);
+  window.history.replaceState({}, '', '/teacher/teach/course-1/classroom');
+  const reads: AbortSignal[] = [];
+  let failCurrentRead = false;
+  let holdReads = true;
+  vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    if (url.startsWith('/api/courses?')) return Promise.resolve(Response.json({ courses: [course], user: { role: 'teacher', name: 'teacher' }, updatedAt: course.updatedAt }));
+    if (url.endsWith('/state')) return Promise.resolve(Response.json({ course, eventCursor: '0' }));
+    if (url.endsWith('/projection')) return Promise.resolve(Response.json({ courseId: course.id, courseVersion: 1, projectionVersion: 0, projectionUpdatedAt: course.updatedAt, serverTime: course.updatedAt }));
+    if (url.includes('/events?')) {
+      if (failCurrentRead) return Promise.resolve(Response.json({ error: 'unavailable' }, { status: 503 }));
+      if (!holdReads) return Promise.resolve(Response.json({ events: [], nextCursor: '0', hasMore: false }));
+      return new Promise<Response>((_resolve, reject) => {
+        const signal = init!.signal!;
+        reads.push(signal);
+        signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+      });
+    }
+    throw new Error(`Unexpected ${url}`);
+  }));
+  class Socket {
+    static CONNECTING = 0; static OPEN = 1; static current: Socket;
+    readyState = 0;
+    onopen: (() => void) | null = null;
+    onmessage: ((event: { data: string }) => void) | null = null;
+    onclose: (() => void) | null = null;
+    constructor() { Socket.current = this; }
+    send() {}
+    close() { this.readyState = 3; }
+    emit(value: unknown) { this.onmessage?.({ data: JSON.stringify(value) }); }
+  }
+  vi.stubGlobal('WebSocket', Socket);
+  return { reads, Socket, recover: () => { holdReads = false; }, fail: () => { failCurrentRead = true; } };
+}
+
+it('cancels old event catch-ups on reconnect without reporting a synchronization failure', async () => {
+  const transport = courseEventsTransport();
+  const errors = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+  const mounted = render(<SessionProvider><Probe /></SessionProvider>);
+  await flush();
+  const oldSocket = transport.Socket.current;
+  await act(async () => {
+    oldSocket.readyState = 1;
+    oldSocket.onopen?.();
+    oldSocket.emit({ type: 'subscribed', courseId: course.id });
+  });
+  await flush();
+  expect(transport.reads.length).toBeGreaterThanOrEqual(2);
+  transport.recover();
+  await act(async () => {
+    oldSocket.readyState = 3;
+    oldSocket.onclose?.();
+    await vi.advanceTimersByTimeAsync(1_000);
+  });
+  await flush();
+  expect(transport.Socket.current).not.toBe(oldSocket);
+  expect(transport.reads.every(signal => signal.aborted)).toBe(true);
+  expect(screen.getByTestId('version').textContent).toBe('1');
+  mounted.unmount();
+  await flush();
+  expect(errors).not.toHaveBeenCalled();
+});
+
+it('still reports a real event endpoint failure in the current connection', async () => {
+  const transport = courseEventsTransport();
+  const errors = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+  const mounted = render(<SessionProvider><Probe /></SessionProvider>);
+  await flush();
+  transport.fail();
+  await act(async () => {
+    transport.Socket.current.readyState = 1;
+    transport.Socket.current.onopen?.();
+    transport.Socket.current.emit({ type: 'subscribed', courseId: course.id });
+  });
+  await flush();
+  expect(errors).toHaveBeenCalledWith('[session] Course synchronization failed:', expect.objectContaining({ message: 'COURSE_EVENTS_FAILED_503' }));
   mounted.unmount();
 });

@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { TeachingKnowledgeGraphProvider } from '@/components/openmaic-bridge/knowledge-graph-context';
 import {
@@ -157,6 +157,72 @@ describe('long subtitle paging', () => {
 });
 
 describe('teaching rail layout', () => {
+  it('contains the graph in native fullscreen, blocks playback and restores keyboard focus', async () => {
+    const fullscreen = document.body.appendChild(document.createElement('div'));
+    const previous = Object.getOwnPropertyDescriptor(document, 'fullscreenElement');
+    Object.defineProperty(document, 'fullscreenElement', { configurable: true, value: fullscreen });
+    const blocked: boolean[] = [];
+    const onBlock = (event: Event) => blocked.push((event as CustomEvent<{ blocked: boolean }>).detail.blocked);
+    const playerKey = vi.fn();
+    window.addEventListener('openmaic:playback-modal-block', onBlock);
+    window.addEventListener('keydown', playerKey);
+    try {
+      render(<TeachingKnowledgeGraphProvider graph={{
+        nodes: [{ id: 'observation', label: '观察记录', description: '记录证据' }], edges: [],
+      }} points={[]}>
+        <LectureSubtitleDock activeActionIndex={0} autoPlay canGoNext canGoNextCue={false}
+          canGoPrevious={false} canGoPreviousCue={false} cues={[]} currentText="当前讲解"
+          engineMode="paused" muted={false} onCycleSpeed={vi.fn()} onToggleAutoPlay={vi.fn()}
+          onToggleMute={vi.fn()} playbackSpeed={1} sceneIndex={0} scenesCount={2}
+          teacherAvatar="/teacher.webp" teacherName="知知" />
+      </TeachingKnowledgeGraphProvider>, { container: fullscreen });
+      const trigger = screen.getByRole('button', { name: '完整浏览课程思维导图' });
+      trigger.focus();
+      fireEvent.click(trigger);
+      const dialog = screen.getByRole('dialog', { name: '课程思维导图' });
+      expect(fullscreen.contains(dialog)).toBe(true);
+      expect(blocked).toEqual([true]);
+      fireEvent.keyDown(within(dialog).getByRole('application'), { key: 'ArrowRight' });
+      fireEvent.keyDown(within(dialog).getByRole('application'), { key: ' ' });
+      expect(playerKey).not.toHaveBeenCalled();
+      fireEvent.keyDown(dialog, { key: 'Escape' });
+      expect(screen.queryByRole('dialog', { name: '课程思维导图' })).toBeNull();
+      expect(blocked).toEqual([true, false]);
+      expect(document.fullscreenElement).toBe(fullscreen);
+      await waitFor(() => expect(document.activeElement).toBe(trigger));
+    } finally {
+      window.removeEventListener('openmaic:playback-modal-block', onBlock);
+      window.removeEventListener('keydown', playerKey);
+      if (previous) Object.defineProperty(document, 'fullscreenElement', previous);
+      else Reflect.deleteProperty(document, 'fullscreenElement');
+      fullscreen.remove();
+    }
+  });
+
+  it('opens a graph sized by the dialog viewport and returns to the lesson', () => {
+    render(
+      <TeachingKnowledgeGraphProvider graph={{
+        nodes: [{ id: 'observation', label: '观察记录', description: '记录证据', level: 'foundation' },
+          { id: 'comparison', label: '证据比较', description: '比较记录', level: 'core' }],
+        edges: [{ id: 'supports', source: 'observation', target: 'comparison', label: '支持比较' }],
+      }} points={[]}>
+        <LectureSubtitleDock activeActionIndex={0} autoPlay canGoNext canGoNextCue={false}
+          canGoPrevious={false} canGoPreviousCue={false} cues={[]} currentText="当前讲解"
+          engineMode="paused" muted={false} onCycleSpeed={vi.fn()} onToggleAutoPlay={vi.fn()}
+          onToggleMute={vi.fn()} playbackSpeed={1} sceneIndex={0} scenesCount={2}
+          teacherAvatar="/teacher.webp" teacherName="知知" />
+      </TeachingKnowledgeGraphProvider>,
+    );
+    fireEvent.click(screen.getByRole('button', { name: '完整浏览课程思维导图' }));
+    const dialog = screen.getByRole('dialog', { name: '课程思维导图' });
+    const canvas = within(dialog).getByRole('application').closest('.knowledge-graph-canvas') as HTMLElement;
+    expect(canvas.style.minHeight).toBe('');
+    expect(within(dialog).getByRole('button', { name: 'Fit View' })).toBeInTheDocument();
+    fireEvent.click(within(dialog).getByRole('button', { name: '关闭对话框' }));
+    expect(screen.queryByRole('dialog', { name: '课程思维导图' })).toBeNull();
+    expect(screen.getByText('当前讲解')).toBeInTheDocument();
+  });
+
   it('keeps the lower playback control available during automatic page advance', () => {
     const onPlayPause = vi.fn();
     const props = {

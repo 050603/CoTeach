@@ -188,12 +188,14 @@ export function adaptiveResponseStatus(
 }
 
 export function AiLearningTeacherView({
+  active = true,
   course,
   onSelectStudent,
   focus,
   presentation = "workspace",
   immersive = false,
 }: {
+  active?: boolean;
   course: Course;
   presentation?: TeacherPresentationMode;
   immersive?: boolean;
@@ -264,12 +266,12 @@ export function AiLearningTeacherView({
       ) : null}
 
       </> : null}
-      {hasClassroom ? <AiLearningTeacherPreview course={course} presentation={presentation} workspacePreviewEnabled={!immersive} /> : presentation === "teaching" ? <StageTaskPresentation course={course} /> : null}
+      {hasClassroom ? <AiLearningTeacherPreview active={active} course={course} presentation={presentation} workspacePreviewEnabled={!immersive} /> : presentation === "teaching" ? <StageTaskPresentation course={course} /> : null}
       {presentation === "workspace" ? <>
 
       <KnowledgeLectureAnalytics course={course} showSectionSummaryChart={!immersive} title="全班知识讲授学情" />
 
-      <ClassInterventionPanel commonIssues={commonIssues} course={course} />
+      <ClassInterventionPanel key={`${course.id}:${course.aiLearningClassroomId}`} commonIssues={commonIssues} course={course} />
 
       <Card className="overflow-hidden p-0">
         <div className="flex flex-wrap items-center justify-between gap-3 border-b border-stone-100 px-4 py-3">

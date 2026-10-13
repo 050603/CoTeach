@@ -65,6 +65,7 @@ import { flushAiInteractionEvents, queueAiInteractionEvent } from "@/lib/browser
 import { acknowledgeDocumentReview, queueDocumentReview, readPendingDocumentReviews, type DocumentReviewBody, type PendingDocumentReview } from "@/lib/browser/document-review";
 import { documentVersionDigest } from "@/lib/ai-collaboration/document-version";
 import { acknowledgeDocumentDraft, documentDraftKey, readDocumentDrafts, writeDocumentDraft, type PendingDocumentDraft } from "@/lib/browser/document-draft";
+import collaborationStyles from "./collaboration-responsive.module.css";
 
 type CollaborationMessage = AiMemberWorkspaceMessage;
 
@@ -1949,13 +1950,13 @@ export function DocumentAiCollaboration({
         role="student"
         userName={session.studentName ?? session.user.name}
       />
-      <header className="sticky top-16 z-[60] h-16 border-b border-[var(--pbl-border)] bg-[color-mix(in_srgb,var(--pbl-surface)_96%,transparent)] backdrop-blur-sm">
-        <div className="flex h-full w-full items-center justify-between gap-3 px-2 sm:px-3 lg:px-4">
-          <div className="min-w-0">
+      <header className={cn(collaborationStyles.workspaceHeader, "sticky top-16 z-[60] min-h-16 border-b border-[var(--pbl-border)] bg-[color-mix(in_srgb,var(--pbl-surface)_96%,transparent)] backdrop-blur-sm")}>
+        <div className="flex min-h-16 w-full flex-wrap items-center justify-between gap-3 px-2 py-2 sm:px-3 lg:px-4">
+          <div className="min-w-0 flex-[1_1_12rem]">
             <p className="text-[10px] font-medium leading-none text-stone-500">{isExternalArtifact ? "本地成果协作" : "选题方向"}</p>
             <h1 className="mt-1 truncate text-base font-bold leading-tight text-stone-950 sm:text-lg">{projectTitle}</h1>
           </div>
-          <div className="flex shrink-0 items-center gap-2 sm:gap-3">
+          <div className={cn(collaborationStyles.headerActions, "flex items-center gap-2 sm:gap-3")}>
             {localDraftError && <span role="alert" className="text-xs text-rose-700">{localDraftError}<button type="button" className="ml-2 underline" onClick={() => {
               const drafts = readDocumentDrafts(loadedScopeRef.current);
               const url = URL.createObjectURL(new Blob([JSON.stringify(drafts, null, 2)], { type: "application/json" }));

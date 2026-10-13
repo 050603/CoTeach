@@ -3,7 +3,6 @@ import { SignJWT } from "jose";
 import { PDFDocument, rgb } from "pdf-lib";
 import { readFileSync } from "node:fs";
 import { DEFAULT_STAGES, type Course } from "../src/lib/session/types";
-import { REFLECTION_SURVEY_QUESTIONS } from "../src/lib/reflection-survey";
 
 // All API traffic and sockets are intercepted. This suite never creates users,
 // writes classroom state, or requires a real teacher account in the database.
@@ -43,7 +42,7 @@ async function samplePdf() {
   return Buffer.from(await document.save());
 }
 
-async function mockClassroom(page: Page, options: { rejectFullscreen?: boolean; empty?: boolean; pdfResource?: boolean; activeShowcase?: boolean; waitingShowcase?: boolean; reflectionResponses?: boolean; customReflection?: boolean; mountain?: boolean } = {}) {
+async function mockClassroom(page: Page, options: { rejectFullscreen?: boolean; empty?: boolean; pdfResource?: boolean; activeShowcase?: boolean; waitingShowcase?: boolean; posttestResponses?: boolean; mountain?: boolean } = {}) {
   let course = classroom();
   if (options.mountain) {
     course.students = Array.from({ length: 40 }, (_, index) => ({ id: `student-${index}`, name: `私密学生${index + 1}`, joinedAt: fixedTime, stageProgress: {} }));
@@ -54,37 +53,20 @@ async function mockClassroom(page: Page, options: { rejectFullscreen?: boolean; 
       completionModelVersion: 2, masteryLevel: "in-progress", lastActiveAt: fixedTime,
     }]));
   }
-  if (options.reflectionResponses || options.customReflection) {
-    course.reflections = course.students.slice(0, 3).map((student, index): NonNullable<Course["reflections"]>[number] => ({
-      id: `reflection-${student.id}`, courseId, studentId: student.id, studentName: student.name,
-      content: "旧文本不应进入逐题统计", createdAt: fixedTime, updatedAt: fixedTime,
-      survey: { schemaVersion: 1, learningReflection: `学习原文${index + 1}：通过证据比较解决观察困难。`, systemReflection: `系统原文${index + 1}：系统导航帮助我找到协作工具。`, aiHelpfulness: index === 2 ? 5 : 4, systemUsability: 3, reuseIntention: index === 0 ? 1 : 5 },
-    }));
-    const source = (index: number, field: "learningReflection" | "systemReflection") => ({ studentId: `student-${index}`, fields: [field] });
-    course.aiSupports = [{ id: "reflection-summary", courseId, kind: "reflection-class-summary", targetType: "course", targetId: courseId, updatedAt: fixedTime, createdAt: fixedTime, structuredPayload: {
-      schemaVersion: 1, generatedAt: fixedTime, coveragePercent: 8, coverageBucket: 0, trigger: "manual", responseCount: 3, totalStudentCount: 36,
-      sourceRevision: "fixture", sourceRefs: course.reflections.map((record) => ({ reflectionId: record.id, studentId: record.studentId, updatedAt: record.updatedAt })),
-      courseSummary: "班级反思汇总", teachingRecommendations: ["仅供教师的建议"], studentSummaries: [],
-      categories: [
-        { key: "learning-gains", title: "学习收获", summary: "", terms: [{ label: "证据比较", sources: [source(0, "learningReflection"), source(1, "learningReflection")] }] },
-        { key: "common-difficulties", title: "共同困难", summary: "", terms: [{ label: "证据比较", sources: [source(0, "learningReflection"), source(2, "learningReflection")] }] },
-        { key: "ai-collaboration", title: "AI 协作", summary: "", terms: [{ label: "系统导航", sources: [source(0, options.customReflection ? "learningReflection" : "systemReflection"), source(2, options.customReflection ? "learningReflection" : "systemReflection")] }] },
-        { key: "course-improvements", title: "改进方向", summary: "", terms: [] },
-      ],
-    } }] as Course["aiSupports"];
-  }
-  if (options.customReflection) {
-    const questions = [{ id: "evidence", prompt: "这次项目中你如何比较证据？", required: true }, { id: "navigation", prompt: "下一次如何改进你的协作过程？", required: true }];
-    course.content.stagePlan = {
-      schemaVersion: 1, source: "resource-package", totalMinutes: 50, lessonCount: 1, minutesPerLesson: 50,
-      stages: (["launch", "ai-learning", "make", "showcase", "reflection"] as const).map((key, index) => ({ key, title: DEFAULT_STAGES[index]!.label, durationMin: 10, requirements: "", outputs: "", teacherActions: "", aiActions: "" })),
-      evaluationCriteria: "", reflectionQuestions: questions.map((question) => question.prompt), reflectionQuestionSet: { id: "custom-questions", version: 1, questions },
-    };
-    course.reflections = course.reflections!.map((record) => ({ ...record, courseReflection: {
-      schemaVersion: 1, questionSetId: "custom-questions", questionSetVersion: 1, questions,
-      answers: { evidence: record.survey!.learningReflection, navigation: record.survey!.systemReflection }, submittedAt: fixedTime,
-    } }));
-  }
+  course.platformContext = { offeringId: "presentation-offering", activityId: "presentation-activity", templateId: "template", templateVersionId: "version" };
+  const questionnaire = {
+    pretest: [{ id: "pre-evidence", type: "short-answer", prompt: "观察开始前，你会记录什么？" }],
+    posttest: [
+      { id: "comparison", type: "single-choice", prompt: "哪种记录更适合比较校园能源使用？", options: ["统一观察时长并记录数量", "只凭个人印象判断"], correctAnswer: "统一观察时长并记录数量", group: { id: "evidence", title: "观察与证据", instruction: "根据本次项目的记录作答。" } },
+      { id: "explanation", type: "short-answer", prompt: "请结合具体观察记录说明你下一步如何验证节能方案。" },
+    ],
+  };
+  const submissions = options.posttestResponses ? course.students.slice(0, 3).flatMap((student, index) => ([
+    { id: `pre-${student.id}`, phase: "pretest", variant: "none", student: { id: student.id, displayName: student.name, username: student.id }, submittedAt: fixedTime, questionnaire, answers: { "pre-evidence": `前测原文${index + 1}：先记录观察地点和时间。` }, objectiveScore: 0, objectiveTotal: 0 },
+    { id: `post-${student.id}`, phase: "posttest", variant: "none", student: { id: student.id, displayName: student.name, username: student.id }, submittedAt: fixedTime, questionnaire, answers: { comparison: "统一观察时长并记录数量", explanation: `后测原文${index + 1}：对比同一时段的用电数据，核验节能方案。` }, objectiveScore: 1, objectiveTotal: 1 },
+  ])) : [];
+  const resultReads: string[] = [];
+  const exportCursors: Array<string | null> = [];
   let assignedStudentId: string | undefined;
   const pdfBytes = options.pdfResource || options.activeShowcase || options.waitingShowcase ? await samplePdf() : undefined;
   if (options.pdfResource) course.resources = [{ id: "presentation-pdf", title: "校园能源观察与改进建议：两页课堂演示资料", stageKey: "launch", type: "PDF", size: "2 KB", url: "/api/uploads/e2e-presentation-pdf", displayMode: "slides", downloadedBy: [] }];
@@ -144,6 +126,21 @@ async function mockClassroom(page: Page, options: { rejectFullscreen?: boolean; 
       if (action.type === "UPDATE_COURSE") course = { ...course, ...action.payload.patch, version: (course.version ?? 0) + 1, updatedAt: new Date().toISOString() };
       return json({ ok: true, requestId: body.requestId, courseVersion: course.version, updatedAt: course.updatedAt });
     }
+    if (path === `/api/platform/classroom-instances/${courseId}/experiment/results`) {
+      resultReads.push(request.url());
+      const studentRows = course.students.map((student, index) => ({ student: { id: student.id, displayName: student.name },
+        status: options.posttestResponses && index < 3 ? "submitted" : options.posttestResponses && index < 5 ? "in-progress" : "not-started",
+        submittedAt: options.posttestResponses && index < 3 ? fixedTime : null }));
+      return json({ enabled: true, status: "teaching", enrollmentCount: course.students.length, participantCount: course.students.length,
+        pretestCount: options.posttestResponses ? 3 : 0, posttestCount: options.posttestResponses ? 3 : 0,
+        posttestDraftCount: options.posttestResponses ? 2 : 0, posttestOpenedAt: fixedTime,
+        studentRows, variantCounts: { aPreBPost: 0, bPreAPost: 0 }, submissions });
+    }
+    if (path === "/api/platform/offerings/presentation-offering/research-export") {
+      const query = new URL(request.url()).searchParams;
+      exportCursors.push(query.get("cursor"));
+      return json({ rows: query.has("cursor") ? submissions.slice(3) : submissions.slice(0, 3), nextCursor: query.has("cursor") ? null : "page-2" });
+    }
     if (path === `/api/courses/${courseId}/showcase/presentation` && options.waitingShowcase) {
       if (request.method() === "POST") {
         if (body.action !== "assign" || typeof body.studentId !== "string") return route.fulfill({ status: 400, json: { message: "Fixture only allows queue assignment" } });
@@ -188,7 +185,7 @@ async function mockClassroom(page: Page, options: { rejectFullscreen?: boolean; 
   await expect(page.getByRole("button", { name: "全屏授课", exact: true }).filter({ visible: true })).toBeVisible().catch((cause) => {
     throw new Error(`Classroom fixture did not hydrate: ${JSON.stringify({ errors, unexpected })}`, { cause });
   });
-  return { writes, unexpected, errors, course: () => course };
+  return { writes, unexpected, errors, resultReads, exportCursors, submissions, course: () => course };
 }
 
 async function enterFullscreen(page: Page) {
@@ -197,7 +194,7 @@ async function enterFullscreen(page: Page) {
   await expect(page.getByRole("button", { name: "授课展示", exact: true })).toHaveAttribute("aria-pressed", "true");
 }
 
-async function assertNoPageOverflow(page: Page, mode: "classroom" | "reflection" = "classroom") {
+async function assertNoPageOverflow(page: Page, mode: "classroom" | "posttest" = "classroom") {
   const dimensions = await page.evaluate(() => ({
     width: document.documentElement.clientWidth,
     scrollWidth: document.documentElement.scrollWidth,
@@ -207,8 +204,8 @@ async function assertNoPageOverflow(page: Page, mode: "classroom" | "reflection"
   expect(dimensions.scrollWidth).toBeLessThanOrEqual(dimensions.width + 1);
   // The presentation's content area may scroll; the fixed outer frame must fit.
   expect(dimensions.scrollHeight).toBeLessThanOrEqual(dimensions.height + 1);
-  const controls = mode === "reflection"
-    ? ["退出全屏", "题目目录", "课堂操作", "工具"]
+  const controls = mode === "posttest"
+    ? ["退出全屏", "课堂操作", "工具", "教学建议", "结束课堂"]
     : ["退出全屏", "授课展示", "班级学情", "课堂操作", "工具", "教学建议", "结束课堂"];
   for (const name of controls) {
     const control = page.getByRole("button", { name, exact: true });
@@ -286,103 +283,61 @@ async function assertWorkspaceFrame(page: Page) {
   })).toBe(true);
 }
 
-async function enterReflection(page: Page) {
+async function enterPosttest(page: Page) {
   await enterFullscreen(page);
   await page.getByRole("combobox", { name: "全屏教学阶段" }).selectOption("4");
   await page.getByRole("dialog").getByRole("button", { name: /进入“/ }).click();
-  await expect(page.getByRole("region", { name: "反思问卷大屏", exact: true })).toBeVisible();
+  await expect(page.getByRole("region", { name: "后测进度", exact: true })).toBeVisible();
 }
 
-async function assertReflectionCloudFits(page: Page) {
-  const canvas = page.getByLabel("词云画布", { exact: true });
-  await canvas.scrollIntoViewIfNeeded();
-  // Fractional CSS pixels at narrow widths can leave a subpixel SVG edge
-  // outside the scrollport. Word bounds below still enforce readable glyphs.
-  await expect(canvas).toBeInViewport({ ratio: 0.995 });
-  const bounds = await canvas.evaluate((node) => {
-    const frame = node.getBoundingClientRect();
-    return { width: frame.width, height: frame.height, clipped: [...node.querySelectorAll("text")].filter((text) => {
-      const word = text.getBoundingClientRect();
-      return word.left < frame.left - 2 || word.right > frame.right + 2 || word.top < frame.top - 2 || word.bottom > frame.bottom + 2;
-    }).map((text) => text.textContent) };
-  });
-  expect(bounds.width).toBeGreaterThan(150);
-  expect(bounds.height).toBeGreaterThan(80);
-  expect(bounds.clipped).toEqual([]);
-  for (const control of [
-    page.getByRole("button", { name: "上一道反思题", exact: true }),
-    page.getByRole("combobox", { name: "选择反思题目" }),
-    page.getByRole("button", { name: "下一道反思题", exact: true }),
-  ]) {
-    await control.scrollIntoViewIfNeeded();
-    await expect(control).toBeInViewport({ ratio: 0.98 });
+async function assertPosttestCounts(page: Page, counts: [number, number, number]) {
+  const statistics = page.getByLabel("后测人数统计", { exact: true });
+  for (const [index, status] of ["未开始", "作答中", "已提交"].entries()) {
+    const card = statistics.locator(":scope > div").filter({ hasText: status });
+    await card.scrollIntoViewIfNeeded();
+    await expect(card).toBeInViewport({ ratio: 0.98 });
+    await expect(card.locator("strong")).toHaveText(String(counts[index]));
   }
-  await assertNoPageOverflow(page, "reflection");
+  const progress = page.getByRole("progressbar", { name: "后测提交进度", exact: true });
+  await expect(progress).toHaveAttribute("aria-valuenow", String(counts[2]));
+  await expect(progress).toHaveAttribute("aria-valuemax", String(counts.reduce((sum, count) => sum + count, 0)));
 }
 
 for (const viewport of [{ width: 1024, height: 576 }, { width: 1280, height: 720 }, { width: 1024, height: 768 }, { width: 1920, height: 1080 }, { width: 3840, height: 2160 }, { width: 390, height: 844 }]) {
-  test(`reflection questions show grounded clouds and per-option distributions ${viewport.width}x${viewport.height}`, async ({ page }, info) => {
+  test(`posttest progress protects projected answers and keeps teacher details usable ${viewport.width}x${viewport.height}`, async ({ page }, info) => {
     await page.setViewportSize(viewport);
-    const fixture = await mockClassroom(page, { reflectionResponses: true });
-    await enterReflection(page);
-    const board = page.getByRole("region", { name: "反思问卷大屏", exact: true });
-    await expect(board.getByRole("heading", { name: REFLECTION_SURVEY_QUESTIONS.learningReflection, exact: true })).toBeVisible();
-    const learningTerm = page.getByRole("button", { name: "证据比较，3 人提及", exact: true });
-    await expect(learningTerm).toBeVisible();
-    await expect(page.getByRole("button", { name: /系统导航，/ })).toHaveCount(0);
+    const fixture = await mockClassroom(page, { posttestResponses: true });
+    await enterPosttest(page);
+    const board = page.getByRole("region", { name: "后测进度", exact: true });
+    await assertPosttestCounts(page, [31, 2, 3]);
+    await expect(board).toContainText("3/36 人已提交正式后测。草稿不计入提交人数。");
     await expect(board).not.toContainText("私密学生");
-    await expect(board).not.toContainText("学习原文");
-    await assertReflectionCloudFits(page);
-    await screenshot(page, info, "reflection-learning-cloud");
-    await learningTerm.click();
-    const evidence = page.getByRole("dialog", { name: "主题“证据比较”的回答 · 3 人", exact: true });
-    await expect(evidence.getByText("私密学生1", { exact: true })).toBeVisible();
-    await expect(evidence).toContainText("学习原文1");
-    await expect(evidence).not.toContainText("系统原文");
-    await page.keyboard.press("Escape");
-    await page.getByRole("button", { name: "下一道反思题", exact: true }).click();
-    await expect(board.getByRole("heading", { name: REFLECTION_SURVEY_QUESTIONS.systemReflection, exact: true })).toBeVisible();
-    await expect(page.getByRole("button", { name: "系统导航，2 人提及", exact: true })).toBeVisible();
-    await expect(page.getByRole("button", { name: /证据比较，/ })).toHaveCount(0);
-    await assertReflectionCloudFits(page);
-    await screenshot(page, info, "reflection-system-cloud");
-    await page.getByRole("button", { name: "下一道反思题", exact: true }).click();
-    await expect(board.getByRole("heading", { name: REFLECTION_SURVEY_QUESTIONS.aiHelpfulness, exact: true })).toBeVisible();
-    await expect(page.getByRole("button", { name: "同意，2 人，67%", exact: true })).toBeVisible();
-    await expect(page.getByRole("button", { name: "非常同意，1 人，33%", exact: true })).toBeVisible();
-    await expect(page.getByRole("button", { name: "非常不同意，0 人，0%", exact: true })).toBeVisible();
-    await expect(board).not.toContainText("私密学生");
-    await screenshot(page, info, "reflection-scale-distribution");
-    await page.getByRole("button", { name: "同意，2 人，67%", exact: true }).click();
-    const selected = page.getByRole("dialog", { name: "选择“同意”的回答 · 2 人", exact: true });
-    await expect(selected).toContainText("私密学生1");
-    await expect(selected).toContainText("私密学生2");
-    await expect(selected).not.toContainText("私密学生3");
-    await page.keyboard.press("Escape");
-    await page.getByRole("combobox", { name: "选择反思题目" }).selectOption("3");
-    await expect(board.getByRole("heading", { name: REFLECTION_SURVEY_QUESTIONS.systemUsability, exact: true })).toBeVisible();
-    await expect(page.getByRole("button", { name: "不确定，3 人，100%", exact: true })).toBeVisible();
-    await page.getByRole("button", { name: "题目目录", exact: true }).click();
-    await page.getByRole("navigation", { name: "反思题目目录" }).getByRole("button", { name: new RegExp(REFLECTION_SURVEY_QUESTIONS.reuseIntention) }).click();
-    await expect(board.getByRole("heading", { name: REFLECTION_SURVEY_QUESTIONS.reuseIntention, exact: true })).toBeVisible();
-    await expect(page.getByRole("button", { name: "非常同意，2 人，67%", exact: true })).toBeVisible();
-    await expect(page.getByRole("button", { name: "下一道反思题", exact: true })).toBeDisabled();
-    await page.getByRole("button", { name: "上一道反思题", exact: true }).click();
-    await expect(board.getByRole("heading", { name: REFLECTION_SURVEY_QUESTIONS.systemUsability, exact: true })).toBeVisible();
-    await page.getByRole("button", { name: "查看本题回答", exact: true }).click();
-    const allAnswers = page.getByRole("dialog", { name: "本题回答 · 3 人", exact: true });
-    await expect(allAnswers).toContainText("私密学生1");
-    await expect(allAnswers).toContainText("私密学生3");
-    await page.keyboard.press("Escape");
-    await page.getByRole("combobox", { name: "选择反思题目" }).selectOption("0");
-    await expect(board.getByRole("heading", { name: REFLECTION_SURVEY_QUESTIONS.learningReflection, exact: true })).toBeVisible();
-    await expect(page.getByRole("button", { name: "证据比较，3 人提及", exact: true })).toBeVisible();
-    await expect(board).not.toContainText("私密学生");
-    await assertReflectionCloudFits(page);
+    await expect(board).not.toContainText("后测原文");
+    await assertNoPageOverflow(page, "posttest");
+    await screenshot(page, info, "posttest-projected-progress");
+
     await page.getByRole("button", { name: "课堂操作", exact: true }).click();
-    await expect(page.getByRole("button", { name: "返回展示", exact: true })).toBeVisible();
+    await assertWorkspaceFrame(page);
+    await expect(board.getByRole("link", { name: "实验配置", exact: true })).toHaveAttribute("href", "/teacher/classes/presentation-offering/activities/presentation-activity/experiment");
+    const student = board.locator("#posttest-student-student-0");
+    await student.locator("summary").click();
+    const pretest = student.getByRole("region", { name: "前测正式答案", exact: true });
+    const posttest = student.getByRole("region", { name: "后测正式答案", exact: true });
+    await expect(pretest).toContainText("前测原文1");
+    await expect(pretest).not.toContainText("后测原文");
+    await expect(posttest).toContainText("后测原文1");
+    await expect(posttest).not.toContainText("前测原文");
+    await expect(posttest).toContainText("参考答案：统一观察时长并记录数量");
+    await expect(posttest).toContainText("客观题 1/1");
+    const answer = posttest.getByText("学生作答：后测原文1：对比同一时段的用电数据，核验节能方案。", { exact: true });
+    await answer.scrollIntoViewIfNeeded();
+    await expect(answer).toBeInViewport({ ratio: 1 });
+    await screenshot(page, info, "posttest-formal-answers");
     await page.getByRole("button", { name: "返回展示", exact: true }).click();
-    await expect(board).toBeVisible();
+    await expect(board).not.toContainText("私密学生");
+    await expect(board.getByRole("region", { name: "后测正式答案" })).toHaveCount(0);
+    await assertPosttestCounts(page, [31, 2, 3]);
+    await assertNoPageOverflow(page, "posttest");
     expect(fixture.course().currentStageIndex).toBe(4);
     expect(fixture.writes).toHaveLength(1);
     expect(fixture.writes[0]!.body.action).toMatchObject({ type: "UPDATE_COURSE", payload: { patch: { currentStageIndex: 4 } } });
@@ -391,34 +346,44 @@ for (const viewport of [{ width: 1024, height: 576 }, { width: 1280, height: 720
   });
 }
 
-test("empty reflection questions keep all zero choices and never fabricate a cloud", async ({ page }) => {
+test("empty posttest results show no submitted students or invented formal answers", async ({ page }) => {
   const fixture = await mockClassroom(page);
-  await enterReflection(page);
-  await expect(page.getByText("本题暂未收到回答", { exact: true })).toBeVisible();
-  await expect(page.getByRole("button", { name: "更新词云", exact: true })).toBeDisabled();
-  await expect(page.getByLabel("词云画布", { exact: true })).toHaveCount(0);
-  await page.getByRole("combobox", { name: "选择反思题目" }).selectOption("2");
-  await expect(page.getByRole("button", { name: /，0 人，0%$/ })).toHaveCount(5);
-  await page.getByRole("button", { name: "查看本题回答", exact: true }).click();
-  await expect(page.getByRole("dialog", { name: "本题回答 · 0 人", exact: true })).toContainText("暂无符合条件的回答");
+  await enterPosttest(page);
+  await assertPosttestCounts(page, [36, 0, 0]);
+  await expect(page.getByRole("region", { name: "后测进度" })).toContainText("0/36 人已提交正式后测。");
+  await page.getByRole("button", { name: "课堂操作", exact: true }).click();
+  const board = page.getByRole("region", { name: "后测进度", exact: true });
+  await expect(board.locator('[id^="posttest-student-"]')).toHaveCount(36);
+  await expect(board.locator("details")).toHaveCount(0);
+  await expect(board.getByRole("region", { name: /正式答案$/ })).toHaveCount(0);
+  await expect(board.locator("#posttest-student-student-0")).toContainText("未开始");
   expect(fixture.writes).toHaveLength(1);
   expect(fixture.unexpected).toEqual([]);
   expect(fixture.errors).toEqual([]);
 });
 
-test("custom course reflection questions ground each cloud in that question's original answer", async ({ page }) => {
-  await page.setViewportSize({ width: 1920, height: 1080 });
-  const fixture = await mockClassroom(page, { customReflection: true });
-  await enterReflection(page);
-  await expect(page.getByRole("heading", { name: "这次项目中你如何比较证据？", exact: true })).toBeVisible();
-  await expect(page.getByRole("button", { name: "证据比较，3 人提及", exact: true })).toBeVisible();
-  await expect(page.getByRole("button", { name: /系统导航，/ })).toHaveCount(0);
-  await page.getByRole("button", { name: "下一道反思题", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "下一次如何改进你的协作过程？", exact: true })).toBeVisible();
-  await page.getByRole("button", { name: "系统导航，2 人提及", exact: true }).click();
-  const dialog = page.getByRole("dialog");
-  await expect(dialog).toContainText("系统原文1");
-  await expect(dialog).not.toContainText("学习原文");
+test("posttest refresh and paginated export preserve each student's formal pretest and posttest", async ({ page }, info) => {
+  await page.setViewportSize({ width: 1024, height: 576 });
+  const fixture = await mockClassroom(page, { posttestResponses: true });
+  await enterPosttest(page);
+  await page.getByRole("button", { name: "课堂操作", exact: true }).click();
+  const reads = fixture.resultReads.length;
+  await page.getByRole("button", { name: "刷新进度", exact: true }).click();
+  await expect.poll(() => fixture.resultReads.length).toBeGreaterThan(reads);
+  await expect(page.getByRole("button", { name: "刷新进度", exact: true })).toBeEnabled();
+  const board = page.getByRole("region", { name: "后测进度", exact: true });
+  await expect(board.locator("#posttest-student-student-3")).toContainText("作答中");
+  await expect(board.locator("#posttest-student-student-3 details")).toHaveCount(0);
+  const downloadPromise = page.waitForEvent("download");
+  await page.getByRole("button", { name: "导出实验数据", exact: true }).click();
+  const download = await downloadPromise;
+  expect(download.suggestedFilename()).toBe("classroom-experiments-presentation-offering.json");
+  const path = info.outputPath(download.suggestedFilename());
+  await download.saveAs(path);
+  const exported = JSON.parse(readFileSync(path, "utf8"));
+  expect(exported.rows).toEqual(fixture.submissions);
+  expect(exported.rows).toHaveLength(6);
+  expect(fixture.exportCursors).toEqual([null, "page-2"]);
   expect(fixture.writes).toHaveLength(1);
   expect(fixture.unexpected).toEqual([]);
   expect(fixture.errors).toEqual([]);
@@ -699,14 +664,14 @@ test("five stages retain controls, hide details on view/stage changes, and prese
     }
     await expect(page.getByRole("heading", { name: DEFAULT_STAGES[index]!.label, exact: true }).first()).toBeVisible();
     if (index === 4) {
-      const reflection = page.getByRole("region", { name: /^(反思问卷大屏|班级学情大屏)$/ });
-      await expect(reflection).toBeVisible();
-      await screenshot(page, info, "stage-4-reflection");
+      const posttest = page.getByRole("region", { name: "后测进度", exact: true });
+      await expect(posttest).toBeVisible();
+      await screenshot(page, info, "stage-4-posttest");
       await page.getByRole("button", { name: "课堂操作", exact: true }).click();
       await assertWorkspaceFrame(page);
       await page.getByRole("button", { name: /^返回(展示|汇总)$/ }).click();
-      await expect(reflection).toBeVisible();
-      await assertNoPageOverflow(page, "reflection");
+      await expect(posttest).toBeVisible();
+      await assertNoPageOverflow(page, "posttest");
       continue;
     }
     await page.getByRole("button", { name: "授课展示", exact: true }).click();

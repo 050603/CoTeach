@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { Dialog as DialogPrimitive } from "radix-ui";
 import {
   Bot,
   CheckCircle2,
@@ -20,6 +21,7 @@ import type {
 import { browserRandomUUID } from "@/lib/browser/random-uuid";
 import { cn } from "@/lib/utils";
 import { dispatchPlaybackModalBlock } from "@openmaic/lib/playback/activity-events";
+import styles from "./knowledge-lecture-board.module.css";
 
 /** Keep the same receipt across a lost response or a page reload. */
 export async function fetchTutor(body: Record<string, unknown>): Promise<Response> {
@@ -137,6 +139,8 @@ export function KnowledgeLectureBoard({
   const [audioSettings, setAudioSettings] = useState<TutorAudioSettings>();
   const [audioState, setAudioState] = useState<"idle" | "loading" | "playing" | "paused">("idle");
   const audioRef = useRef<HTMLAudioElement | undefined>(undefined);
+  const returnFocusRef = useRef<HTMLElement | null>(null);
+  const closeButtonRef = useRef<HTMLButtonElement>(null);
   const audioQueueRef = useRef<AudioQueueItem[]>([]);
   const queuedAudioIdsRef = useRef(new Set<string>());
   const drainingAudioRef = useRef(false);
@@ -396,21 +400,43 @@ export function KnowledgeLectureBoard({
   if (!question) return null;
 
   return (
-    <div className="fixed inset-0 z-[140] grid place-items-center bg-stone-950/55 p-2 backdrop-blur-sm sm:p-5" role="dialog" aria-modal="true" aria-label="助教题目讲解">
-      <div className="flex h-[min(900px,calc(100dvh-16px))] w-full max-w-[1500px] flex-col overflow-hidden rounded-[18px] border border-white/20 bg-[#eef0eb] shadow-2xl sm:h-[min(900px,calc(100dvh-40px))]">
-        <header className="flex min-h-16 shrink-0 items-center gap-3 border-b border-stone-300 bg-white px-4 py-3 sm:px-5">
+    <DialogPrimitive.Root open onOpenChange={(open) => { if (!open) onClose(); }}>
+      {/* Keep the dialog inside the player so native fullscreen contains it too. */}
+      <DialogPrimitive.Overlay className="fixed inset-0 z-[140] grid place-items-center bg-stone-950/55 p-2 backdrop-blur-sm sm:p-5">
+      <DialogPrimitive.Content
+        aria-describedby={undefined}
+        className={cn(styles.dialog, "flex h-[min(900px,calc(100dvh-16px))] w-full max-w-[1500px] flex-col overflow-hidden rounded-[18px] border border-white/20 bg-[#eef0eb] shadow-2xl sm:h-[min(900px,calc(100dvh-40px))]")}
+        onOpenAutoFocus={(event) => {
+          returnFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+          event.preventDefault();
+          closeButtonRef.current?.focus();
+        }}
+        onCloseAutoFocus={(event) => {
+          event.preventDefault();
+          if (returnFocusRef.current?.isConnected) returnFocusRef.current.focus();
+        }}
+        onEscapeKeyDown={(event) => {
+          event.stopPropagation();
+          if (event.isComposing || event.keyCode === 229) event.preventDefault();
+        }}
+        onInteractOutside={(event) => event.preventDefault()}
+        onKeyDown={(event) => event.stopPropagation()}
+        onKeyUp={(event) => event.stopPropagation()}
+      >
+        <DialogPrimitive.Title className="sr-only">助教题目讲解</DialogPrimitive.Title>
+        <header className={cn(styles.header, "flex min-h-16 shrink-0 items-center gap-3 border-b border-stone-300 bg-white px-4 py-3 sm:px-5")}>
           <span className="grid size-10 shrink-0 place-items-center rounded-xl bg-cyan-950 text-white"><Bot size={19} /></span>
           <div className="shrink-0">
             <h2 className="text-sm font-black text-stone-950 sm:text-base">伴学助教</h2>
           </div>
-          <nav className="mx-auto flex min-w-0 flex-1 justify-center gap-1.5 overflow-x-auto px-2" aria-label="小测题目切换">
+          <nav className={cn(styles.questions, "mx-auto flex min-w-0 flex-1 justify-center gap-1.5 overflow-x-auto px-2")} aria-label="小测题目切换">
             {attempt.questions.map((item, index) => (
                   <button className={cn("inline-flex h-8 shrink-0 items-center gap-1.5 rounded-full border px-3 text-xs font-bold", index === questionIndex ? "border-cyan-900 bg-cyan-950 text-white" : item.gradingStatus === "pending" || item.gradingStatus === "failed" ? "border-sky-200 bg-sky-50 text-sky-800" : item.questionType === "short_answer" ? "border-cyan-200 bg-cyan-50 text-cyan-800" : item.correct ? "border-emerald-200 bg-emerald-50 text-emerald-700" : "border-amber-200 bg-amber-50 text-amber-800")} key={item.questionId} onClick={() => selectQuestion(index)} type="button">
                 {item.correct ? <CheckCircle2 size={13} /> : <CircleHelp size={13} />}第 {index + 1} 题
               </button>
             ))}
           </nav>
-          <div className="flex shrink-0 items-center gap-2">
+          <div className={cn(styles.audioControls, "flex shrink-0 items-center gap-2")}>
             {!thread?.messages.some(item => item.role === "assistant") && !initialExplaining && error && (
               <button className="inline-flex h-9 items-center rounded-lg border border-amber-300 bg-amber-50 px-3 text-xs font-bold text-amber-900" type="button"
                 onClick={() => { requestedExplanationRef.current.delete(`${attempt.id}:${question.questionId}`); setExplanationRetry(value => value + 1); }}>重试讲解</button>
@@ -423,12 +449,12 @@ export function KnowledgeLectureBoard({
               {audioState === "playing" ? "暂停播放" : audioState === "paused" ? "继续播放" : audioState === "loading" ? "正在准备" : "继续播放"}
             </button>
           </div>
-          <button className="grid size-9 place-items-center rounded-full text-stone-500 hover:bg-stone-100" onClick={onClose} type="button" aria-label="关闭讲解"><X size={19} /></button>
+          <button ref={closeButtonRef} className={cn(styles.close, "grid size-9 shrink-0 place-items-center rounded-full text-stone-500 hover:bg-stone-100")} onClick={onClose} type="button" aria-label="关闭讲解"><X size={19} /></button>
         </header>
 
-        <div className="flex min-h-0 flex-1 flex-col lg:grid lg:grid-cols-[minmax(0,1fr)_340px]">
-          <main className="flex min-h-0 flex-col p-3 sm:p-4">
-            <section className="relative min-h-0 flex-1 overflow-y-auto rounded-xl border-[10px] border-[#6f4b32] bg-[#153d35] px-5 py-6 text-[#f5f2df] shadow-[inset_0_0_30px_rgba(0,0,0,.35),0_12px_30px_rgba(31,41,35,.18)] sm:px-8 sm:py-7">
+        <div className={styles.body}>
+          <main className={cn(styles.board, "flex min-h-0 flex-col p-3 sm:p-4")}>
+            <section aria-label="题目与板书解析" className={cn(styles.notes, "relative min-h-0 flex-1 overflow-y-auto rounded-xl border-[10px] border-[#6f4b32] bg-[#153d35] px-5 py-6 text-[#f5f2df] shadow-[inset_0_0_30px_rgba(0,0,0,.35),0_12px_30px_rgba(31,41,35,.18)] sm:px-8 sm:py-7")}>
               <div className="pointer-events-none absolute inset-0 opacity-[.07]" style={{ backgroundImage: "radial-gradient(circle at 20% 30%,white 0,transparent 1px)", backgroundSize: "17px 19px" }} />
               <div className="relative mx-auto max-w-5xl space-y-7 font-editorial">
                 <section className="border-b border-dashed border-white/30 pb-5">
@@ -480,21 +506,22 @@ export function KnowledgeLectureBoard({
             </section>
           </main>
 
-          <aside className="flex min-h-[280px] flex-col border-t border-stone-300 bg-white lg:min-h-0 lg:border-l lg:border-t-0">
+          <aside aria-label="助教追问" className={cn(styles.chat, "flex flex-col border-t border-stone-300 bg-white lg:border-l lg:border-t-0")}>
             <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-4">
               {(thread?.messages ?? []).map((item) => <div className={cn("max-w-[92%] rounded-xl p-3 text-sm leading-6", item.role === "student" ? "ml-auto rounded-tr-sm bg-cyan-950 text-white" : "rounded-tl-sm bg-stone-100 text-stone-800")} key={item.id}>{item.content}</div>)}
             </div>
             <div className="border-t border-stone-100 p-3">
               <div className="mb-2 flex gap-1.5 overflow-x-scroll pb-2 [scrollbar-color:#94a3b8_#e7e5e4] [scrollbar-width:thin] [&::-webkit-scrollbar]:h-1.5 [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-slate-400 [&::-webkit-scrollbar-track]:rounded-full [&::-webkit-scrollbar-track]:bg-stone-200">{["我错在哪一步？", "请换个简单例子", "帮我梳理答题关键词"].map((prompt) => <button className="inline-flex h-7 min-w-[124px] shrink-0 items-center justify-center gap-1 whitespace-nowrap rounded-full bg-stone-100 px-2.5 text-[10px] font-bold text-stone-600 hover:bg-stone-200" key={prompt} onClick={() => setMessage(prompt)} type="button"><MessageCircleQuestion size={11} />{prompt}</button>)}</div>
               <div className="flex gap-2">
-                <textarea className="min-h-20 flex-1 resize-none rounded-xl border border-stone-200 bg-stone-50 px-3 py-2.5 text-sm outline-none focus:border-cyan-700 focus:bg-white" maxLength={1000} onChange={(event) => setMessage(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void sendMessage(); } }} placeholder="把不明白的地方告诉助教…" value={message} />
-                <button className="grid w-11 place-items-center rounded-xl bg-cyan-950 text-white disabled:opacity-40" disabled={!message.trim() || sending || initialExplaining} onClick={() => void sendMessage()} type="button" aria-label="发送追问">{sending || initialExplaining ? <Loader2 className="animate-spin" size={18} /> : <Send size={18} />}</button>
+                <textarea className="min-h-20 min-w-0 flex-1 resize-none rounded-xl border border-stone-200 bg-stone-50 px-3 py-2.5 text-sm outline-none focus:border-cyan-700 focus:bg-white" maxLength={1000} onChange={(event) => setMessage(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing && event.keyCode !== 229) { event.preventDefault(); void sendMessage(); } }} placeholder="把不明白的地方告诉助教…" value={message} />
+                <button className="grid w-11 shrink-0 place-items-center rounded-xl bg-cyan-950 text-white disabled:opacity-40" disabled={!message.trim() || sending || initialExplaining} onClick={() => void sendMessage()} type="button" aria-label="发送追问">{sending || initialExplaining ? <Loader2 className="animate-spin" size={18} /> : <Send size={18} />}</button>
               </div>
               {error ? <p className="mt-2 text-xs font-semibold text-rose-700">{error}</p> : null}
             </div>
           </aside>
         </div>
-      </div>
-    </div>
+      </DialogPrimitive.Content>
+      </DialogPrimitive.Overlay>
+    </DialogPrimitive.Root>
   );
 }

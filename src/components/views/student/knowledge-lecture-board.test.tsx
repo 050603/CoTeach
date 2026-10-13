@@ -85,4 +85,62 @@ describe("KnowledgeLectureBoard question context", () => {
     expect(candidates.getByText("结果")).toBeInTheDocument();
     expect(candidates.getByText("条件")).toBeInTheDocument();
   });
+
+  it("keeps composing and Shift+Enter in the draft, then sends on a plain Enter", async () => {
+    const fetch = vi.fn(async (url: string) => Response.json(url.endsWith("/settings") ? {} : { thread }));
+    vi.stubGlobal("fetch", fetch);
+    render(<KnowledgeLectureBoard attempt={attempt} courseId="course-1" studentId="student-1" knowledgePointNames={new Map()} initialThreads={[thread]} onClose={vi.fn()} />);
+    const input = screen.getByPlaceholderText("把不明白的地方告诉助教…");
+    fireEvent.change(input, { target: { value: "请解释变化方向" } });
+    fireEvent.keyDown(input, { key: "Enter", isComposing: true });
+    fireEvent.keyDown(input, { key: "Enter", keyCode: 229 });
+    fireEvent.keyDown(input, { key: "Enter", shiftKey: true });
+    expect(fetch.mock.calls.filter(([url]) => url === "/api/knowledge-lecture")).toHaveLength(0);
+    expect(input).toHaveValue("请解释变化方向");
+    fireEvent.keyDown(input, { key: "Enter" });
+    await waitFor(() => expect(fetch).toHaveBeenCalledWith("/api/knowledge-lecture", expect.objectContaining({
+      body: expect.stringContaining('"message":"请解释变化方向"'),
+    })));
+  });
+
+  it("moves focus inside, traps Tab and restores the previous control when closed", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => Response.json({})));
+    const trigger = document.createElement("button");
+    document.body.append(trigger);
+    trigger.focus();
+    const { unmount } = render(<KnowledgeLectureBoard attempt={attempt} courseId="course-1" studentId="student-1" knowledgePointNames={new Map()} initialThreads={[thread]} onClose={vi.fn()} />);
+    const dialog = screen.getByRole("dialog", { name: "助教题目讲解" });
+    expect(dialog).toContainElement(document.activeElement as HTMLElement);
+    const first = within(dialog).getAllByRole("button")[0]!;
+    const last = screen.getByRole("button", { name: "发送追问" });
+    fireEvent.change(screen.getByPlaceholderText("把不明白的地方告诉助教…"), { target: { value: "问题" } });
+    last.focus();
+    fireEvent.keyDown(last, { key: "Tab" });
+    expect(first).toHaveFocus();
+    fireEvent.keyDown(first, { key: "Tab", shiftKey: true });
+    expect(last).toHaveFocus();
+    unmount();
+    await waitFor(() => expect(trigger).toHaveFocus());
+    trigger.remove();
+  });
+
+  it("isolates player shortcuts and only closes on a non-composing Escape", () => {
+    vi.stubGlobal("fetch", vi.fn(async () => Response.json({})));
+    const onClose = vi.fn();
+    const playerShortcut = vi.fn();
+    window.addEventListener("keydown", playerShortcut);
+    try {
+      render(<KnowledgeLectureBoard attempt={attempt} courseId="course-1" studentId="student-1" knowledgePointNames={new Map()} initialThreads={[thread]} onClose={onClose} />);
+      const input = screen.getByPlaceholderText("把不明白的地方告诉助教…");
+      fireEvent.keyDown(input, { key: "ArrowRight" });
+      fireEvent.keyDown(input, { key: " ", code: "Space" });
+      expect(playerShortcut).not.toHaveBeenCalled();
+      fireEvent.keyDown(input, { key: "Escape", isComposing: true });
+      expect(onClose).not.toHaveBeenCalled();
+      fireEvent.keyDown(input, { key: "Escape" });
+      expect(onClose).toHaveBeenCalledTimes(1);
+    } finally {
+      window.removeEventListener("keydown", playerShortcut);
+    }
+  });
 });

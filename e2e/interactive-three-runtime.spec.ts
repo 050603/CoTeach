@@ -1,7 +1,8 @@
 import { expect, test } from '@playwright/test';
 import { patchHtmlForIframe } from '../src/lib/openmaic/utils/iframe';
 
-test('sandboxed Three.js and OrbitControls load locally and render a 3D scene under production CSP', async ({ page }) => {
+for (const hostPath of ['/', '/internal/resource-player']) {
+test(`${hostPath}: sandboxed Three.js and OrbitControls load locally and render a 3D scene under production CSP`, async ({ page }) => {
   const diagnostics: string[] = [];
   const runtimeResponses: Array<{ url: string; status: number }> = [];
   const externalRequests: string[] = [];
@@ -14,7 +15,7 @@ test('sandboxed Three.js and OrbitControls load locally and render a 3D scene un
     externalRequests.push(route.request().url());
     return route.abort();
   });
-  await page.goto('/');
+  await page.goto(hostPath);
   const html = `<!doctype html><html><head>
     <script type="importmap">{"imports": {
       "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
@@ -35,12 +36,13 @@ test('sandboxed Three.js and OrbitControls load locally and render a 3D scene un
         controls.update();
         scene.add(new THREE.Mesh(new THREE.BoxGeometry(), new THREE.MeshBasicMaterial({ color: 0x2288dd })));
         renderer.render(scene, camera);
-        window.parent.postMessage({ threeProbe: true, revision: THREE.REVISION, paths: renderer.domElement.querySelectorAll('path').length }, '*');
+        window.parent.postMessage({ threeProbe: true, revision: THREE.REVISION, paths: renderer.domElement.querySelectorAll('path').length,
+          resources: performance.getEntriesByType('resource').map(entry => entry.name) }, '*');
       } catch (error) {
         window.parent.postMessage({ threeProbe: true, error: String(error) }, '*');
       }
     </script></body></html>`;
-  const result = await page.evaluate((srcdoc) => new Promise<{ revision?: string; paths?: number; error?: string }>((resolve) => {
+  const result = await page.evaluate((srcdoc) => new Promise<{ revision?: string; paths?: number; error?: string; resources?: string[] }>((resolve) => {
     const timer = window.setTimeout(() => resolve({ error: 'Three.js runtime timed out' }), 15_000);
     const onMessage = (event: MessageEvent) => {
       if (!event.data?.threeProbe) return;
@@ -60,9 +62,15 @@ test('sandboxed Three.js and OrbitControls load locally and render a 3D scene un
   expect(result.revision).toBe('160');
   expect(result.paths).toBeGreaterThan(0);
   expect(externalRequests).toEqual([]);
-  // Branded Chromium may deliver the sandbox's network events after its
-  // postMessage. Wait for those events before checking the completed imports.
-  await expect.poll(() => runtimeResponses.length).toBeGreaterThanOrEqual(4);
+  // An out-of-process opaque iframe can finish imports before Playwright attaches
+  // its network observer. Inspect the executing document's resource timeline too.
+  const loadedModules = result.resources?.filter(url => url.includes('/interactive-runtime/three/')) ?? [];
+  for (const file of ['build/three.module.js', 'controls/OrbitControls.js', 'renderers/SVGRenderer.js', 'renderers/Projector.js']) {
+    expect(loadedModules.some(url => url.endsWith(file)), JSON.stringify(loadedModules)).toBe(true);
+  }
+  expect(loadedModules.every(url => new URL(url).origin === new URL(page.url()).origin)).toBe(true);
   expect(runtimeResponses.every((response) => response.status === 200)).toBe(true);
   await expect(page.locator('#three-runtime-probe')).toHaveAttribute('sandbox', 'allow-scripts');
 });
+
+}

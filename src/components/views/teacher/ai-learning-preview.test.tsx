@@ -39,6 +39,16 @@ const course = {
 describe("AiLearningTeacherPreview", () => {
   beforeEach(() => vi.clearAllMocks());
 
+  it("suspends the retained preview while the parent shows public discussion", () => {
+    const view = render(<AiLearningTeacherPreview course={course} presentation="teaching" />);
+    const player = screen.getByTestId("student-stage-host");
+    view.rerender(<AiLearningTeacherPreview course={course} presentation="teaching" active={false} />);
+    expect(screen.getByTestId("student-stage-host")).toBe(player);
+    expect(hostPropsSpy).toHaveBeenLastCalledWith(expect.objectContaining({ active: false }));
+    view.rerender(<AiLearningTeacherPreview course={course} presentation="teaching" active />);
+    expect(hostPropsSpy).toHaveBeenLastCalledWith(expect.objectContaining({ active: true }));
+  });
+
   it("controls the same teacher preview from the fullscreen footer", () => {
     const target = render(<div />).container.firstElementChild as HTMLElement;
     render(<TeacherPresentationActionsProvider target={target}>
@@ -52,7 +62,7 @@ describe("AiLearningTeacherPreview", () => {
     expect(screen.getByTestId("student-stage-host")).toBe(player);
   });
 
-  it("starts collapsed and unmounts the normal-page player when collapsed again", () => {
+  it("loads on first expansion and pauses without losing the player when collapsed", () => {
     render(<AiLearningTeacherPreview course={course} />);
 
     const toggle = screen.getByRole("button", { name: /学生知识讲授课程预览/ });
@@ -60,12 +70,17 @@ describe("AiLearningTeacherPreview", () => {
     expect(screen.queryByTestId("student-stage-host")).toBeNull();
 
     fireEvent.click(toggle);
-    expect(screen.getByTestId("student-stage-host")).toBeTruthy();
+    const player = screen.getByTestId("student-stage-host");
     expect(toggle.getAttribute("aria-expanded")).toBe("true");
 
     fireEvent.click(toggle);
-    expect(screen.queryByTestId("student-stage-host")).toBeNull();
-    expect(hostUnmountSpy).toHaveBeenCalledTimes(1);
+    expect(screen.getByTestId("student-stage-host")).toBe(player);
+    expect(player.closest('[hidden]')).toBeTruthy();
+    expect(hostPropsSpy).toHaveBeenLastCalledWith(expect.objectContaining({ active: false }));
+    expect(hostUnmountSpy).not.toHaveBeenCalled();
+    fireEvent.click(toggle);
+    expect(screen.getByTestId("student-stage-host")).toBe(player);
+    expect(hostPropsSpy).toHaveBeenLastCalledWith(expect.objectContaining({ active: true }));
   });
 
   it("opens the page rail and supplies the knowledge graph to the player", () => {
@@ -113,8 +128,10 @@ describe("AiLearningTeacherPreview", () => {
     expect(screen.getByTestId("student-stage-host")).toBe(player);
     expect(hostPropsSpy).toHaveBeenLastCalledWith(expect.objectContaining({ mode: "teacher-preview", sidebarCollapsed: true }));
     view.rerender(<AiLearningTeacherPreview course={course} presentation="analytics" />);
+    expect(hostPropsSpy).toHaveBeenLastCalledWith(expect.objectContaining({ active: false }));
     expect(player.closest('[hidden]')).toBeTruthy();
     view.rerender(<AiLearningTeacherPreview course={course} presentation="teaching" />);
+    expect(hostPropsSpy).toHaveBeenLastCalledWith(expect.objectContaining({ active: true }));
     view.rerender(<AiLearningTeacherPreview course={course} />);
     expect(screen.getByTestId("student-stage-host")).toBe(player);
     expect(player.closest('[hidden]')).toBeNull();

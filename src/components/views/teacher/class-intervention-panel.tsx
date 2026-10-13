@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ChevronRight,
   CircleAlert,
@@ -119,6 +119,8 @@ export function ClassInterventionPanel({
   const [selectedScene, setSelectedScene] = useState<Scene>();
   const [loadingOutlineId, setLoadingOutlineId] = useState("");
   const [sceneCache, setSceneCache] = useState<Scene[]>();
+  const sceneRequestRef = useRef<AbortController | null>(null);
+  useEffect(() => () => { sceneRequestRef.current?.abort(); }, [course.id, course.aiLearningClassroomId]);
   const [selectionSource, setSelectionSource] = useState<"teacher" | "recommendation">("teacher");
   const [selectedRecommendationId, setSelectedRecommendationId] = useState("");
   const projection = course.uiState?.teacherResourceProjection;
@@ -136,6 +138,9 @@ export function ClassInterventionPanel({
     outline: OpenMaicSceneOutlineSnapshot,
     source: "teacher" | "recommendation" = "teacher",
   ): Promise<Scene | undefined> {
+    sceneRequestRef.current?.abort();
+    const controller = new AbortController();
+    sceneRequestRef.current = controller;
     setSelectionSource(source);
     setSelectedOutlineId(outline.id);
     if (selectedOutlineId !== outline.id) setSelectedScene(undefined);
@@ -143,6 +148,7 @@ export function ClassInterventionPanel({
       scene.outlineId === outline.id || scene.title === outline.title,
     );
     if (cached) {
+      setLoadingOutlineId("");
       setSelectedScene(cached);
       return cached;
     }
@@ -152,9 +158,10 @@ export function ClassInterventionPanel({
     }
     setLoadingOutlineId(outline.id);
     try {
-      const response = await fetch(`/api/openmaic/classroom?id=${encodeURIComponent(course.aiLearningClassroomId)}`, { cache: "no-store" });
+      const response = await fetch(`/api/openmaic/classroom?id=${encodeURIComponent(course.aiLearningClassroomId)}`, { cache: "no-store", signal: controller.signal });
       if (!response.ok) throw new Error(`页面加载失败（HTTP ${response.status}）`);
       const payload = await response.json() as { classroom?: { scenes?: Scene[] } };
+      if (controller.signal.aborted || sceneRequestRef.current !== controller) return undefined;
       const scenes = payload.classroom?.scenes ?? [];
       setSceneCache(scenes);
       const scene = scenes.find((item) => item.outlineId === outline.id || item.title === outline.title);
@@ -162,10 +169,11 @@ export function ClassInterventionPanel({
       setSelectedScene(scene);
       return scene;
     } catch (error) {
+      if (controller.signal.aborted) return undefined;
       toast.error(error instanceof Error ? error.message : "页面加载失败");
       return undefined;
     } finally {
-      setLoadingOutlineId("");
+      if (!controller.signal.aborted && sceneRequestRef.current === controller) setLoadingOutlineId("");
     }
   }
 

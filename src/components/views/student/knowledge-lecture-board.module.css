@@ -1,0 +1,70 @@
+.dialog {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 340px;
+  flex: 1;
+  min-height: 0;
+}
+
+.board,
+.chat {
+  min-width: 0;
+  min-height: 0;
+}
+
+@media (max-width: 1023px) {
+  /* One scroll area retains both the explanation and the composer at low height. */
+  .body {
+    display: block;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+
+  .notes {
+    flex: none;
+    overflow: visible;
+  }
+
+  .chat {
+    min-height: 280px;
+    max-height: 480px;
+  }
+}
+
+@media (max-width: 639px) {
+  .header {
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  .close {
+    margin-left: auto;
+  }
+
+  .questions {
+    order: 2;
+    flex-basis: 100%;
+    justify-content: flex-start;
+  }
+
+  .audioControls {
+    order: 3;
+    flex-basis: 100%;
+    flex-wrap: wrap;
+  }
+}
+
+@media (pointer: coarse) {
+  .dialog button {
+    min-height: 44px;
+    min-width: 44px;
+  }
+
+  .dialog textarea {
+    font-size: 16px;
+  }
+}

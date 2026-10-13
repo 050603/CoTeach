@@ -95,8 +95,7 @@ export default function StudentClassroomPage() {
       : null;
   const forcedProjection = projectedResource && projectedResource.mode !== "optional" ? projectedResource : null;
   const optionalProjection = projectedResource?.mode === "optional" ? projectedResource : null;
-  // Both OpenMAIC players share the stage store. Mount only the visible player;
-  // otherwise personal progress hydration replaces the teacher's projected scene.
+  // Suspend personal playback while the student watches the teacher's scene.
   // Remounting personal learning restores its persisted progress after projection.
   const teacherPlayerOpen = Boolean(forcedProjection || (optionalProjection && optionalProjectionOpen));
   const uploadedProjection =

@@ -9,7 +9,6 @@ import {
   ChevronRight,
   Pause,
   Play,
-  Maximize2,
   MousePointer2,
   Repeat2,
   SkipBack,
@@ -21,13 +20,7 @@ import type { EngineMode } from '@openmaic/lib/playback';
 import { cn } from '@openmaic/lib/utils';
 import { useStageStore } from '@openmaic/lib/store';
 import { KnowledgeGraphFlow } from '@/components/knowledge-graph-flow';
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-} from '@/components/ui/overlays';
+import { CourseKnowledgeGraphButton } from './course-knowledge-graph-button';
 import { useTeachingKnowledgeGraph } from '@/components/openmaic-bridge/knowledge-graph-context';
 import { normalizeNarrationPunctuation } from '@openmaic/lib/generation/narration-punctuation';
 
@@ -332,7 +325,6 @@ export function LectureSubtitleDock({
   const dragRef = useRef<{ pointerId: number; startY: number; scrollTop: number } | null>(null);
   const didDragRef = useRef(false);
   const [isBrowsingSubtitles, setIsBrowsingSubtitles] = useState(false);
-  const [graphOpen, setGraphOpen] = useState(false);
   const currentScene = useStageStore((state) => state.getCurrentScene());
   const { graph, points } = useTeachingKnowledgeGraph();
   const displayCues = useMemo(
@@ -470,6 +462,7 @@ export function LectureSubtitleDock({
           <span className="pt-1 text-[11px] font-semibold tabular-nums text-slate-400">
             {Math.max(1, sceneIndex + 1)} / {Math.max(1, scenesCount)}
           </span>
+          <CourseKnowledgeGraphButton />
         </header>
 
         <div className="my-3 h-px bg-slate-100 dark:bg-white/8 xl:my-4" data-rail-divider />
@@ -556,14 +549,6 @@ export function LectureSubtitleDock({
                     showMiniMap={false}
                   />
                 </div>
-                <button
-                  aria-label="完整浏览课程思维导图"
-                  className="absolute right-4 top-3 z-10 grid h-8 w-8 place-items-center rounded-full bg-white/58 text-slate-500 backdrop-blur-md transition hover:scale-105 hover:bg-white/90 hover:text-teal-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-teal-600 dark:bg-slate-900/42 dark:text-slate-300 dark:hover:bg-slate-800/80 dark:hover:text-teal-300"
-                  onClick={() => setGraphOpen(true)}
-                  type="button"
-                >
-                  <Maximize2 size={14} />
-                </button>
               </div>
             </div>
           ) : null}
@@ -654,28 +639,6 @@ export function LectureSubtitleDock({
         </div>
       </div>
 
-      <Dialog onOpenChange={setGraphOpen} open={graphOpen}>
-        <DialogContent className="w-[min(960px,calc(100vw-24px))] max-w-none overflow-hidden p-0">
-          <DialogHeader className="px-6 pt-6">
-            <DialogTitle>课程思维导图</DialogTitle>
-            <DialogDescription>
-              沿课程知识脉络浏览各个概念；当前讲授内容及其关联会保持清晰高亮。
-            </DialogDescription>
-          </DialogHeader>
-          <div className="h-[min(68vh,620px)] min-h-[420px] border-t border-slate-100 dark:border-white/8">
-            <KnowledgeGraphFlow
-              activeNodeId={activeKnowledgePointId}
-              activeZoom={0.82}
-              autoRestoreView
-              focusActiveNode
-              graph={graph}
-              height={520}
-              points={points}
-              showMiniMap
-            />
-          </div>
-        </DialogContent>
-      </Dialog>
     </aside>
   );
 }

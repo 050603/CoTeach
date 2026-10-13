@@ -1,6 +1,7 @@
 "use client";
 
 import { browserRandomUUID } from "@/lib/browser/random-uuid";
+import { boundedFetch } from "@/lib/browser/bounded-fetch";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   AudioLines,
@@ -62,15 +63,21 @@ const statusLabels: Record<string, string> = {
   ended: "讨论已结束",
 };
 
-export function PublicDiscussionTeacherPanel({
-  course,
-  recommendedKnowledgePointIds,
-  immersive = false,
-}: {
+type TeacherPanelProps = {
   course: Course;
   recommendedKnowledgePointIds: string[];
   immersive?: boolean;
-}) {
+};
+
+export function PublicDiscussionTeacherPanel(props: TeacherPanelProps) {
+  return <CourseDiscussionPanel key={props.course.id} {...props} />;
+}
+
+function CourseDiscussionPanel({
+  course,
+  recommendedKnowledgePointIds,
+  immersive = false,
+}: TeacherPanelProps) {
   const defaultPointId = recommendedKnowledgePointIds[0] ?? course.content.knowledgePoints[0]?.id ?? "";
   const [snapshot, setSnapshot] = useState<PublicDiscussionSnapshot>();
   const [selectedPointId, setSelectedPointId] = useState(defaultPointId);
@@ -81,6 +88,8 @@ export function PublicDiscussionTeacherPanel({
   const [guidance, setGuidance] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
+  const [loadError, setLoadError] = useState<string>();
+  const [settingsError, setSettingsError] = useState<string>();
   const [soundEnabled, setSoundEnabled] = useState(false);
   const [audioState, setAudioState] = useState<"idle" | "loading" | "playing" | "failed">("idle");
   const [showSettings, setShowSettings] = useState(false);
@@ -90,36 +99,99 @@ export function PublicDiscussionTeacherPanel({
   const playedTurnIdsRef = useRef(new Set<string>());
   const playingTurnIdRef = useRef<string | undefined>(undefined);
   const audioRef = useRef<HTMLAudioElement | undefined>(undefined);
+  const mountedRef = useRef(false);
+  const loadRef = useRef<AbortController | null>(null);
+  const settingsLoadRef = useRef<AbortController | null>(null);
+  const acceptedSnapshotRef = useRef<PublicDiscussionSnapshot | undefined>(undefined);
+  const snapshotRequestRef = useRef(0);
+  const acceptedRequestRef = useRef(0);
+  const acceptedMutationRequestRef = useRef(0);
+  const mutationRevisionRef = useRef(0);
+
+  const acceptSnapshot = useCallback((next: PublicDiscussionSnapshot, request: number, replaceSession = false, mutation = false) => {
+    if (!mountedRef.current) return false;
+    const current = acceptedSnapshotRef.current;
+    const sameSession = Boolean(current?.session && next.session?.id === current.session.id);
+    if (current?.session && next.session?.id === current.session.id
+      && next.session.version < current.session.version) return false;
+    if (request < acceptedRequestRef.current && (sameSession
+      ? (!next.session || next.session.version <= current!.session!.version)
+        && (!mutation || request < acceptedMutationRequestRef.current)
+      : !replaceSession)) return false;
+    acceptedRequestRef.current = Math.max(request, acceptedRequestRef.current);
+    acceptedSnapshotRef.current = next;
+    setSnapshot(next);
+    return true;
+  }, []);
 
   const endpoint = `/api/courses/${encodeURIComponent(course.id)}/public-discussion`;
   const load = useCallback(async () => {
-    const response = await fetch(`${endpoint}?soundClientId=${encodeURIComponent(soundClientIdRef.current)}`, {
-      cache: "no-store",
-      headers: { "X-OpenPBL-Role": "teacher" },
-    });
-    if (response.status === 404) return;
-    setSnapshot(await responseJson<PublicDiscussionSnapshot>(response));
-  }, [endpoint]);
+    // Coalesce polling and socket notifications so slow requests can finish.
+    if (!mountedRef.current || loadRef.current) return;
+    const controller = new AbortController();
+    loadRef.current = controller;
+    const revision = mutationRevisionRef.current;
+    const request = ++snapshotRequestRef.current;
+    try {
+      const response = await boundedFetch(`${endpoint}?soundClientId=${encodeURIComponent(soundClientIdRef.current)}`, {
+        cache: "no-store", signal: controller.signal,
+        headers: { "X-OpenPBL-Role": "teacher" },
+      });
+      // Older deployments omit the feature route. Do not invent an empty
+      // discussion or discard a session that was already displayed.
+      if (response.status === 404) {
+        if (!controller.signal.aborted && revision === mutationRevisionRef.current && !acceptedSnapshotRef.current) {
+          acceptSnapshot({ enabled: false }, request);
+        }
+        return;
+      }
+      const next = await responseJson<PublicDiscussionSnapshot>(response);
+      if (controller.signal.aborted || revision !== mutationRevisionRef.current) return;
+      acceptSnapshot(next, request);
+      setLoadError(undefined);
+    } catch (cause) {
+      if (!controller.signal.aborted && revision === mutationRevisionRef.current) setLoadError(cause instanceof Error ? cause.message : "公开讨论加载失败，请重试。");
+    } finally {
+      if (loadRef.current === controller) loadRef.current = null;
+    }
+  }, [acceptSnapshot, endpoint]);
 
   const loadSettings = useCallback(async () => {
-    const response = await fetch(`${endpoint}/settings`, {
-      cache: "no-store",
-      headers: { "X-OpenPBL-Role": "teacher" },
-    });
-    if (!response.ok) return;
-    const payload = await response.json() as {
-      settings?: PublicDiscussionSettings;
-      asrProviders?: Record<string, { models?: string[]; defaultModel?: string }>;
-    };
-    setSettings(payload.settings);
-    setAsrProviders(payload.asrProviders ?? {});
+    if (!mountedRef.current || settingsLoadRef.current) return;
+    const controller = new AbortController();
+    settingsLoadRef.current = controller;
+    try {
+      const response = await boundedFetch(`${endpoint}/settings`, {
+        cache: "no-store", signal: controller.signal,
+        headers: { "X-OpenPBL-Role": "teacher" },
+      });
+      if (response.status === 404) return; // The feature is disabled on the server.
+      const payload = await responseJson<{
+        settings?: PublicDiscussionSettings;
+        asrProviders?: Record<string, { models?: string[]; defaultModel?: string }>;
+      }>(response);
+      if (controller.signal.aborted) return;
+      setSettings(payload.settings);
+      setAsrProviders(payload.asrProviders ?? {});
+      setSettingsError(undefined);
+    } catch (cause) {
+      if (!controller.signal.aborted) setSettingsError(cause instanceof Error ? cause.message : "语音设置加载失败，请重试。");
+    } finally {
+      if (settingsLoadRef.current === controller) settingsLoadRef.current = null;
+    }
   }, [endpoint]);
 
   useEffect(() => {
+    mountedRef.current = true;
     const initial = window.setTimeout(() => void Promise.all([load(), loadSettings()]), 0);
-    const unsubscribe = subscribePublicDiscussionUpdates(course.id, () => void load().catch(() => undefined));
-    const timer = window.setInterval(() => void load().catch(() => undefined), 2_500);
+    const unsubscribe = subscribePublicDiscussionUpdates(course.id, () => void load());
+    const timer = window.setInterval(() => void load(), 2_500);
     return () => {
+      mountedRef.current = false;
+      loadRef.current?.abort();
+      settingsLoadRef.current?.abort();
+      loadRef.current = null;
+      settingsLoadRef.current = null;
       unsubscribe();
       window.clearTimeout(initial);
       window.clearInterval(timer);
@@ -128,20 +200,54 @@ export function PublicDiscussionTeacherPanel({
     };
   }, [course.id, load, loadSettings]);
 
-  async function post(body: Record<string, unknown>): Promise<PublicDiscussionSnapshot> {
-    const response = await fetch(endpoint, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "X-OpenPBL-Role": "teacher" },
-      body: JSON.stringify(body),
-    });
-    return responseJson(response);
+  function cancelPendingLoad() {
+    loadRef.current?.abort();
+    loadRef.current = null;
   }
 
-  async function withBusy(operation: () => Promise<PublicDiscussionSnapshot>) {
+  async function post(body: Record<string, unknown>): Promise<PublicDiscussionSnapshot | undefined> {
+    const request = ++snapshotRequestRef.current;
+    const sessionId = acceptedSnapshotRef.current?.session?.id;
+    const stillCurrent = () => mountedRef.current && (body.action === "start" || acceptedSnapshotRef.current?.session?.id === sessionId);
+    // A pre-mutation GET can describe another session (including no session).
+    // Cancel it while allowing new reads to show persisted model progress.
+    mutationRevisionRef.current += 1;
+    cancelPendingLoad();
+    try {
+      const response = await fetch(endpoint, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-OpenPBL-Role": "teacher" },
+        body: JSON.stringify(body),
+      });
+      const next = await responseJson<PublicDiscussionSnapshot>(response);
+      if (!stillCurrent()) return;
+      const replacesSession = body.action === "start" && acceptedSnapshotRef.current?.session?.id === sessionId;
+      // Sound lease changes do not increase the session version. Their newest
+      // mutation acknowledgement supersedes a poll sent before it committed.
+      if (acceptSnapshot(next, request, replacesSession, true)) {
+        acceptedMutationRequestRef.current = Math.max(request, acceptedMutationRequestRef.current);
+        mutationRevisionRef.current += 1;
+        cancelPendingLoad();
+        return next;
+      }
+      // A poll can already have received this acknowledgement (or a newer
+      // version). Use that accepted state for the start/sound side effects.
+      const current = acceptedSnapshotRef.current;
+      if (["start", "acquire-sound"].includes(String(body.action)) && current?.session
+        && next.session?.id === current.session.id && next.session.version <= current.session.version) {
+        acceptedMutationRequestRef.current = Math.max(request, acceptedMutationRequestRef.current);
+        return current;
+      }
+    } catch (cause) {
+      if (stillCurrent() && request >= acceptedMutationRequestRef.current) throw cause;
+    }
+  }
+
+  async function withBusy(operation: () => Promise<PublicDiscussionSnapshot | undefined>) {
     setBusy(true);
     setError(undefined);
     try {
-      setSnapshot(await operation());
+      await operation();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "操作失败");
       void load();
@@ -188,12 +294,12 @@ export function PublicDiscussionTeacherPanel({
         studentId: selectedStudentId,
         candidates: recommendation?.candidates,
       });
+      if (!started) return;
       discussionStarted = true;
-      setSnapshot(started);
       document.querySelectorAll("audio").forEach((audio) => audio.pause());
       window.speechSynthesis?.cancel();
       const sounded = await post({ action: "acquire-sound", clientId: soundClientIdRef.current });
-      setSnapshot(sounded);
+      if (!sounded) return;
       setSoundEnabled(Boolean(sounded.teacher?.soundOwner));
       if (!sounded.teacher?.soundOwner) {
         setError("讨论已启动，但另一教师页面正在控制课堂声音，请先取得声音控制权。");
@@ -225,7 +331,7 @@ export function PublicDiscussionTeacherPanel({
       document.querySelectorAll("audio").forEach((audio) => audio.pause());
       window.speechSynthesis?.cancel();
       const next = await post({ action: "acquire-sound", clientId: soundClientIdRef.current });
-      setSnapshot(next);
+      if (!next) return;
       setSoundEnabled(Boolean(next.teacher?.soundOwner));
       if (!next.teacher?.soundOwner) setError("另一教师页面正在控制课堂声音，可在其租约释放后重试。");
     } catch (cause) {
@@ -238,7 +344,7 @@ export function PublicDiscussionTeacherPanel({
     const heartbeat = window.setInterval(() => {
       void post({ action: "acquire-sound", clientId: soundClientIdRef.current })
         .then((next) => {
-          setSnapshot(next);
+          if (!next) return;
           if (!next.teacher?.soundOwner) setSoundEnabled(false);
         })
         .catch(() => undefined);
@@ -317,13 +423,12 @@ export function PublicDiscussionTeacherPanel({
     void speak(lastAssistant.content).then(async () => {
       playedTurnIdsRef.current.add(lastAssistant.id);
       setAudioState("idle");
-      const next = await post({
+      await post({
         action: "complete-playback",
         requestId: uuid(),
         expectedVersion: session.version,
         clientId: soundClientIdRef.current,
       });
-      setSnapshot(next);
     }).catch((cause) => {
       setAudioState("failed");
       setError(cause instanceof Error ? cause.message : "AI 语音播放失败；字幕仍可使用。");
@@ -392,6 +497,9 @@ export function PublicDiscussionTeacherPanel({
         </button>
       </header>
 
+      {loadError ? <div className="mx-4 mb-4 flex flex-wrap items-center gap-3 rounded-lg bg-rose-50 p-3 text-sm text-rose-800" role="alert"><span className="min-w-0 flex-1 break-words">{snapshot?.session ? "讨论更新失败，已保留当前内容。" : "无法读取公开讨论。"}{loadError}</span><button className="min-h-11 rounded-lg border border-rose-200 px-3 font-semibold" onClick={() => void load()} type="button">重试加载讨论</button></div> : null}
+      {settingsError ? <div className="mx-4 mb-4 flex flex-wrap items-center gap-3 rounded-lg bg-amber-50 p-3 text-sm text-amber-900" role="alert"><span className="min-w-0 flex-1 break-words">语音设置加载失败：{settingsError}</span><button className="min-h-11 rounded-lg border border-amber-200 px-3 font-semibold" onClick={() => void loadSettings()} type="button">重试加载语音设置</button></div> : null}
+
       {showSettings && settings ? (
         <div className={cn("grid gap-3 border-stone-200 px-5 py-4 md:grid-cols-[1fr_1fr_8rem_auto]", immersive ? "mb-4 border-y bg-white" : "border-b bg-stone-50")}>
           <label className="text-xs font-bold text-stone-600">服务端 ASR
@@ -413,7 +521,7 @@ export function PublicDiscussionTeacherPanel({
         </div>
       ) : null}
 
-      {!active ? (
+      {!snapshot ? <p className="p-4 text-sm text-stone-500">{loadError ? "恢复连接后可继续操作公开讨论。" : <><Loader2 className="mr-2 inline animate-spin" size={15} />正在读取公开讨论状态…</>}</p> : !active ? (
         <div className={cn(immersive && "border-y border-stone-200 bg-white")}>
           <ol aria-label="启动公开讨论步骤" className="grid border-b border-stone-200 bg-stone-50 sm:grid-cols-3">
             <SetupStep complete={Boolean(selectedPointId)} label="确定主题" number={1} />

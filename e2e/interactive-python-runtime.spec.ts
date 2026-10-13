@@ -1,7 +1,8 @@
 import { expect, test } from '@playwright/test';
 import { patchHtmlForIframe } from '../src/lib/openmaic/utils/iframe';
 
-test('repairs a persisted Python interaction that omitted the Pyodide loader', async ({ page }) => {
+for (const hostPath of ['/', '/internal/resource-player']) {
+test(`${hostPath}: repairs a persisted Python interaction that omitted the Pyodide loader`, async ({ page }) => {
   test.setTimeout(60_000);
   const runtimeRequests: string[] = [];
   page.on('console', (message) => runtimeRequests.push(`CONSOLE ${message.type()}: ${message.text()}`));
@@ -18,7 +19,7 @@ test('repairs a persisted Python interaction that omitted the Pyodide loader', a
   });
   // Exercise the deployed CSP as well as the loader/WASM/stdlib path in every
   // browser engine. Bypassing CSP can make a broken production widget pass.
-  await page.goto('/');
+  await page.goto(hostPath);
 
   const generatedHtml = `<!doctype html><html><head></head><body><script>
     (async function () {
@@ -84,3 +85,5 @@ test('repairs a persisted Python interaction that omitted the Pyodide loader', a
     value: 42,
   });
 });
+
+}

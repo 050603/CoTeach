@@ -955,7 +955,10 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         hasProjectionWork(courseId),
       );
     } catch (error) {
-      if (!controller.signal.aborted || wsCourseIdRef.current === courseId) {
+      // Opening/subscribing the socket deliberately replaces polling reads.
+      // Only the current request may report a failure; its own timeout still
+      // counts, even though that timeout also aborts its controller.
+      if (sequence === projectionPollSequenceRef.current && wsCourseIdRef.current === courseId) {
         recordCourseSyncFailure(error);
       }
     } finally {
@@ -979,6 +982,10 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       projectionPollTimerRef.current = window.setTimeout(tick, interval * (0.85 + Math.random() * 0.3));
     };
     projectionPollTimerRef.current = window.setTimeout(tick, interval * (0.85 + Math.random() * 0.3));
+  }
+
+  function isCurrentCourseRead(courseId: string, epoch: number): boolean {
+    return epoch === courseRequestEpochRef.current && wsCourseIdRef.current === courseId;
   }
 
   function startCoursePolling(
@@ -1006,9 +1013,9 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         } else {
           await catchUpCourseEvents(courseId);
         }
-        recordCourseSyncSuccess();
+        if (isCurrentCourseRead(courseId, epoch)) recordCourseSyncSuccess();
       } catch (error) {
-        recordCourseSyncFailure(error);
+        if (isCurrentCourseRead(courseId, epoch)) recordCourseSyncFailure(error);
       } finally {
         if (epoch === courseRequestEpochRef.current) coursePollInFlightRef.current = false;
       }
@@ -1115,7 +1122,10 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     const delay = priority === "standard" && getClientRole() === "teacher"
       ? 750
       : courseRefreshDelay(Math.random(), priority);
-    void refreshCourse(courseId, cursor, priority, delay).catch(recordCourseSyncFailure);
+    const epoch = courseRequestEpochRef.current;
+    void refreshCourse(courseId, cursor, priority, delay).catch((error) => {
+      if (isCurrentCourseRead(courseId, epoch)) recordCourseSyncFailure(error);
+    });
   }
 
   async function catchUpCourseEvents(courseId: string) {
@@ -1165,6 +1175,19 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       );
     }
     if (body.hasMore) await catchUpCourseEvents(courseId);
+  }
+
+  async function syncCourseRealtime(courseId: string) {
+    const epoch = courseRequestEpochRef.current;
+    try {
+      await Promise.all([catchUpCourseEvents(courseId), refreshProjectionState(courseId)]);
+      if (isCurrentCourseRead(courseId, epoch)) recordCourseSyncSuccess();
+    } catch (error) {
+      // Reconnect and course changes intentionally cancel the previous reads.
+      // Neither their failure nor their late success belongs to the new room;
+      // current-epoch timeouts and transport failures must still be reported.
+      if (isCurrentCourseRead(courseId, epoch)) recordCourseSyncFailure(error);
+    }
   }
 
   function applyProjectionEvent(
@@ -1242,10 +1265,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       && previousCourseId === courseId
     ) {
       startProjectionPolling(courseId);
-      void Promise.all([
-        catchUpCourseEvents(courseId),
-        refreshProjectionState(courseId),
-      ]).then(recordCourseSyncSuccess).catch(recordCourseSyncFailure);
+      void syncCourseRealtime(courseId);
       return;
     }
     if (
@@ -1347,10 +1367,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
             }
             startProjectionPolling(courseId);
             startCoursePolling(courseId, "websocket");
-            void Promise.all([
-              catchUpCourseEvents(courseId),
-              refreshProjectionState(courseId),
-            ]).then(recordCourseSyncSuccess).catch(recordCourseSyncFailure);
+            void syncCourseRealtime(courseId);
             return;
           }
           if (parsed.type === "course-event" && parsed.courseId === courseId) {

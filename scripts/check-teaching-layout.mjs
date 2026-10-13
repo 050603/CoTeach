@@ -57,7 +57,7 @@ const fixtureCourse = {
 };
 const profiles = [
   ['desktop-1024x768', 1024, 768, false],
-  ['desktop-1280x720', 1280, 720, false], ['desktop-1366x768', 1366, 768, false], ['desktop-1920x1080', 1920, 1080, false],
+  ['desktop-1280x720', 1280, 720, false], ['desktop-1366x768', 1366, 768, false], ['desktop-1920x1080', 1920, 1080, false], ['desktop-2560x1440', 2560, 1440, false],
   ['desktop-split', 768, 576, false], ['desktop-laptop', 1024, 576, false], ['desktop', 1440, 900, false], ['desktop-4k', 3840, 2160, false], ['pad-portrait', 768, 1024, true], ['pad-landscape', 1024, 768, true],
   ['phone-portrait', 390, 844, true], ['phone-landscape', 844, 390, true], ['phone-small', 320, 568, true], ['phone-small-landscape', 568, 320, true],
 ];
@@ -80,6 +80,7 @@ const scenarios = [
     const chart = page.locator('[aria-labelledby="knowledge-section-chart-title"]');
     await chart.evaluate(element => element.scrollIntoView({ block: 'center', behavior: 'instant' }));
     await chart.locator('.recharts-surface').waitFor({ state: 'visible' });
+    await page.evaluate(() => document.fonts.ready);
     await page.waitForFunction(() => {
       const curves = [...document.querySelectorAll('[aria-labelledby="knowledge-section-chart-title"] .recharts-line-curve')];
       return curves.length === 2 && curves.every(curve => {
@@ -91,14 +92,40 @@ const scenarios = [
         return curve.getAttribute('stroke') === '#10b981' ? dash === null : dash === '4 5';
       });
     });
-    await chart.getByRole('img', { name: /均分60分.*均分80分/ }).waitFor({ state: 'visible' });
+    // Section scores are authored points (6/10, 8/10), not percentages.
+    // Keep exact completion and score assertions alongside the rendered curves.
+    await chart.getByRole('img', { name: '知识讲授第1节：完成率100%，均分6/10分；知识讲授第2节：完成率100%，均分8/10分', exact: true }).waitFor({ state: 'visible' });
     const overflow = await chart.getByRole('img').evaluate(element => element.scrollWidth - element.clientWidth);
     if (overflow > 2) throw new Error(`The two-section learning chart requires horizontal scrolling (${overflow}px)`);
-    const tickBounds = await chart.locator('.recharts-surface .cursor-help text').evaluateAll(labels => labels.map(label => {
-      const text = label.getBoundingClientRect(), surface = label.closest('svg').getBoundingClientRect();
-      return { name: label.closest('g').querySelector('title')?.textContent, clipped: text.left < surface.left - 1 || text.right > surface.right + 1 || text.top < surface.top - 1 || text.bottom > surface.bottom + 1 };
-    }));
-    if (tickBounds.length !== 2 || tickBounds.some(tick => tick.clipped)) throw new Error(`Learning chart labels are missing or clipped: ${JSON.stringify(tickBounds)}`);
+    const tickGeometry = await chart.locator('.recharts-surface').evaluate(svg => {
+      const surface = svg.getBoundingClientRect();
+      const sectionLabels = [...svg.querySelectorAll('.cursor-help text')];
+      // Recharts places tick text in a shared SVG z-index layer, outside the
+      // axis-line group; inspect the actual rendered label groups.
+      const axisGroups = [...svg.querySelectorAll('.recharts-yAxis-tick-labels')];
+      const axisLabels = axisGroups.flatMap(axis => [...axis.querySelectorAll('.recharts-cartesian-axis-tick-value')]);
+      const labels = [...sectionLabels, ...axisLabels];
+      const dots = [...svg.querySelectorAll('.recharts-line-dot')].map(dot => dot.getBoundingClientRect());
+      const overlaps = (a, b) => Math.min(a.right, b.right) - Math.max(a.left, b.left) > 0.5 && Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top) > 0.5;
+      return {
+        titles: sectionLabels.map(label => label.closest('g').querySelector('title')?.textContent),
+        axisLabelCounts: axisGroups.map(axis => axis.querySelectorAll('.recharts-cartesian-axis-tick-value').length),
+        dots: dots.length,
+        minimumFontSize: Math.min(...labels.map(label => parseFloat(getComputedStyle(label).fontSize))),
+        invalid: labels.flatMap(label => {
+          const bounds = label.getBoundingClientRect();
+          const clipped = bounds.left < surface.left - 1 || bounds.right > surface.right + 1 || bounds.top < surface.top - 1 || bounds.bottom > surface.bottom + 1;
+          const smallFont = parseFloat(getComputedStyle(label).fontSize) < 10;
+          const overlappingDot = dots.some(dot => overlaps(bounds, dot));
+          return clipped || smallFont || overlappingDot ? [{ text: label.textContent, clipped, smallFont, overlappingDot, bounds: bounds.toJSON(), surface: surface.toJSON() }] : [];
+        }),
+        overlappingTitles: sectionLabels.some((label, index) => sectionLabels.slice(index + 1).some(other => overlaps(label.getBoundingClientRect(), other.getBoundingClientRect()))),
+      };
+    });
+    if (tickGeometry.titles.join(';') !== '知识讲授第1节;知识讲授第2节' || tickGeometry.axisLabelCounts.length !== 2 || tickGeometry.axisLabelCounts.some(count => count < 2) || tickGeometry.dots !== 4 || tickGeometry.invalid.length || tickGeometry.overlappingTitles) {
+      throw new Error(`Learning chart labels or axes are missing, clipped, too small or overlapping: ${JSON.stringify(tickGeometry)}`);
+    }
+    return tickGeometry;
   }],
   ['quick-preparation', '/teacher/prepare/layout-teaching/verify', 'text=课程资料导入', async () => {}],
   ['generate-redirect', '/teacher/prepare/layout-teaching/generate', 'text=课程资料导入', async page => { await page.waitForURL('**/teacher/prepare/layout-teaching/verify'); }],
@@ -197,13 +224,14 @@ try {
       try {
         await page.goto(baseURL + route, { waitUntil: 'load' });
         await page.locator(ready).filter({ visible: true }).first().waitFor();
-        await exercise(page);
+        const exerciseEvidence = await exercise(page);
         if (id === 'teacher-knowledge-analytics') {
           report.renderedSectionChart = await page.locator('[aria-labelledby="knowledge-section-chart-title"]').evaluate(root => ({
             width: root.querySelector('.recharts-surface').getBoundingClientRect().width,
             curves: root.querySelectorAll('.recharts-line-curve').length,
             scores: root.querySelector('[role="img"]').getAttribute('aria-label'),
           }));
+          report.renderedSectionChart.tickGeometry = exerciseEvidence;
         }
         if (process.argv.includes('--source-css')) {
           await page.evaluate(() => {

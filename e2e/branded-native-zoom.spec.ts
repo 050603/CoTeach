@@ -3,6 +3,8 @@ import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { SignJWT } from 'jose';
+import { browserConfiguration, inspectBrowserIdentity } from '../scripts/lib/prelaunch-browser.mjs';
+import { nativeLearningFixture } from './fixtures/native-learning';
 
 const baseURL = process.env.OPENPBL_RESOURCE_E2E_BASE_URL || 'http://127.0.0.1:3000';
 const executablePath = process.env.PRELAUNCH_E2E_EXECUTABLE_PATH;
@@ -53,9 +55,9 @@ async function measureAndCapture(page: Page, info: TestInfo, scenario: string, f
 
 for (const physical of [{ width: 1024, height: 768 }, { width: 1280, height: 720 }, { width: 1366, height: 768 }, { width: 1920, height: 1080 }]) {
   for (const factor of factors) {
-    test(`${brand} native ${Math.round(factor * 100)}% at ${physical.width}x${physical.height}: login, settings and survey`, async ({ browserName }, info) => {
+    test(`${brand} native ${Math.round(factor * 100)}% at ${physical.width}x${physical.height}: accounts, player, tutor and collaboration`, async ({ browserName }, info) => {
       test.skip(browserName !== 'chromium' || !executablePath, 'Supply an actual Chrome/Edge executable for this native preference audit.');
-      test.setTimeout(90_000);
+      test.setTimeout(180_000);
       const profile = await mkdtemp(path.join(tmpdir(), 'openpbl-brand-native-zoom-'));
       await mkdir(path.join(profile, 'Default'));
       // Chromium's actual profile setting uses a dictionary keyed by the
@@ -74,9 +76,12 @@ for (const physical of [{ width: 1024, height: 768 }, { width: 1280, height: 720
       const errors: string[] = [];
       const writes: Array<{ path: string; method: string; body: unknown }> = [];
       const measurements: unknown[] = [];
+      const learning = nativeLearningFixture();
+      let identity: unknown;
       let currentRole: 'teacher' | 'student' = 'teacher';
       const course = { id: 'native-brand-course', name: '浏览器原生缩放课程', term: '2026 秋季', status: 'open', version: 1, description: '原生缩放表单验收', outline: '', startsAt: null, endsAt: null, coverImageUrl: null, chapters: [], invitation: { code: 'A7B9C2' } };
       try {
+        identity = await inspectBrowserIdentity(browserConfiguration(), context);
         const page = context.pages()[0] ?? await context.newPage();
         page.on('pageerror', (error) => errors.push(error.message));
         await page.routeWebSocket('**/*', (socket) => socket.close());
@@ -94,9 +99,14 @@ for (const physical of [{ width: 1024, height: 768 }, { width: 1280, height: 720
             errors.push(`Blocked non-API write: ${method} ${url.pathname}`);
             return json({}, 405);
           }
+          // Runtime assets are served by an authenticated local API route; they
+          // are real bundled JS/fonts, not business data or provider calls.
+          if (method === 'GET' && url.pathname.startsWith('/api/openmaic/interactive-runtime/')) return route.continue();
+          const body = ['GET', 'HEAD'].includes(method) ? {} : request.postDataJSON() ?? {};
+          if (!['GET', 'HEAD'].includes(method)) writes.push({ path: url.pathname, method, body });
+          const learningResponse = learning.response(url.pathname, method, body);
+          if (learningResponse) return json(learningResponse.body, learningResponse.status);
           if (!['GET', 'HEAD'].includes(method)) {
-            const body = request.postDataJSON();
-            writes.push({ path: url.pathname, method, body });
             if (method === 'POST' && ['/api/platform/auth/login', '/api/platform/auth/teacher-login'].includes(url.pathname)) {
               return json({ message: '原生缩放验收：请求已拦截，请重试' }, 401);
             }
@@ -170,9 +180,70 @@ for (const physical of [{ width: 1024, height: 768 }, { width: 1280, height: 720
         expect(writes.at(-1)).toMatchObject({ method: 'POST', body: { answers: { idea: '补充证据并更新回答。' } } });
         measurements.push(await measureAndCapture(page, info, 'student-survey', factor, physical));
         expect(writes).toHaveLength(5);
+
+        learning.setMode('quiz');
+        await page.goto(`${baseURL}/student/classroom/${learning.id}`);
+        await expect(page.getByText(learning.question.analysis, { exact: true })).toBeVisible();
+        const tutorTrigger = page.getByRole('button', { name: '助教讲解', exact: true });
+        await expect(tutorTrigger).toBeVisible();
+        measurements.push(await measureAndCapture(page, info, 'student-player', factor, physical));
+        await tutorTrigger.click();
+        const tutor = page.getByRole('dialog', { name: '助教题目讲解', exact: true });
+        await expect(tutor.getByRole('button', { name: '重试讲解', exact: true })).toBeVisible();
+        await tutor.getByRole('button', { name: '重试讲解', exact: true }).click();
+        await expect(tutor.getByText('先比较相同的观察时长，再依据记录讨论差异。', { exact: true })).toBeVisible();
+        const followup = tutor.getByPlaceholder('把不明白的地方告诉助教…');
+        await followup.fill('观察时长为什么重要？');
+        const sendsBeforeComposition = writes.filter(item => item.path === '/api/knowledge-lecture' && (item.body as { action?: string }).action === 'tutor-message').length;
+        await followup.dispatchEvent('keydown', { key: 'Enter', code: 'Enter', isComposing: true, keyCode: 229 });
+        expect(writes.filter(item => item.path === '/api/knowledge-lecture' && (item.body as { action?: string }).action === 'tutor-message')).toHaveLength(sendsBeforeComposition);
+        await expect(followup).toHaveValue('观察时长为什么重要？');
+        await tutor.getByRole('button', { name: '发送追问', exact: true }).click();
+        await expect(followup).toHaveValue('');
+        await expect(tutor.getByText('观察时长为什么重要？', { exact: true })).toBeVisible();
+        await followup.fill('待发送的追问');
+        await tutor.getByRole('button', { name: '发送追问', exact: true }).focus();
+        await page.keyboard.press('Tab');
+        expect(await tutor.evaluate(element => element.contains(document.activeElement))).toBe(true);
+        measurements.push(await measureAndCapture(page, info, 'student-tutor', factor, physical));
+        await page.keyboard.press('Escape');
+        await expect(tutor).toBeHidden();
+        await expect(tutorTrigger).toBeFocused();
+
+        learning.setMode('python');
+        await page.goto(`${baseURL}/student/ai-collaboration/${learning.id}`);
+        await page.locator('.monaco-editor').waitFor();
+        await page.getByRole('button', { name: '新建代码文件', exact: true }).click();
+        const filename = page.getByRole('textbox', { name: '新文件名', exact: true });
+        await filename.fill('观察记录.py');
+        await filename.dispatchEvent('keydown', { key: 'Enter', isComposing: true, keyCode: 229 });
+        await expect(filename).toBeVisible();
+        await page.getByRole('button', { name: '取消新建', exact: true }).click();
+        await expect(page.getByRole('alert').filter({ hasText: /代码尚未保存|服务器暂时无法保存/ }).first()).toBeVisible({ timeout: 15_000 });
+        await page.getByRole('button', { name: '保存', exact: true }).click();
+        await expect(page.getByRole('button', { name: '下载本机代码草稿', exact: true })).toBeVisible();
+        measurements.push(await measureAndCapture(page, info, 'student-code-save-error', factor, physical));
+        learning.recoverSave();
+        await page.getByRole('button', { name: '保存', exact: true }).click();
+        await expect(page.getByRole('button', { name: '下载本机代码草稿', exact: true })).toBeHidden();
+
+        learning.setMode('document');
+        await page.goto(`${baseURL}/student/ai-collaboration/${learning.id}`);
+        await expect(page.getByRole('button', { name: '提交最终版', exact: true })).toBeVisible();
+        const editor = page.locator('[contenteditable="true"]').first();
+        await editor.fill('原生缩放下保留科学观察记录。');
+        await page.getByRole('button', { name: '保存', exact: true }).click();
+        await expect(page.getByText('同步失败，请检查保存状态', { exact: true })).toBeVisible();
+        await expect(editor).toContainText('原生缩放下保留科学观察记录。');
+        measurements.push(await measureAndCapture(page, info, 'student-document-save-error', factor, physical));
+        learning.recoverSave();
+        await page.getByRole('button', { name: '保存', exact: true }).click();
+        await expect(page.getByText('服务器已保存', { exact: true })).toBeVisible();
         expect(errors).toEqual([]);
       } finally {
-        await info.attach('native-zoom-evidence', { body: JSON.stringify({ brand, version: context.browser()?.version(), physical, factor, measurements, writes, errors }, null, 2), contentType: 'application/json' });
+        const evidencePath = info.outputPath('native-zoom-evidence.json');
+        await writeFile(evidencePath, JSON.stringify({ brand, identity, evidence: 'browser-fixtures-with-injected-errors', physical, factor, measurements, writes, errors }, null, 2));
+        await info.attach('native-zoom-evidence', { path: evidencePath, contentType: 'application/json' });
         await context.tracing.stop({ path: info.outputPath('native-zoom-trace.zip') });
         await context.close();
         await rm(profile, { recursive: true, force: true });

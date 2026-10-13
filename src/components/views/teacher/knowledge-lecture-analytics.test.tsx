@@ -56,7 +56,8 @@ it("renders both real Recharts series and recovers when a hidden chart becomes v
   expect(screen.getByRole("heading", { name: "各小节完成率与均分" })).toBeInTheDocument();
   expect(container.querySelector(".recharts-surface")).toBeNull();
 
-  for (const nextWidth of [280, 680, 1280, 860, 320]) {
+  // A 320px phone leaves 210px inside this card after layout and chart padding.
+  for (const nextWidth of [210, 280, 680, 1280, 860, 210, 320, 860]) {
     act(() => { width = nextWidth; observers.forEach((notify) => notify()); });
     await waitFor(() => expect(container.querySelectorAll(".recharts-line-curve")).toHaveLength(2));
     expect(container.querySelector(".recharts-surface")).toHaveAttribute("width", String(nextWidth));
@@ -65,7 +66,23 @@ it("renders both real Recharts series and recovers when a hidden chart becomes v
       expect(curve.getAttribute("d")).not.toMatch(/NaN|Infinity/);
     }
     await waitFor(() => expect([...container.querySelectorAll(".recharts-surface .cursor-help text")].map((tick) => tick.getAttribute("text-anchor"))).toEqual(["start", "end"]));
+    const completionMaximum = [...container.querySelectorAll(".recharts-yAxis-tick-labels text")].find((tick) => tick.textContent === "100%")!;
+    // The actual bundled font needs 26px for 100%, plus room at the SVG edge.
+    expect(Number(completionMaximum.getAttribute("x"))).toBeGreaterThanOrEqual(28);
+    const ticks = [...container.querySelectorAll(".recharts-surface .cursor-help")];
+    for (const [index, tick] of ticks.entries()) {
+      const fullTitle = course.content.knowledgeLectureSections![index].title;
+      expect(tick.querySelector("title")).toHaveTextContent(fullTitle);
+      const visibleTitle = tick.querySelectorAll("tspan")[1].textContent!;
+      if (nextWidth === 210) {
+        expect(visibleTitle).toMatch(/…$/);
+        expect(visibleTitle.length).toBeLessThanOrEqual(5);
+      } else {
+        expect(visibleTitle).toBe(fullTitle);
+      }
+    }
   }
+  expect(screen.getByRole("img").firstElementChild).toHaveStyle({ minWidth: "0" });
   expect(screen.getByRole("img")).toHaveAttribute("aria-label", expect.stringContaining("均分6/10分"));
   expect(screen.getByRole("img")).toHaveAttribute("aria-label", expect.stringContaining("均分8/10分"));
   const sections = course.content.knowledgeLectureSections!;

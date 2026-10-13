@@ -1,3 +1,30 @@
+.workspaceHeader {
+  max-height: calc(100dvh - 4rem);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.headerActions {
+  min-width: 0;
+  max-width: 100%;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.headerActions > [role="alert"] {
+  flex: 1 1 100%;
+  min-width: 0;
+  max-width: none;
+  overflow-wrap: anywhere;
+}
+
+.headerActions > button {
+  height: auto;
+  min-height: 44px;
+  max-width: 100%;
+  white-space: normal;
+}
+
 .memberPanel {
   overflow-wrap: anywhere;
   padding-bottom: env(safe-area-inset-bottom);

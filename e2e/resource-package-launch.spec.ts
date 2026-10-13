@@ -5,6 +5,7 @@ import { readFileSync } from "node:fs";
 import { PDFDocument, rgb } from "pdf-lib";
 import { emptyResourcePackageDraft } from "../src/lib/resource-package/types";
 import { DEFAULT_STAGES, type Course } from "../src/lib/session/types";
+import { projectionSnapshotFromUiState } from "../src/lib/realtime/projection-state";
 
 const baseURL = process.env.OPENPBL_RESOURCE_E2E_BASE_URL || "http://localhost:3000";
 test.use({ baseURL });
@@ -59,12 +60,19 @@ async function mockLaunch(page: Page) {
     if (path === `/api/courses/${courseId}/state`) return json({ course, eventCursor: "0" });
     if (path === `/api/courses/${courseId}/events`) return json({ events: [], nextCursor: "0", hasMore: false, courseVersion: course.version });
     if (path === `/api/courses/${courseId}/presence`) return json({ members: [], degraded: false });
-    if (path === `/api/courses/${courseId}/projection`) return json({ courseVersion: course.version, resourceProjection: course.uiState?.resourceProjection ?? null, teacherResourceProjection: null });
+    const projection = () => projectionSnapshotFromUiState({ courseId, courseVersion: course.version ?? 1, uiState: course.uiState });
+    if (path === `/api/courses/${courseId}/projection`) return json(projection());
     if (path === `/api/courses/${courseId}/actions`) {
       const body = request.postDataJSON();
-      if (body.action.type === "SET_UI_STATE") course = { ...course, uiState: { ...course.uiState, ...body.action.payload.patch }, version: (course.version ?? 0) + 1, updatedAt: new Date().toISOString() };
+      if (body.action.type === "SET_UI_STATE") course = { ...course, uiState: { ...course.uiState, ...body.action.payload.patch,
+        projectionVersion: (course.uiState?.projectionVersion ?? 0) + 1,
+        projectionUpdatedAt: new Date().toISOString(),
+        projectionController: body.action.payload.patch.resourceProjection
+          ? { teacherId: "e2e-launch-teacher", clientId: body.action.payload.projectionControl.clientId }
+          : null,
+      }, version: (course.version ?? 0) + 1, updatedAt: new Date().toISOString() };
       else unexpected.push(body.action.type);
-      return json({ ok: true, requestId: body.requestId, courseVersion: course.version, updatedAt: course.updatedAt });
+      return json({ ok: true, requestId: body.requestId, courseVersion: course.version, updatedAt: course.updatedAt, projection: projection() });
     }
     unexpected.push(`${request.method()} ${path}`);
     return route.fulfill({ status: 404, contentType: "application/json", body: JSON.stringify({ message: "No fixture" }) });

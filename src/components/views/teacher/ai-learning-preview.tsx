@@ -8,16 +8,16 @@ import type { TeacherPresentationMode } from "@/lib/classroom/presentation";
 import { cn } from "@/lib/utils";
 import { TeacherPresentationActions } from "@/components/classroom/teacher-presentation-actions";
 
-export function AiLearningTeacherPreview({ course, presentation = "workspace", workspacePreviewEnabled = true }: { course: Course; presentation?: TeacherPresentationMode; workspacePreviewEnabled?: boolean }) {
+export function AiLearningTeacherPreview({ course, presentation = "workspace", workspacePreviewEnabled = true, active = true }: { course: Course; presentation?: TeacherPresentationMode; workspacePreviewEnabled?: boolean; active?: boolean }) {
   const [expanded, setExpanded] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
-  const [teachingVisited, setTeachingVisited] = useState(presentation === "teaching");
+  const [previewVisited, setPreviewVisited] = useState(presentation === "teaching");
   const [teachingDirectoryOpen, setTeachingDirectoryOpen] = useState(false);
   const teaching = presentation === "teaching";
-  if (presentation === "teaching" && !teachingVisited) setTeachingVisited(true);
+  if ((expanded || teaching) && !previewVisited) setPreviewVisited(true);
   const workspace = presentation === "workspace";
   const workspacePreviewVisible = workspace && workspacePreviewEnabled && expanded;
-  const visible = teaching || workspacePreviewVisible;
+  const visible = active && (teaching || workspacePreviewVisible);
   const timingAudit = course.content.teachingTimingAudit;
   const formatMinutes = (seconds: number) => `${Math.round(seconds / 6) / 10} 分钟`;
 
@@ -44,7 +44,7 @@ export function AiLearningTeacherPreview({ course, presentation = "workspace", w
           <span className="grid h-9 w-9 shrink-0 place-items-center rounded-[10px] bg-[var(--pbl-teacher-soft)] text-[var(--pbl-teacher)]"><Eye size={18} /></span>
           <span className="min-w-0">
             <span className="block text-base font-bold text-stone-900">学生知识讲授课程预览</span>
-            <span className="mt-0.5 block text-xs text-stone-500">{expanded ? (teachingVisited ? "正在预览 · 保留授课位置" : "正在预览 · 收起后自动停止播放") : "默认收起 · 点击展开课程"}</span>
+            <span className="mt-0.5 block text-xs text-stone-500">{expanded ? "正在预览 · 收起后暂停并保留位置" : previewVisited ? "已暂停 · 点击继续预览" : "默认收起 · 点击展开课程"}</span>
             {timingAudit ? <span className="mt-1 flex items-center gap-1 text-[11px] font-semibold text-stone-600">
               <Clock3 size={12} />
               {timingAudit.narrationDurationSource === "actual-audio"
@@ -63,11 +63,12 @@ export function AiLearningTeacherPreview({ course, presentation = "workspace", w
       </button> : null}
 
       {teaching ? <div className="flex shrink-0 justify-end border-b border-stone-200 p-2"><button aria-expanded={teachingDirectoryOpen} className="inline-flex min-h-11 items-center gap-2 rounded-[6px] border border-stone-300 bg-white px-4 text-lg font-semibold" onClick={() => setTeachingDirectoryOpen((value) => !value)} type="button"><PanelLeft size={20} />{teachingDirectoryOpen ? "收起课程目录" : "课程目录"}</button></div> : null}
-      {expanded || teachingVisited || teaching ? <div hidden={!visible} className={cn("p-3", teaching && "min-h-0 flex-1 !p-0")} id={`ai-learning-teacher-preview-${course.id}`}>
+      {previewVisited ? <div hidden={!visible} className={cn("p-3", teaching && "min-h-0 flex-1 !p-0")} id={`ai-learning-teacher-preview-${course.id}`}>
         {workspacePreviewEnabled ? <div hidden={teaching} className="mb-3 flex items-center gap-2 rounded-[6px] bg-emerald-50 px-3 py-2 text-xs font-semibold text-emerald-800 ring-1 ring-emerald-100"><ShieldCheck size={15} />预览操作不会写入学生进度；可通过左侧缩略页快速切换课程内容。</div> : null}
         <StudentStageHost
+          active={visible}
           backHref="#"
-          className={teaching ? "h-full min-h-[240px]" : "h-[min(780px,calc(100dvh-170px))] min-h-[640px] max-h-[860px]"}
+          className={teaching ? "h-full min-h-0" : "h-[min(780px,max(320px,calc(100dvh-170px)))] min-h-0"}
           classroomId={course.aiLearningClassroomId}
           courseId={course.id}
           knowledgeGraph={course.content.knowledgeGraph}

@@ -5,7 +5,7 @@ import path from 'node:path';
 
 const root = path.resolve(import.meta.dirname, '..');
 const token = (await readFile(path.join(root, 'deploy/secrets/monitor_token.txt'), 'utf8')).trim();
-const destination = path.join(root, 'docs/audits/2026-09-26-classroom-capacity/operations-results.json');
+const destination = path.resolve(process.env.OPENPBL_OPERATIONS_OUTPUT_DIR || path.join(root, 'test-results/local-operations'), 'operations-results.json');
 const checks = [];
 const startedAt = new Date().toISOString();
 const artifact = (language, content) => ({ language, activeFileId: 'main', files: [{ id: 'main', path: `main.${language === 'python' ? 'py' : 'c'}`, content }] });

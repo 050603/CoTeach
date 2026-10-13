@@ -1,5 +1,6 @@
-import { fireEvent, render, screen } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import type { ReactNode } from "react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   ClassroomToolPopover,
   DEFAULT_CLASSROOM_DATA_SIDEBAR_COLLAPSED,
@@ -10,6 +11,72 @@ import {
 } from "./classroom-page-parts";
 import type { ClassroomTimingSnapshot } from "@/lib/classroom/timing";
 import type { Course } from "@/lib/session/types";
+import { DEFAULT_STAGES } from "@/lib/session/types";
+
+const classroom = vi.hoisted(() => ({
+  course: undefined as Course | undefined,
+  flushSaves: vi.fn(), endTeaching: vi.fn(), retrySave: vi.fn(), replace: vi.fn(),
+  saveState: "saved",
+}));
+vi.mock("next/navigation", () => ({ useParams: () => ({ id: "save-course" }), useRouter: () => ({ replace: classroom.replace }) }));
+vi.mock("@/lib/session/store", () => ({
+  useCourse: () => classroom.course, useHydrated: () => true,
+  useSession: () => ({ user: { name: "测试教师" }, updateCourse: vi.fn(), endTeaching: classroom.endTeaching, flushSaves: classroom.flushSaves, retrySave: classroom.retrySave, saveState: classroom.saveState }),
+}));
+vi.mock("@/hooks/use-realtime-sync", () => ({ useRealtimeSync: vi.fn() }));
+vi.mock("@/hooks/use-course-presence", () => ({ useCoursePresence: () => ({ onlineStudentIds: new Set(), degraded: false }) }));
+vi.mock("@/hooks/use-showcase-presentation", () => ({ useShowcasePresentation: () => ({ data: undefined }) }));
+vi.mock("@/components/dashboard-shell", () => ({ DashboardShell: ({ children, headerSlot }: { children: ReactNode; headerSlot: ReactNode }) => <div>{headerSlot}{children}</div>, Avatar: () => null }));
+vi.mock("@/components/views/teacher/stage-dispatcher", () => ({ TeacherStageView: () => null }));
+vi.mock("@/components/classroom/teacher-classroom-pulse", () => ({ TeacherClassroomPulse: () => null }));
+vi.mock("@/components/classroom/teacher-stage-dashboard", () => ({ TeacherStageDashboard: () => null, RealtimeTeachingActions: () => null }));
+vi.mock("@/components/classroom/teacher-presentation-analytics", () => ({ TeacherPresentationAnalytics: () => null }));
+vi.mock("@/components/views/teacher/public-discussion-workspace", () => ({ PublicDiscussionTeacherWorkspace: () => null }));
+
+import TeachClassroomPage from "./page";
+
+describe("ending a classroom", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    classroom.saveState = "saved";
+    classroom.course = {
+      id: "save-course", name: "失败恢复课堂", status: "teaching", currentStageIndex: 0,
+      stages: DEFAULT_STAGES, students: [], content: { knowledgePoints: [] },
+      uiState: { classroomTiming: { schemaVersion: 1, status: "paused", stages: [] } },
+    } as unknown as Course;
+    classroom.flushSaves.mockResolvedValue(true);
+  });
+
+  it("shows unsaved-data failures inside the confirmation and retries before ending", async () => {
+    classroom.flushSaves.mockResolvedValueOnce(false);
+    render(<TeachClassroomPage />);
+    fireEvent.click(screen.getAllByRole("button", { name: "结束授课" })[0]);
+    const dialog = screen.getByRole("alertdialog");
+    fireEvent.click(within(dialog).getByRole("button", { name: "结束课堂" }));
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent("课堂数据尚未保存，请重试");
+    expect(classroom.endTeaching).not.toHaveBeenCalled();
+    expect(classroom.replace).not.toHaveBeenCalled();
+    fireEvent.click(within(dialog).getByRole("button", { name: "结束课堂" }));
+    await waitFor(() => expect(classroom.replace).toHaveBeenCalledWith("/teacher/classrooms/save-course"));
+    expect(classroom.endTeaching).toHaveBeenCalledOnce();
+  });
+
+  it("keeps a failed finish acknowledgement in the dialog until its saved retry succeeds", async () => {
+    classroom.flushSaves.mockResolvedValueOnce(true).mockResolvedValueOnce(false);
+    const view = render(<TeachClassroomPage />);
+    fireEvent.click(screen.getAllByRole("button", { name: "结束授课" })[0]);
+    fireEvent.click(within(screen.getByRole("alertdialog")).getByRole("button", { name: "结束课堂" }));
+    expect(await within(screen.getByRole("alertdialog")).findByRole("alert")).toHaveTextContent("结束课堂未保存，请重试");
+    expect(classroom.replace).not.toHaveBeenCalled();
+    classroom.course = { ...classroom.course!, status: "finished" };
+    classroom.saveState = "error";
+    view.rerender(<TeachClassroomPage />);
+    fireEvent.click(within(screen.getByRole("alertdialog")).getByRole("button", { name: "结束课堂" }));
+    await waitFor(() => expect(classroom.replace).toHaveBeenCalledWith("/teacher/classrooms/save-course"));
+    expect(classroom.retrySave).toHaveBeenCalledOnce();
+    expect(classroom.endTeaching).toHaveBeenCalledOnce();
+  });
+});
 
 const snapshot: ClassroomTimingSnapshot = {
   status: "running",

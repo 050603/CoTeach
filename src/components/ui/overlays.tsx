@@ -10,9 +10,11 @@ export const Dialog = DialogPrimitive.Root;
 export const DialogTrigger = DialogPrimitive.Trigger;
 export const DialogClose = DialogPrimitive.Close;
 
-export function DialogContent({ children, className, ...props }: ComponentProps<typeof DialogPrimitive.Content>) {
+export function DialogContent({ children, className, portalContainer, ...props }: ComponentProps<typeof DialogPrimitive.Content> & {
+  portalContainer?: ComponentProps<typeof DialogPrimitive.Portal>["container"];
+}) {
   return (
-    <DialogPrimitive.Portal>
+    <DialogPrimitive.Portal container={portalContainer}>
       <DialogPrimitive.Overlay className="fixed inset-0 z-50 bg-[#0f172a]/30 data-[state=open]:animate-fade-in" />
       <DialogPrimitive.Content
         className={cn("fixed left-1/2 top-1/2 z-50 grid max-h-[min(86vh,760px)] w-[min(620px,calc(100vw-24px))] -translate-x-1/2 -translate-y-1/2 gap-5 overflow-y-auto rounded-[var(--radius-lg)] border border-[var(--pbl-border)] bg-[var(--pbl-surface-raised)] p-5 shadow-[var(--shadow-floating)] outline-none md:p-6", className)}

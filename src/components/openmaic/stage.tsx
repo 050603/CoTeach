@@ -32,6 +32,7 @@ import type { PlaybackSyncState, StageExperience } from '@openmaic/components/st
  * dialog can surface when Pro Switch is clicked but acquire fails).
  */
 export function Stage({
+  active = true,
   onRetryOutline,
   experience = 'student-course',
   autoplaySceneId,
@@ -43,6 +44,7 @@ export function Stage({
   onSidebarCollapsedChange,
   editorCourseId,
 }: {
+  active?: boolean;
   onRetryOutline?: (outlineId: string) => Promise<void>;
   experience?: StageExperience;
   /** Starts this scene as soon as its playback engine is ready. */
@@ -176,6 +178,7 @@ export function Stage({
             className="absolute inset-0 flex"
           >
             <PlaybackChromeRoot
+              active={active}
               ref={playbackRef}
               onRetryOutline={onRetryOutline}
               canEnterProMode={isEditable}

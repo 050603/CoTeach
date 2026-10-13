@@ -397,6 +397,7 @@ test('video playback shows a retry when the browser denies automatic play', asyn
   });
   await page.setViewportSize({ width: 1280, height: 720 });
   await page.addInitScript(() => {
+    if (location.origin === 'null') return;
     localStorage.setItem('locale', 'zh-CN');
     const originalPlay = HTMLMediaElement.prototype.play;
     let denied = false;
@@ -428,7 +429,7 @@ test('video playback shows a retry when the browser denies automatic play', asyn
   const alert = page.locator('#screen-element-e2e-video [role="alert"]');
   await expect(alert).toContainText('浏览器阻止了自动播放');
   await expect(alert.getByRole('button', { name: '重试' })).toBeVisible();
-  await page.screenshot({ path: `docs/audits/2026-09-25-prelaunch/evidence/video-autoplay-denied-${info.project.name}.png` });
+  await page.screenshot({ path: info.outputPath('video-autoplay-denied.png') });
   await page.setViewportSize({ width: 768, height: 576 });
   await expect(page.getByRole('button', { name: '收起页面目录' })).toBeHidden();
   await page.getByRole('button', { name: '打开页面目录' }).click();
@@ -452,7 +453,7 @@ test('video playback shows a retry when the browser denies automatic play', asyn
   await expect(alert.getByRole('button', { name: '重试' })).toBeVisible();
   await alert.scrollIntoViewIfNeeded();
   await expect(alert.getByRole('button', { name: '重试' })).toBeInViewport();
-  await page.screenshot({ path: `docs/audits/2026-09-25-prelaunch/evidence/video-autoplay-denied-split-${info.project.name}.png` });
+  await page.screenshot({ path: info.outputPath('video-autoplay-denied-split.png') });
   await expect.poll(() => video.evaluate((element) => (element as HTMLVideoElement).readyState), { timeout: 15_000 }).toBeGreaterThanOrEqual(1);
   await alert.getByRole('button', { name: '重试' }).click();
   try {
@@ -466,7 +467,7 @@ test('video playback shows a retry when the browser denies automatic play', asyn
     throw new Error(`${String(error)}\n${JSON.stringify({ mediaState, mediaWarnings })}`);
   }
   await expect.poll(() => video.evaluate(element => (element as HTMLVideoElement).currentTime)).toBeGreaterThan(0.05);
-  await page.screenshot({ path: `docs/audits/2026-09-25-prelaunch/evidence/video-autoplay-recovered-${info.project.name}.png` });
+  await page.screenshot({ path: info.outputPath('video-autoplay-recovered.png') });
   expect(fixture.errors).toEqual([]);
   expect(fixture.unexpected).toEqual([]);
 });

@@ -424,6 +424,7 @@ export default function TeachClassroomPage() {
               key={currentStage.key}
             >
               <TeacherStageView
+                active={!presentationDiscussion}
                 course={course}
                 focus={dashboardFocus}
                 showcaseController={showcaseController}
@@ -508,11 +509,11 @@ export default function TeachClassroomPage() {
 
       {targetStageIndex !== null ? <StageGateDialog course={course} onConfirm={confirmStage} onOpenChange={(open) => { if (!open) setTargetStageIndex(null); }} open targetIndex={targetStageIndex} /> : null}
 
-      {endError ? <p role="alert" className="text-sm text-red-700">{endError}</p> : null}
       <AlertDialog onOpenChange={setEndDialogOpen} open={endDialogOpen}>
         <AlertDialogContent>
           <AlertDialogTitle>结束本次课堂？</AlertDialogTitle>
           <AlertDialogDescription>课堂结束后学生将进入只读回看。结束前请确认授课资源和项目实践产物已经保存；保存成功后将进入课堂学习记录。</AlertDialogDescription>
+          {endError ? <p role="alert" className="text-sm text-red-700">{endError}</p> : null}
           <AlertDialogFooter>
             <AlertDialogCancel>继续授课</AlertDialogCancel>
             <Button disabled={ending} onClick={() => void endClass()}>{ending ? "正在结束…" : "结束课堂"}</Button>

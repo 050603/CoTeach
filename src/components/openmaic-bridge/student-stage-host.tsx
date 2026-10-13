@@ -144,6 +144,8 @@ interface ProgressResponse {
 }
 
 interface StudentStageHostProps {
+  /** Hidden teacher previews retain their position without playing or handling shortcuts. */
+  active?: boolean;
   classroomId: string;
   courseId?: string;
   studentId?: string;
@@ -352,6 +354,7 @@ async function measuredSceneTtsDurationSec(scene: Scene): Promise<number | undef
 }
 
 export function StudentStageHost({
+  active = true,
   classroomId,
   courseId,
   studentId,
@@ -1195,6 +1198,7 @@ export function StudentStageHost({
                 <TeachingKnowledgeGraphProvider graph={knowledgeGraph} points={knowledgePoints}>
                   <PlaybackPreparationContext.Provider value={previewStatus ? preparePreviewPlayback : undefined}>
                   <Stage
+                    active={active}
                     autoplaySceneId={autoplaySceneId}
                     experience="student-course"
                     allowSceneDirectory={mode === 'teacher-preview'}
