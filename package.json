@@ -29,7 +29,6 @@
     "db:status": "node scripts/run-prisma.mjs migrate status",
     "test:db:research": "node scripts/verify-research-database.mjs",
     "db:studio": "node scripts/run-prisma.mjs studio",
-    "db:migrate-from-json": "tsx --env-file=.env.local scripts/migrate-json-to-db.ts",
     "cleanup:uploads": "tsx --env-file=.env.local scripts/cleanup-uploads.ts orphans",
     "storage:rehydrate": "tsx --env-file=.env.local scripts/rehydrate-storage.ts",
     "admin:init-teacher": "tsx --env-file=.env.local scripts/init-teacher.ts",
