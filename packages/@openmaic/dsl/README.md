@@ -5,8 +5,8 @@ slide object-model types, build-time JSON Schema artifacts, pure validators / ty
 and version/migration helpers — with **zero runtime dependencies** (no React, no
 pptx, no echarts).
 
-That purity is the whole point: the renderer, the importer, and any future
-package can depend on `@openmaic/dsl` without pulling in junk.
+CoTeach uses this shared contract in the renderer, importer, generation package
+and application adapters. Product behavior and persistence remain in the application.
 
 ## Dependency arrows (acyclic)
 
@@ -14,7 +14,7 @@ package can depend on `@openmaic/dsl` without pulling in junk.
 @openmaic/dsl       ->  (nothing)
 @openmaic/renderer  ->  @openmaic/dsl
 @openmaic/importer  ->  @openmaic/dsl
-@openmaic/exporter  ->  @openmaic/dsl     (reserved, future)
+@openmaic/generation -> @openmaic/dsl
 ```
 
 `@openmaic/dsl` is the only package everything else depends on, and it depends on

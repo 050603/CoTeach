@@ -1,10 +1,10 @@
-# 最终验收后的本机备份与隔离恢复操作单
+# 课堂容量运行后的本机备份与隔离恢复
 
-2026-09-27 更新，**本页不是最终恢复通过报告**。用于最终候选版本完成后的 40 人验收运行；以下 `CAPACITY_FINAL_RUN_ID` 必须指向主任务确认的最终运行，不能复用已清理的历史运行。必须等待持续负载、最终归档、重启、对账及 runner 退出均完成，才执行手动备份和隔离恢复。既有定时备份照常运行。
+本文是可重复使用的恢复操作单，用于完成后的 40 人容量验收运行。以下 `CAPACITY_FINAL_RUN_ID` 必须指向本次确认的终止运行，不能复用已清理的历史运行。必须等待持续负载、最终归档、重启、对账及 runner 退出均完成，才执行手动备份和隔离恢复。既有定时备份照常运行。
 
 ## 执行前提
 
-1. 主任务确认最终 runner 已退出、在途业务请求与浏览器操作已经结束。检查最终 `report.json` 的 `outcome` 和 `updatedAt`；主 runner 没有 `finishedAt` 字段，不能用探针的字段替代。`failed` 可以保留完整恢复证据，不能改成 `passed`；终止在中途的阶段仍须标明未执行。
+1. 确认对应 runner 已退出、在途业务请求与浏览器操作已经结束。检查最终 `report.json` 的 `outcome` 和 `updatedAt`；主 runner 没有 `finishedAt` 字段，不能用探针的字段替代。`failed` 可以保留完整恢复证据，不能改成 `passed`；终止在中途的阶段仍须标明未执行。
 2. 最终逐学生数据库、附件、媒体及 AI 对账已完成，相关成功和失败报告保留；此时仍未删除任何测试数据。恢复成功不代表先前丢失的数据已补回，也不能覆盖质量失败结论。
 3. 本机 Docker、Python 3、rsync 可用；正式 PostgreSQL 和 WAL 接收器仍正常运行，镜像仍在本机。备份默认位于 `/home/lkj/OpenPBL/openPBL/.openpbl-data/local-backup`，目标容器/数据库仍使用已安装服务的配置。不要重新执行 `setup`，不要改复制槽、停止数据库、切换应用连接或停止定时器。
 4. 磁盘有足够空间容纳新增快照及完整隔离副本。`backup` 只强制检查至少 10GiB 空闲；这不是 `drill` 副本空间足够的证明，执行前还需结合当前基础备份与应用文件体量判断。此项现场检查也等最终运行结束后进行。
@@ -17,7 +17,6 @@
 以下在仓库根目录、同一个 Bash 会话逐步执行；每步失败即停止，查明原因后再继续。所有输出保留在该 run 的 `backup-restore/`，不覆盖主报告。
 
 ```bash
-cd /home/lkj/OpenPBL/openPBL
 set -euo pipefail
 umask 077
 capacity_run_id="${CAPACITY_FINAL_RUN_ID:?Set the completed final capacity run ID first}"

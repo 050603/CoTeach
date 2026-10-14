@@ -1,6 +1,6 @@
-# DESIGN
+# PPTX 导入器设计合同
 
-`maic-importer`：将 `.pptx` 文件解析为结构化 JSON，供 PPTist 等下游渲染器消费。
+`@openmaic/importer` 将 `.pptx` 文件解析为中间 JSON，再通过 `import-pipeline` 转换为 OpenMAIC DSL。公开接口、媒体持久化与验证命令见 [README.md](README.md)。
 
 ## 解析管线
 
@@ -127,9 +127,11 @@ src/
 
 ## 脚本
 
+以下命令在本包目录执行；从仓库根使用 `pnpm --dir packages/@openmaic/importer` 调用。
+
 | 命令 | 用途 |
 |---|---|
-| `npx tsx scripts/transvert.ts <file.pptx> [out.json]` | 用本库解析（开发主力，直接跑源码无需构建） |
+| `pnpm exec tsx scripts/transvert.ts <file.pptx> [out.json]` | 用本库解析（直接跑源码无需构建） |
 | `node scripts/extract-pptx-structure.js <file.pptx> [outDir]` | 解压 .pptx 查看源 XML |
 | `pnpm build` | Rollup 打包 + 生成 .d.ts → dist/ |
 | `pnpm lint` | ESLint 检查 |

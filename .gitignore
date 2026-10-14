@@ -15,7 +15,7 @@ node_modules/
 /playwright-report/
 /test-results/
 # Research manuscripts, execution reports and historical implementation notes.
-# Maintain current contracts and runbooks in docs/quality, docs/adr and docs/operations.
+# Maintain current contracts and runbooks through docs/README.md.
 /docs/paper/
 /docs/plans/
 /docs/audits/
@@ -95,7 +95,7 @@ next-env.d.ts
 *~
 src/middleware-openmaic.ts.bak
 
-# database backups (Stage 11)
+# database backups
 /backups/
 
 # Python inference runtime bytecode

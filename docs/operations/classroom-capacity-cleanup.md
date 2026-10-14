@@ -1,6 +1,6 @@
 # 验收自建数据清理
 
-清理入口：[cleanup-capacity-run.mjs](../../scripts/cleanup-capacity-run.mjs)。**最终运行未结束、未完成新备份与隔离恢复时，不执行本页命令。** 只处理主任务已确认结束的单个 UUID，保留原报告、对账结果及恢复证据，不批量按前缀删除。
+清理入口：[cleanup-capacity-run.mjs](../../scripts/cleanup-capacity-run.mjs)。**对应运行未结束、未完成新备份与隔离恢复时，不执行本页命令。** 只处理已确认结束的单个 UUID，保留原报告、对账结果及恢复证据，不批量按前缀删除。
 
 默认是 dry-run，只有 `--execute` 才删除数据库及文件。数据库在 Serializable 事务内先核对归属、发现外键依赖、拒绝所有跨课程/非测试引用，再按依赖顺序删除。上传文件需在数据库删除后核对安全路径与 SHA，课堂文件路径从严格 runId 和类型构造；不信任报告中的任意路径。
 
@@ -13,7 +13,7 @@
 ```bash
 set -euo pipefail
 capacity_cleanup_run_id='capacity-填写完整UUID'
-capacity_cleanup_report="test-results/capacity/$capacity_cleanup_run_id/report.json"
+capacity_cleanup_report=".openpbl-data/capacity-evidence/$capacity_cleanup_run_id/report.json"
 # failed / partial：先审阅 dry-run 输出，确认每类数量与该运行匹配。
 node scripts/cleanup-capacity-run.mjs "$capacity_cleanup_report" \
   --abort-run="$capacity_cleanup_run_id"
@@ -46,4 +46,4 @@ node scripts/cleanup-capacity-run.mjs "$capacity_cleanup_report" \
 
 `--execute` 成功后，同目录 `cleanup.json` 保存 runId、kind、逐表数量、上传清单及数据库/文件清理结果。数据库已删但文件阶段中断时保留该回执；原 UUID 重试会先确认上传没有被重新引用，再完成文件清理。不删除 `report.json`、对账报告、备份或运行日志。
 
-2026-09-27 离线验证：11 项工具测试、ESLint 与语法检查通过；8 份真实投屏历史报告仅在本机执行 `validateReport` 校验通过，原报告未改。**尚未对这些探针执行数据库 dry-run 或实际删除**，数据库现场归属仍需在最终恢复后逐 UUID 核对。
+工具回归入口为 `scripts/cleanup-capacity-run.test.mjs`。离线形状校验、数据库 dry-run 与实际清理是不同检查，执行时分别记录结果，不能用历史报告或工具测试替代本次数据库归属核对。

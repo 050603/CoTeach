@@ -1,32 +1,24 @@
-# Translation Guide
+# OpenMAIC 集成组件翻译维护
 
-## Adding a new language
+本目录维护 OpenMAIC 集成组件的 i18next 文案。平台主页面、教材与项目工作台还有各自的中文文案，不能把这里的语言包等同于整站已经完成多语言适配。
 
-1. Copy `locales/en-US.json` to `locales/<code>.json` (e.g. `ja-JP.json`)
-2. Append an entry to the end of the `supportedLocales` array in `locales.ts` — do not reorder existing entries, as the first locale for each language prefix (e.g. `zh-CN` for `zh`) is used as the default when the browser sends a bare language code:
-   ```ts
-   { code: 'ja-JP', label: '日本語', shortLabel: 'JA' },
-   ```
-3. Translate all values in the new JSON file. Keys must remain identical.
+## 当前入口
 
-## Interpolation
+[locales.ts](locales.ts) 定义可选语言、标签与解析顺序，[config.ts](config.ts) 注册资源并初始化 i18next。当前资源包括简体中文、繁体中文、英语、日语、韩语、葡萄牙语、俄语和阿拉伯语。
 
-This project uses i18next with the default double-brace syntax: `{{variable}}`.
+新增语言时复制 `locales/en-US.json` 的结构，翻译所有值，在 `supportedLocales` 末尾增加对应项，再同步资源加载映射。已有条目不重排：同语言前缀的首项用于浏览器裸语言代码的默认选择。
 
-Example: `"Hi, {{name}}"` will render as `"Hi, Alice"` when called with `t('key', { name: 'Alice' })`.
+## 文案合同
 
-Do NOT remove or rename interpolation variables — they are referenced in code.
+- 保持所有语言的键结构一致，保留 i18next 的 `{{variable}}` 名称、数量和含义。
+- 标题、按钮、运行状态与失败提示分别表达，不把失败、等待或质量诊断译成已完成。
+- 教师、学生、AI 身份与场景对象使用一致名称；技术 ID、字段名和枚举不直接进入学生可见文案。
+- 按实际调用组件确定语境；语言包保留某个旧键不代表当前首页、课堂或课程入口仍显示该功能。
+- 长文本、中文标点、数字、插值和从右到左语言需核对实际组件宽度及键盘访问。
 
-## Keys with design intent
+```ts
+// 示例值："你好，{{name}}"。
+t('key', { name: '同学' });
+```
 
-Not every key needs explanation, but the following have non-obvious UX context that affects how they should be translated.
-
-| Key | Where it appears | Translation notes |
-|-----|-----------------|-------------------|
-| `home.greetingWithName` | Top-left of homepage, clickable pill that opens nickname editor | This is a **call-to-action** — the greeting doubles as an entry point for users to set their nickname. The translation must include `{{name}}` and read naturally with the default nickname (see `profile.defaultNickname`). Avoid generic greetings that hide the name (e.g. don't translate as just "Welcome"). |
-| `profile.defaultNickname` | Pre-filled in the greeting and the nickname input field | Shown before the user sets a real name. Pick a warm, gender-neutral word that: (1) feels natural in the greeting, (2) clearly signals "this is a placeholder you should replace". Avoid cold terms like "User" or formal terms like "Student". Examples: EN "Learner", ZH "同学". |
-| `profile.bioPlaceholder` | Textarea placeholder in the profile editor | The bio is fed to the AI teacher to personalize lessons. The placeholder should hint at this — tell users *why* filling it in helps. |
-| `pbl.chat.issueCompleteMessage` | System message when a PBL issue is completed | Contains `{{completed}}` and `{{next}}`. Should feel like a natural progression, not a mechanical status update. |
-| `generation.textTruncated` / `generation.imageTruncated` | Toast warnings during PDF-based course generation | These are technical warnings shown briefly. Keep them short and factual. `textTruncated` has `{{n}}` (character count), `imageTruncated` has `{{total}}` and `{{max}}`. |
-| `agentBar.readyToLearn` | Classroom page, above the agent role list | Conversational prompt to set the mood before class starts. Should feel inviting, not instructional. |
-| `settings.agentsCollaboratingCount` | Settings panel, multi-agent mode description | Contains `{{count}}`. This is a status label, not a button — keep it descriptive. |
+更新文案时追踪 `t()` 调用、组件行为和所有语言文件，避免沿用旧首页昵称入口、未来能力提示或过时课堂阶段说明。检查方式遵守 [开发工作流](../../../../docs/agent-workflow.md)，布局范围见[多终端检查](../../../../docs/responsive-layout-checks.md)。

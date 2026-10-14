@@ -1,6 +1,6 @@
 # 开发与验证工作流
 
-本文按任务选用，不要求每个改动执行所有步骤。项目入口见 [AGENTS.md](../AGENTS.md)，命令定义以 [package.json](../package.json) 为准。
+本文按任务选用，不要求每个改动执行所有步骤。项目入口见 [AGENTS.md](../AGENTS.md)，当前合同见[文档导航](README.md)，命令定义以 [package.json](../package.json) 为准。
 
 ## 从目标到交付
 

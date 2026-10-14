@@ -1,135 +1,54 @@
-# OpenMAIC upstream baselines
+# OpenMAIC 包来源与 CoTeach 适配
 
-CoTeach vendors selected OpenMAIC packages in this workspace. P0 synchronization is pinned to immutable release-tag commits so later upstream changes cannot silently alter a migration.
+CoTeach 将 OpenMAIC 的契约、生成、导入和渲染包保存在工作区中，由 `pnpm` 工作区依赖连接应用。这里记录本仓库采用的来源与当前适配边界，不代表这些目录与上游原样一致，也不声称记录的标签是上游最新版本。
 
-| Package | Release | Upstream commit |
+## 来源与版本
+
+| 工作区包 | 本地版本 | 仓库记录的上游来源 |
 | --- | --- | --- |
 | `@openmaic/dsl` | `0.9.0` | `e15780835afbee2d96270fd37be868742308e0b9` |
-| `@openmaic/generation` | `0.3.7` | release tree `v1.0.3@e693e11a81644f84c258df73dbda378643520a62` |
+| `@openmaic/generation` | `0.3.7` | `v1.0.3` / `e693e11a81644f84c258df73dbda378643520a62` |
 | `@openmaic/importer` | `0.1.2` | `90f5f3942bca09df33a85a2d8aa025faf46679f6` |
+| `@openmaic/renderer` | `0.0.2` | 工作区维护版本；未在本合同中另行声明固定提交 |
 
-## Synchronization policy
+版本以各包 `package.json` 为准。生成来源、参考样式版本及提示词哈希保存在 [openmaic-baseline.ts](../src/lib/openmaic/generation/openmaic-baseline.ts)；其中同时区分上游与本地扩展后的动作提示词。该记录用于追溯和对应兼容测试，不将应用当前执行路径限定为旧版 classic 一键生成。
 
-- Synchronize shared schemas, migrations, validators, runtimes, import logic, fixtures, and package metadata from the pinned release.
-- Keep CoTeach teaching-domain behavior in application-level extensions whenever the upstream generic types support it.
-- If compatibility requires a temporary vendored-package extension, keep it additive, document it, and cover it with a regression test.
-- Preserve CoTeach's Windows-compatible workspace scripts and maintained dependency substitutions.
-- Port security fixes selectively when CoTeach already has stricter behavior; never replace the DNS-pinned SSRF dispatcher with a weaker implementation.
-- Keep generation-owned one-click prompt assets byte-identical to the pinned package. CoTeach course metadata, timing, persistence, and quality checks belong in application adapters rather than copied prompt templates.
+## 包与应用的职责
 
-## Generation baseline
+| 所有者 | 职责 |
+| --- | --- |
+| `@openmaic/dsl` | 幻灯片、动作、测验等共享类型，结构校验及迁移 |
+| `@openmaic/generation` | 无供应商依赖的生成原语、包内提示词、原生元素与局部组件编译 |
+| `@openmaic/importer` | PPTX / OOXML 解析、导入及源码到 DSL 的还原 |
+| `@openmaic/renderer` | 按 DSL 绘制课件元素及共享渲染样式 |
+| `src/lib/course-design` | 教师资料与证据、知识结构、时间预算、小节页面和连续讲稿 |
+| `src/lib/course-generation` | 后台任务、租约、阶段检查点、课堂关联、媒体与恢复 |
+| `src/lib/openmaic` | 模型与提示词适配、课堂动作、教学工具、播放器及运行时 |
 
-The low-level production first draft for slide content and slide actions is pinned to
-OpenMAIC `v1.0.3` (`e693e11a81644f84c258df73dbda378643520a62`) /
-`@openmaic/generation@0.3.7`. The package's prompt assets are
-the immutable baseline; experimental visual plans and spatial budgets may be
-used by offline benchmarks but must not be injected into production first-draft
-prompts.
+`AICallFn` 是生成包与模型调用方的边界。包不选择提供方、不读取应用密钥、不持有数据库任务；应用负责教师模型与思考配置、输出和执行预算、并发、响应留存及恢复身份。
 
-Verified again on 2026-09-15: `v1.0.3` is the newest stable `v1.x` tag and its
-`packages/@openmaic/generation` tree has no changes relative to `v1.0.2`;
-both releases use `@openmaic/generation@0.3.7` with the same six one-click
-prompt assets. CoTeach records the newer release tag so quality reports name
-the actual stable baseline being followed.
+## 当前生成适配
 
-OpenMAIC v1.x has a classic one-click path and a newer Agent Workbench. CoTeach
-production intentionally uses the pinned classic `requirements-to-outlines` →
-`slide-content` → `slide-actions` path. The Workbench planner remains available
-only to offline benchmarks and must not be reachable from durable production
-jobs. Resource-package facts are supplied only through the official
-material/PDF context, while grade, duration, section structure and teaching
-requirements are supplied through the official requirement. CoTeach does not
-repack facts into or rewrite the returned page descriptions/key points. It
-filters generic upstream quizzes and appends one short-answer quiz after each
-confirmed section.
+教师新版自动流程先组织知识与预算，再按小节直接依据采用原文联合创作页面计划和连续讲稿，编译为 schema 3 蓝图。当前知识讲授页默认进入 [restored-slide-authoring.ts](../src/lib/openmaic/generation/restored-slide-authoring.ts)，生成完整原生可编辑页面。名称中的 `restored` 表示采用仓库已有的整页构图设计合同，它是当前默认实现，不是一次自动回退。
 
-The six official prompt assets stay byte-stable and their SHA-256 hashes are
-recorded in `OPENMAIC_GENERATION_BASELINE`. CoTeach does not copy or edit those
-files. For production lecture slides only, the thin call adapter appends one
-shared reference profile measured from the teacher-supplied OpenMAIC web export:
-deep-navy/slate colour roles, title/subtitle hierarchy, sufficient visible
-teaching units, semantic structure selection, and an explicit rule that tables
-are only for genuine two-dimensional comparisons. Projected body and table
-text stays at 16px or larger; fit is solved by editing wording or composition,
-not by shrinking teaching text. It supplies the course title
-and ordered lecture-page titles for deck awareness. It does not supply IDs,
-timings, quiz mechanics, coordinates, a page template, spatial budget, visual
-plan, or a second model, and it never overwrites the returned background/theme.
+生成包的原生模式支持富文本、形状、图表、表格、公式与素材，局部组件用于保留实际图示拓扑或完成文字度量。应用提供本页职责、原文、学情、课程位置和观察资源；画面精炼核心含义，连续讲稿独立保留定义、推理与必要条件。当前联合页面计划不要求不可变逐条文本槽、flow 模板或将完整讲稿投影到画布。
 
-The supplied OpenMAIC course export is used only as a visual measurement
-reference because its input was a topic rather than the same CoTeach resource
-package. Its actual elements use deep-blue title roles (`#1E3A8A` /
-`#1E40AF`), slate body text, and white or light gray-blue surfaces. The Office
-blue values in DSL theme metadata are not treated as the visual identity of the
-rendered pages. Screenshot page numbers, outer rounded cards and page shadows
-belong to the display shell and are not injected into the course DSL.
+实际页面渲染用于计量与诊断。有严重几何问题时，每小节最多一次局部几何补丁，只改已有元素位置与尺寸。候选须改善原问题且不引入新问题；否则保留可执行首稿。普通讲稿固定后，视觉动作生成只返回锚点与目标，不能改写讲稿。完整生成、质量诊断、教师确认、测试小节和恢复合同见 [课程生成](course-generation.md)。
 
-The page planner, media planner, slide-content generator, action generator and
-assembler have deliberately separate responsibilities:
+classic 一键大纲、flow、Workbench 与专用 PBL 生成原语仍可由明确调用方使用。包提供某项能力不等于教师当前产品入口执行该路径，离线比较也不能据此改写持久任务。已保存响应始终按原创作政策与编译身份恢复，不自动升级或重写历史课程。
 
-1. the official classic outline generator writes page order, title, type,
-   description and source-grounded key points, including any semantic structure
-   hints that the upstream model itself selects;
-2. the official outline's media requests are preserved; CoTeach does not run a
-   second media planner after the outline has been confirmed;
-3. the unmodified `@openmaic/generation` slide prompt plus the shared website
-   reference context produces the editable elements and page composition;
-4. browser and static audits measure the returned first draft; only a concrete
-   layout, density, knowledge-visibility, hierarchy, palette or semantic-
-   structure defect may invoke the pinned package's editor once, using the
-   exact same teacher-selected model. The candidate is adopted only when its
-   measured quality improves and confirmed knowledge coverage is preserved;
-5. action/TTS generation receives the semantic outline and final page, but not
-   the visual contract.
+## 提示词与同步
 
-Recovered slide checkpoints are re-audited before reuse. A checkpoint with
-structural or browser-rendered layout defects is discarded and regenerated
-through the normal official first-draft path. Density, palette and semantic-
-coverage findings remain visible in the quality report but do not discard
-already completed work during a continuation; an accepted checkpoint is never
-silently reauthored by a heuristic alone.
-The quality report records the exact generation model, classic baseline,
-reference profile, density, palette, semantic structures, repair decision and
-final disposition.
+包内 `templates`、`snippets` 和 `prompts-pbl` 服务生成原语；应用 [prompts](../src/lib/openmaic/prompts/README.md) 同时服务课堂运行时和应用专用资源。部分名字重叠，修改前必须从实际调用方确认加载器与所有权。包模板、应用模板或 TypeScript 适配输入发生变化时，同步相应版本、指纹和回归；不能只改一份同名文件便假定全部生成入口已更新。
 
-Standard production generation uses the package for outline, scene content and
-scene actions, plus the upstream v1.x per-stage model routing semantics.
-CoTeach-only section IDs, knowledge-point IDs, timing, quizzes, persistence and
-quality metadata remain outside the package. Section quizzes are added only
-after the teaching pages have been grouped. Before outline generation, their
-reserved duration is removed from the duration shown to the upstream lecture
-planner; otherwise OpenMAIC spends the full course budget on slides and CoTeach
-then adds quizzes on top, producing many sparse pages. The only separately owned planners
-are specialized six-stage PBL and vocational task-engine generation.
+上游同步以明确标签或提交为参照，核对 schema、迁移、校验、运行时、导入逻辑、最小样例与包元数据。教学领域逻辑优先放应用层；共享编译或兼容契约确需本地扩展时，保留明确调用方和回归。工作区版本号不自动表示本地改动已经由上游发布。
 
-The browser quality pass combines actual renderer geometry with knowledge
-coverage, body-grid use, title/subtitle hierarchy, palette measurements,
-semantic structure selection and cross-page layout repetition. Each page has
-at most one evidence-triggered editor call and no retry loop. Unresolved pages
-are marked `needs-review`; browser unavailability records `audit-unavailable`
-and keeps the first draft without attempting an edit.
+保留仓库跨平台构建脚本和维护中的依赖替换。安全修复按现有实现择取；不得以较弱的通用实现覆盖应用已有的 DNS 固定 SSRF 防护。包变更按 [开发工作流](agent-workflow.md) 构建，并核对应用生产运行产物；导入器代码变更使用 [导入器技能](../packages/@openmaic/importer/SKILL.md)。
 
-Interactive widgets still use the teacher-selected generation model. Because
-the official widget path returns a complete HTML/CSS/JS document rather than a
-compact slide JSON object, widget content receives one bounded long-generation
-request as a streamed response instead of multiple short page requests. The
-caller still consumes the final response as one text document, but receiving
-response headers while generation is in progress prevents the HTTP transport's
-shorter header timeout from pre-empting the application deadline. This changes
-neither model routing nor the official widget prompt and prevents a late diagram
-timeout from replaying completed slide checkpoints.
+## 兼容字段与视觉来源
 
-Course language is resolved before slide and action generation, including when
-a teacher-confirmed outline skips upstream outline generation. Chinese courses
-require Chinese learner-facing text and narration while allowing necessary
-English terms with Chinese explanation. English-dominant narration receives at
-most one action-only repair; a final TTS preflight refuses to synthesize it if
-the repair still fails.
+测验问题中的 `knowledgePointIds` 与教学 `format` 是可选扩展，DSL 迁移保留它们。已有课堂仍消费 `SpeechAction.audioUrl`；DSL 支持的 `audioId` 资产引用不表示所有历史课堂已完成迁移。`interactiveMode` 等旧类型字段仅供对应兼容调用，不能据其存在重新提供旧阶段开关；职业任务路径仍有 `taskEngineMode` 标记。
 
-## Current compatibility extension
+课件样式参考来自教师提供的 OpenMAIC 网页导出及仓库已有原生设计：深蓝标题、slate 正文、浅色画布和清晰层级。来源中的 Office 蓝主题元数据、截图页码、外层卡片和阴影不等于实际课件视觉身份。参考用于设计输入和测量，不证明采用同一资料时已有质量或学习效果优势。
 
-CoTeach stores optional `knowledgePointIds` and pedagogical `format` metadata on quiz questions. These additive fields survive the DSL 0.9 migration and remain readable by existing classrooms.
-
-Existing classrooms and media-generation code also still read `SpeechAction.audioUrl`. DSL 0.9 prefers `audioId` asset references, so `audioUrl` remains as a deprecated additive compatibility field until persisted classroom migration is complete.
-
-CoTeach's current product flow treats deep interaction as the default and has removed the old stage-level `interactiveMode` switch. The optional DSL 0.9 field is therefore intentionally not reintroduced; `taskEngineMode` remains the specialized vocational-path marker.
+容量和实际渲染计量复用播放字体、DOM 和公式资源；关系图辅助布局使用既有 `elkjs`，可编辑 PPTX 导出继续使用工作区 `packages/pptxgenjs`。这些依赖与许可证随各包维护，不能把参考思想误称为移植了外部生成器或训练数据。

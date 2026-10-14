@@ -15,7 +15,7 @@ pnpm test:projection-sync
 
 - `PROJECTION_BASE_URL`：默认 `http://127.0.0.1:3000`。
 - `PROJECTION_RESOURCE_ID`、`PROJECTION_STAGE_KEY`：指定测试资源和阶段；缺省时读取当前课堂。
-- `PROJECTION_BLOCK_WEBSOCKET=true`：阻断学生 WebSocket，单独验证 150 毫秒 HTTP 补漏路径；WebSocket 已订阅时保留 400 毫秒完整性检查。
+- `PROJECTION_BLOCK_WEBSOCKET=true`：阻断学生 WebSocket，单独验证 HTTP 补漏路径；当前投屏轮询为 500 毫秒，WebSocket 已订阅时完整性检查为 15 秒，以 `src/lib/realtime/projection-state.ts` 为准。
 - `PROJECTION_DURATION_SECONDS`：调试时可缩短，正式验收保持 1800。
 - `PROJECTION_METRICS_TOKEN`：提供内部监控令牌后，在报告中保存测试前后的进程及 HTTP 指标。
 - `PROJECTION_REPORT_PATH`：默认写入 `tests/load/reports/projection-sync-report.json`。

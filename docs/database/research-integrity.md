@@ -1,91 +1,98 @@
-# V2 数据库与实验采集适配检查（2026-09-08）
+# 研究数据与留存合同
 
-> 本文保留首轮数据库检查的范围与结果。后续已扩展 V2 功能及导出；当前 `events`、`submissions`、`outcomes`、`ai`、`domain` 的完整接口契约见[研究数据导出](research-export.md)。下文“当前适配边界”描述的是首轮检查时的状态。
+本文描述当前采集、提交快照、归属校验和留存边界。实体清单见[数据库设计](../database.md)，分页与管理导出见[研究数据导出](research-export.md)。合同以 [Prisma schema](../../prisma/schema.prisma)、迁移 SQL 和实际写入服务共同为准。
 
-## 检查范围与事实
+## 区分当前状态与历史证据
 
-检查了 [Prisma 模型](../../prisma/schema.prisma)、完整迁移链、平台账号/课程/活动/模板/课堂入口、学习事件、普通活动提交，以及旧课堂持久化入口。当前模型共 46 个（含本次新增 ActivitySubmission）。
+| 记录 | 含义与使用方式 |
+| --- | --- |
+| `ActivityProgress` | 某条选课对活动的最新状态和答案投影；重交会更新，不能据此恢复历次尝试 |
+| `ActivitySubmission` | 每次普通活动成功提交的活动版本、配置、答案和研究键快照；与最新进度在同一事务写入 |
+| `ClassroomParticipation`、`StudentProjectWorkspace`、`ClassroomSubmission` | 课堂参与、项目和各阶段的当前状态；阶段提交不是逐次操作历史 |
+| `ArtifactVersion` | 成果的独立版本、文件/HTML 引用和提交状态；已保存版本不被后续提交覆盖 |
+| `ExperimentAssessmentAssignment` | 某场次某条选课固定的前后测题目与情境次序，后续题目配置变化不替换已分配内容 |
+| `ExperimentAssessmentDraft` | 测量答案草稿及版本；可继续编辑，正式提交时删除对应阶段草稿 |
+| `ExperimentAssessmentSubmission` | 每个场次、选课、测量阶段的一次正式题目和答案快照；相同答案重试复用已提交记录，不同答案重交返回冲突 |
+| `LearningEvent`、`AiInteractionEvent`、`DomainEvent` | 分别记录学习、AI 交互与业务操作事实；同一操作可在多个事实层记录，不能简单相加为实验尝试次数 |
+| `GenerationJob`、`GenerationCheckpoint` | 生成与恢复的运行状态；检查点按任务和步骤更新，不是追加式实验档案 |
 
-本次只读检查的本地 PostgreSQL 16.9 数据库在变更前已应用 20 次迁移；有 2 个用户、1 个教学班、1 条选课，活动、课堂参与、学习事件、AI 事件均为 0。已检查的跨课程进度/课堂参与、非法邀请码计数、空 owner 系统凭据重复均为 0。这是本地库的一次快照，不能代表其他部署环境。
+[活动提交服务](../../src/lib/platform/submissions.ts)在事务内确认活动版本，题目已变化时拒绝旧版本答案。再次提交相同普通活动答案仍新增历史记录；实验测量使用相反的“一阶段一次正式提交”规则。分析必须区分这两种计数。
 
-## 已实现的结构与行为
+发布课堂使用场次绑定的模板版本；设计修改经备课入口形成相应草稿/版本，不能通过授课动作覆盖已发布设计。模板 snapshot 存设计，实例 runtimeConfig 存运行控制，提交 payload 存学生内容，事实 payload 存单次操作。教材修订、实际采用章节和证据快照用于解释生成依据，不能以当前教材内容替代当时采用的证据。
 
-| 问题 | 调整 | 保证范围 |
-| --- | --- | --- |
-| 加入课程时选课、活动进度和邀请码计数分别写入 | 整体事务；读额度前锁邀请码，同用户加入时锁账号 | 失败不留半条选课，最后一个名额不被并发超用；重复加入不重复计数 |
-| 重置令牌可被并发使用两次 | 事务内按未使用且未过期条件消费，再修改密码 | 一次性消费与会话版本递增原子提交 |
-| max+1 分配章节位置、活动位置、模板版本和课堂场次有竞争 | 在父记录行锁事务内计算和创建 | 同一父记录的自动分配串行化 |
-| 版本检查与更新分离 | 版本检查、更新及关联课堂实例创建同事务 | 携带旧 version 的并发修改返回冲突 |
-| 浏览活动可能把刚提交的 COMPLETED 改回 IN_PROGRESS | 只对 NOT_STARTED 条件更新状态 | 当前进度不会被迟到的访问覆盖 |
-| 事件可引用别人的 enrollment 或其他课程的 activity | 服务端逐级解析参与→课堂→活动→章节→课程→选课，并校验当前学生 | 整批校验后入库，任意上下文冲突都拒绝 |
-| 全局事件键使不同学生互相去重 | 唯一约束改为 (userId, idempotencyKey) | 同学生重试幂等，不同学生键相同也可记录 |
-| 研究身份随运行关系丢失 | LearningEvent 保存 Enrollment.researchKey 快照 | 历史只在选课确属该用户/课程时回填，无法确认的仍为 null |
-| 再次交作业会覆盖上次答案 | 新增 ActivitySubmission，每次保存答案、研究键、活动版本与题目配置快照 | 最新进度用于界面，历史用于分析；两者同事务提交 |
-| 删除用户/课程可级联删除学习事实 | 学习事件全部上下文外键及提交历史外键使用 Restrict | 有历史的对象应停用/归档，物理删除需专门处理研究留存关系 |
-| 事件时长和邀请码计数缺少数据库兜底 | CHECK 非负时长、正事件/活动版本、合法邀请码额度 | 直接 SQL 也不能写入这些非法值 |
+## 身份、归属与时间
 
-新增迁移：[20260908120000_research_integrity](../../prisma/migrations/20260908120000_research_integrity/migration.sql)。学习事件按课程/接收时间/id、研究键/发生时间建立索引；提交历史按活动与选课建立时间索引。未在无真实负载的情况下声称性能提升幅度。
+`Enrollment.researchKey` 是每条选课的假名标识，同一学生在不同教学班有不同标识。它可关联同一教学班内的记录，不是跨课程受试者编号，也不是完全匿名数据。学习事件、AI 交互、业务事实和正式提交在写入时保存研究键快照；历史回填只在用户/课程归属可确认时进行。
 
-数据库 FK 检查引用是否存在；跨课程一致性由当前 V2 写入服务校验。绕过服务直接改外键、researchKey 或历史 payload 的管理脚本，仍可能破坏研究语义。应用没有历史更新/删除接口，本次没有增加数据库级 UPDATE/DELETE 禁止触发器。
+课堂学习证据通过 `ClassroomParticipation → Enrollment` 关联学生，场次通过 `Activity → Chapter` 关联教学班。客户端提供的 ID 只是待验证引用，服务端逐级解析并核对归属；外键存在不等于跨课程语义正确。教师操作依据 `CourseTeacher`，学生小组操作还需核对实际成员与对象范围。
 
-## 数据含义与采集契约
+`LearningEvent.occurredAt` 为客户端发生时间，省略时使用服务器当前时间；`receivedAt` 为服务器接收时间。允许离线上报早于接收时间的事件，拒绝超过服务器时间 5 分钟的未来事件。AI 交互与业务事实的 `createdAt` 是服务器记录时间，不自动代表实际学习发生时间。增量导出按各类型规定的服务器时间排序。
 
-- `Enrollment.researchKey` 是每条选课的假名标识，同一学生在不同教学班有不同标识。它不是跨课程全局实验受试者编号。
-- `occurredAt` 是客户端发生时间；`receivedAt` 是数据库接收时间。允许离线上报较早的事件，拒绝超出服务器时间 5 分钟的未来事件；增量导出按接收时间排序。
-- `eventVersion=1` 是事件结构版本，不是实验组、干预条件或量表版本。真实实验分组与量表方案确定后再建立明确关联，不从已有答案推断实验分组。
-- 事件 POST `/api/platform/events` 每批 1–100 条，单条 metadata JSON 最多 32,768 字符；时长是非负毫秒整数。必须至少给出一个可解析的上下文 ID，服务端补齐其祖先和选课。课堂事件必须关联学生实际参与过的实例。
-- `idempotencyKey` 在同一用户范围内唯一；客户端重试必须重用原键，新事件必须使用新键。重复键会返回已接受，不能用旧键修改旧事件。
-- 普通活动每次成功提交均是一条提交记录，包括同答案再次提交；不把 HTTP 请求次数等同于独立实验尝试。旧 ActivityProgress 已被覆盖的答案无法恢复，本次不伪造历史。
-- `activity_opened` 当前每个活动/选课只记录一次；`classroom_entered` 按参与记录/分钟去重。两者不是完整访问次数、停留时长或眼动/注意力证据。
+`eventVersion` 表示事件结构版本。实验 `variant` 表示前后测情境次序，客观分数由分配题目的评分规则得出；实验分组、量表含义和测量有效性需依据真实研究方案，不能从事件版本、题目次序或已有答案自行推断。
 
-## 教师研究导出
+## 事务、版本与幂等
 
-已登录且与教学班存在 CourseTeacher 关系的教师可访问：
+| 场景 | 当前写入保护 |
+| --- | --- |
+| 邀请入班 | 邀请码行锁及同用户的串行化保护；选课、初始活动进度和使用计数在事务内提交，重复加入不重复扣额度 |
+| 密码重置 | 事务内条件消费未使用且未过期令牌，更新密码并递增会话版本 |
+| 章节/活动顺序、模板版本和课堂场次 | 在父记录锁的保护下分配编号，数据库唯一约束兜底 |
+| 携带版本的编辑 | 事务内校验版本后写入，过期版本返回冲突 |
+| 活动访问 | 只将 `NOT_STARTED` 更新为 `IN_PROGRESS`，迟到访问不能将已完成状态倒退 |
+| 普通活动提交 | 活动版本确认、提交快照和最新进度同事务，避免题目与答案错配 |
+| 学习事件批量上报 | 全批次解析归属后写入，任何上下文冲突都拒绝整批 |
+| 实验分配与草稿/提交 | 场次生命周期守护、单学生分配锁及版本检查；A/B 平衡分配使用场次范围锁，正式提交与草稿清理同事务 |
+| 成果归档与 AI 操作确认 | 在实际参与、对象归属、确认状态和幂等回执的保护下执行，正式成果使用独立版本 |
 
-```text
-GET /api/platform/offerings/{offeringId}/research-export?type=events&take=200
-GET /api/platform/offerings/{offeringId}/research-export?type=submissions&take=200&includeContent=true
+学习事件以 `(userId, idempotencyKey)` 唯一；AI 与业务事实表的 `idempotencyKey` 为全表唯一，由各服务构造操作范围。重试需复用原操作键，新事实需新键。学习事件重复键会被确认为已接受，不能用相同键修改旧内容。
+
+## 学习事件上报
+
+学生通过同源认证请求 `POST /api/platform/events`：
+
+```json
+{
+  "events": [
+    {
+      "idempotencyKey": "本次事实的稳定重试键",
+      "type": "事件类型",
+      "activityId": "当前教学班的活动 ID",
+      "occurredAt": "2026-10-14T02:00:00.000Z",
+      "source": "platform"
+    }
+  ]
+}
 ```
 
-返回 `exportVersion`、`window`、`rows`、`nextCursor`。保持相同 `type`、`includeContent`，持续携带 `nextCursor` 作为下一页的 `cursor`，直到为 null；不要只保存第一页。`type` 可为 events/submissions，`take` 最大 500；可显式指定 ISO 时间 `since`、`until`。首请求默认固定截止到当前时间，后续游标绑定教学班、数据类型和时间窗口，以 `(时间,id)` 排序，避免同毫秒多条记录漏页。
+每批 1–100 条；单条 `metadata` 序列化 JSON 最多 32,768 字符；`durationMs` 为 0–2,147,483,647 的毫秒整数。至少提供一个可解析的教学班、选课、章节、活动、场次或参与 ID，服务端补齐其祖先及选课。课堂事件必须关联当前学生实际存在的参与记录。响应的 `acceptedIds` 是已持久化或已存在的幂等键，不是新生成的事件记录 ID。实现见[学习事件服务](../../src/lib/platform/learning-events.ts)。
 
-默认白名单不导出 userId、enrollmentId、姓名、自由文本 metadata、题目及答案；只有显式 `includeContent=true` 才导出内容。默认字段中的 researchKey 仍是可关联的假名标识，不应称为完全匿名数据。自行写入自由文本的身份信息不会自动被清洗；需要答案的研究导出应自行按实际研究要求处理这些文本。
+内置 `activity_opened` 对每个活动/选课记录一次；`classroom_entered` 按参与记录和分钟去重。这些事件不能直接当成完整访问次数、停留时间、注意力或眼动证据。客户端时长、自报文本与 AI 推断也应按其真实证据类别分析。
 
-`quality=missing_research_key` 表示旧事件的身份快照无法可靠补齐；分析时应单独处理，不能将其当成已匹配样本。分页固定时间窗口不是数据库跨请求快照：若有事务在首请求时尚未提交、之后才提交且其接收时间落在窗口内，实时导出仍可能漏到；正式实验封存导出应在采集停止、在途事务完成后执行，日常增量采集应重叠窗口并按记录 id 去重。
+## 数据库约束与留存边界
 
-## 第一轮适配边界（历史记录）
+`LearningEvent` 的用户及全部上下文外键、`AiInteractionEvent` 与 `DomainEvent` 的关联外键使用 `Restrict`。`ActivitySubmission`、实验分配/正式提交/草稿及 `ArtifactVersion` 的关键关联也使用删除限制。已有事实的账号、教学班和课堂对象应通过状态、退出或归档处理；物理删除前需专门处理研究留存关系。
 
-以下为第一轮完成时的状态；后续课堂、AI 与页面适配及新增迁移已更新，见 [V2 功能适配记录](v2-function-adaptation.md)。
+数据库另外检查事件非负时长、正结构版本、合法邀请码额度、正活动版本、实验阶段及客观分数范围。额外检查和部分唯一索引定义在迁移 SQL，不能仅依赖 Prisma 模型检查。相关迁移包括[学习事件与提交留存](../../prisma/migrations/20260908120000_research_integrity/migration.sql)、[AI/业务事实与成果版本保护](../../prisma/migrations/20260908150000_v2_classroom_research/migration.sql)及[实验测量](../../prisma/migrations/20260924100000_classroom_experiment_assessments/migration.sql)。
 
-| 功能 | 检查结论 |
-| --- | --- |
-| 账号、选课、教学班、章节、普通活动、模板版本与课堂参与入口 | 使用 V2 模型；本次修复相应事务、归属和历史记录 |
-| 作业/测验/表单/资源完成 | 保存最新进度和本次提交快照；历史可分页导出 |
-| V2 学习事件 | 当前有活动首次打开和课堂进入调用；支持经校验的客户端批量事件 |
-| 旧课堂学习分析与 AI 协作 | 旧 `session-repository.ts` 等仍有 `@ts-nocheck` 和已删除模型调用；部分旧入口明确 410，不能认为已适配 V2 |
-| V2 课堂运行 | 当前学生页面的进入操作保存参与记录；这不等于旧课堂播放、AI 对话、成果、评价等完整链路已接入 |
-| AiInteractionEvent / DomainEvent 等其余事实表 | 本次未实现新的 V2 AI 写入服务或其导出；AI 事件仍存在用户删除级联风险，接入前需同样补齐身份快照、上下文校验、幂等与留存策略 |
-| 旧运维验证脚本 | `test:classroom-flow`、`db:migrate-from-json` 仍面向旧模型，不能用来证明 V2 持久化正确 |
+追加事实是应用使用合同；目前没有禁止全部数据库 UPDATE/DELETE 的触发器。公共讨论等实体仍有自己的级联或置空策略，不能因为事件表受保护就声称所有正文都有不可删除保证。绕过写入服务修改 ID、研究键、题目或 payload 的管理脚本仍可能破坏语义；历史已被覆盖的内容不能伪造恢复。
 
-后续课堂实验应先完成上述旧课堂/AI 链路的 V2 适配，并用一次完整课堂实测核对事件、AI 交互、干预、成果和评价能否通过同一个 participation 关联。当前改进为已运行的 V2 课程和普通活动采集提供基础，没有宣称整个旧课堂实验链路已恢复。
+`quality=complete` 只表明导出记录带研究键；没有研究键的教师/课程操作需按事件语义保留。正式数据封存要处理在途事务与文件字节，不依赖分页接口的固定时间窗口充当数据库快照。具体方法见[导出分页合同](research-export.md#参数与分页)和[部署与恢复说明](../../deploy/README.md)。
 
-## 验证与迁移操作
+## 验证入口
+
+按修改范围选择检查；以下列出可执行入口，不记录某次历史通过结果：
 
 ```bash
-node scripts/verify-research-database.mjs
-pnpm exec vitest run src/lib/platform
-pnpm typecheck
-DATABASE_URL=postgresql://validation:validation@127.0.0.1:5432/validation pnpm exec prisma validate
+pnpm exec prisma validate
+pnpm exec vitest run src/lib/platform/learning-events.test.ts src/lib/platform/submissions.test.ts src/lib/platform/research-export.test.ts src/lib/platform/experiment-service.test.ts
+pnpm test:db:research
+OPENPBL_VERIFY_BROWSER=1 pnpm test:db:research
 ```
 
-隔离验证自动新建并清理独立 Docker PostgreSQL 16.9 容器，完整执行历史迁移，再验证新增迁移、历史回填、幂等、约束、删除限制与事务回滚；不读取现有 DATABASE_URL 或 .env。容器检查使用一次性数据，不能替代生产备份恢复演练或浏览器端到端验收。
+`prisma validate` 检查 schema，需合法格式的 `DATABASE_URL`，不会执行迁移。隔离数据库入口 [verify-research-database.mjs](../../scripts/verify-research-database.mjs)需要 Docker 与项目依赖，使用带随机标记、绑定回环地址的独立 PostgreSQL 16/pgvector 容器，执行完整迁移及持久化/约束验证，结束时清理自身资源；它自行构造数据库地址，不向现用库执行迁移。
 
-其他环境应用前先核对迁移状态并备份：历史 `20260908090000_v2_database_rebuild` 会删除 public 下旧表；仅切换 PostgreSQL schema 无法隔离它。不得把本次增量优化理解为授权重跑历史重建或重置数据库。本次新增迁移不清表，非法存量额度/时长会使事务失败并回滚；应调查真实异常，不能随意修改实验记录以通过约束。
+浏览器模式另需 Playwright Chromium，并通过 [verify-v2-pages.mjs](../../scripts/verify-v2-pages.mjs)核对隔离库的地址和随机标记。它使用临时 Next 构建/上传目录、测试身份和独立端口（默认 3199，可设 `OPENPBL_VERIFICATION_PORT=3199`–`3299`），结束时清理；不使用 3000 上的现用服务。只检查设置与备课可增加 `OPENPBL_VERIFICATION_PAGES=authoring`。
 
-### 本次执行结果
+浏览器验证进程屏蔽工作区 `.env*`、旧配置和外部 API key，阻止外部网络；固定教案的设置、备课、师生五阶段页面读取/切换/刷新与业务持久化分别验证。明确的 `AI_NOT_CONFIGURED` 作为环境项报告，不是模型调用成功。隔离检查、真实供应商调用、生成质量验收和生产备份恢复是不同的验证范围，交付时分别说明实际执行结果。
 
-- Prisma schema 校验、全局 `pnpm typecheck`、相关 ESLint、差异空白检查通过。
-- 汇总定向测试 10 个文件、66 项通过（平台、研究导出路由、密码、事务重试和注册页面）；新增导出测试的类型错误已修正并单独复测。
-- 独立 PostgreSQL 16.9 运行全部迁移和真实约束验证通过；[实际业务持久化脚本](../../scripts/verify-platform-persistence.ts) 还验证了真实 repository 的注册/登录、并发额度与选课去重、一次性重置、章节与模板编号、重复交作业快照、并发访问保留 COMPLETED、学习事件上下文与原子拒绝。脚本仅允许带本次随机标记的隔离数据库。
-- 当前本地 V2 数据库已应用本次唯一待执行的增量迁移；应用前创建并检查了 PostgreSQL 自定义格式备份，保存于 `/home/lkj/.local/state/openpbl/backups/before-research-integrity-1788866976217.dump`，文件权限 0600。应用后用户 2、教学班 1、选课 1，数量未变，新历史表及 researchKey 字段可查询。
-- 未部署远端应用，未执行浏览器课堂端到端实验；不能将上述数据库验证等同于旧 AI 课堂功能已全面适配。
+已有部署的迁移先核对待执行项并备份。历史破坏性重建 SQL 的风险与 pgvector 前置条件见[数据库迁移说明](../database.md#迁移与验证)；完整迁移链仅用于已明确允许的新库或隔离验证环境，不能据此重置现用数据。

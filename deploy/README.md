@@ -1,14 +1,39 @@
-# CoTeach 单系统生产部署
+# CoTeach 生产部署与服务维护
 
-生产环境只运行当前系统。Next.js 应用、代码运行器、本地问卷分词服务和语音强制对齐服务由 systemd 用户服务托管；Docker Compose 只负责 PostgreSQL、Redis、Nginx、数据库迁移以及可选的监控和备份服务。
+当前宿主部署由 systemd 用户服务托管 Next.js 应用、代码运行器、本地问卷分词、语音强制对齐和出站代理；Docker Compose 管理 PostgreSQL、Redis、Nginx、可选迁移容器、监控与手动备份。系统能力和本地开发见 [README](../README.md)，日常恢复见[备份说明](backup/README.md)。
+
+## 服务与端口
+
+| 服务 | 当前宿主配置 | 检查入口 |
+| --- | --- | --- |
+| `openpbl.service` | 应用 `127.0.0.1:3000`，WebSocket `127.0.0.1:3001` | `/api/health/live`；受令牌保护的 `/api/health/ready` |
+| `openpbl-code-runner.service` | `127.0.0.1:3002` | `/health` |
+| `openpbl-survey-nlp.service` | `127.0.0.1:3003` | `/health/live` |
+| `openpbl-speech-alignment.service` | `127.0.0.1:3004` | `/health/live` |
+| `openpbl-outbound-proxy.service` | `127.0.0.1:19999` | `/health/ready` |
+| PostgreSQL / Redis | 宿主网络覆盖配置使用 `15432` / `16379` | 数据库就绪 / Redis ping |
+| Nginx | `80/443`，内部检查 `127.0.0.1:18082` | 网关及受权依赖检查 |
+
+模板中的工作目录、域名和端口属于当前宿主配置，新环境先替换再安装。课堂 WebSocket 与可选 tldraw 同步是独立能力；启用 `ENABLE_TLDRAW_SYNC` 时必须另配空闲端口，不能占用代码运行器的 3002。
 
 ## 更新流程
 
 1. 备份 PostgreSQL、上传文件、课堂数据和 `deploy/.deploy.env`。保留原 `PROVIDER_ENCRYPTION_KEY` 与 `JWT_SECRET`。
-2. 在仓库根目录运行 `python3 scripts/setup-survey-nlp.py` 和 `python3 scripts/setup-speech-alignment.py` 准备本地模型环境，再运行 `pnpm install --frozen-lockfile && pnpm build`。
-3. 构建成功后运行 `node scripts/run-next-production.mjs prepare`，先生成不可变运行目录，再运行 `pnpm exec prisma migrate deploy`。
+2. 首次安装或辅助模型依赖变化时，运行 `python3 scripts/setup-survey-nlp.py` 和 `python3 scripts/setup-speech-alignment.py`。应用更新运行 `pnpm install --frozen-lockfile`，完成相关检查后执行 `pnpm build`。
+3. 构建成功后运行 `node scripts/run-next-production.mjs prepare`，生成不可变运行目录。核对待执行迁移；应用启动脚本从部署 Secret 加载目标数据库后自动执行已提交迁移。单独迁移使用 `pnpm db:migrate:prod`，执行环境必须明确指向相同目标库。
 4. 安装或更新 `deploy/systemd/` 下的应用、代码运行器、`openpbl-survey-nlp.service`、`openpbl-speech-alignment.service` 和 `openpbl-outbound-proxy.service`，执行 `systemctl --user daemon-reload` 后重启服务。
-5. 检查应用 `/api/health/live`、分词服务 `http://127.0.0.1:3003/health/live`、语音对齐服务 `http://127.0.0.1:3004/health/live` 和出站代理 `http://127.0.0.1:19999/health/ready`，并完成教师登录、学生加入与五阶段课堂冒烟测试。
+5. 检查上表服务健康、应用实际运行版本，再完成教师登录、学生加入与相关课堂功能冒烟。代码运行器变化时同时重启并验证其独立服务。
+
+已安装服务的应用更新命令：
+
+```bash
+pnpm build
+node scripts/run-next-production.mjs prepare
+systemctl --user restart openpbl.service
+curl --fail http://127.0.0.1:3000/api/health/live
+```
+
+逐步执行，前一步失败时停止后续切换。构建或准备失败保留当前运行版本；健康检查失败不能宣称页面已更新。纯文档和不进入运行产物的工具修改无需重启。
 
 `pnpm start` 会从 `.next-build` 创建 `.openpbl-runtime/releases/<BUILD_ID>` 不可变运行目录，避免下一次构建覆盖正在服务的版本。重启前先执行 `prepare`，可避免服务启动探测期间另一个构建清空暂存目录、导致服务继续使用旧版本。健康检查通过后，还应核对实际运行目录的 `BUILD_ID` 与本次准备的版本一致。
 
@@ -16,7 +41,7 @@
 
 ## IPv6 主机的模型出站
 
-当前生产宿主机只有可用的公网 IPv6，而 DeepSeek 等端点可能只发布 IPv4 地址。`openpbl-outbound-proxy.service` 是仅监听 `127.0.0.1:19999` 的 HTTPS CONNECT 代理：它通过多组 DNS64 节点解析并并行选择可用 NAT64 路径，连接内容仍由目标站点 TLS 端到端加密。应用服务显式依赖该代理，并在启动、部署和运行健康检查中验证到 `api.deepseek.com:443` 的 TLS 链路；不得再使用 Codex、SSH 会话或桌面进程临时开放的代理端口。
+服务模板针对 IPv6 出站宿主配置 NAT64 出口。`openpbl-outbound-proxy.service` 是仅监听 `127.0.0.1:19999` 的 HTTPS CONNECT 代理：它通过多组 DNS64 节点解析并并行选择可用 NAT64 路径，连接内容仍由目标站点 TLS 端到端加密。应用服务显式依赖该代理，并在启动、部署和运行健康检查中验证到 `api.deepseek.com:443` 的 TLS 链路；出口由服务配置管理，不依赖 SSH 或桌面会话的临时端口。
 
 默认 DNS64 节点可用 `OPENPBL_NAT64_DNS_SERVERS`（逗号分隔 IPv6 地址）替换为运营方自建节点；允许的 HTTPS 目标可用 `OPENPBL_NAT64_ALLOWED_HOSTS` 收窄为逗号分隔的域名或域名后缀。生产环境优先使用有可用性承诺的自建或运营商 NAT64，切换时无需修改应用代码。
 
@@ -30,13 +55,13 @@
 
 ## 正式与测试系统共用 AI 设置
 
-正式系统以自身 `DATABASE_URL` 中的全局 `ProviderCredential` 为 AI 设置唯一来源。测试系统保留独立业务数据库，并将 `PROVIDER_CONFIG_DATABASE_URL` 指向正式数据库、`PROVIDER_CONFIG_ENCRYPTION_KEY` 设为正式系统的同一密钥；这样语言、语音、图像、视频等 Provider 的密钥、默认模型、音色和启用状态都由正式系统教师端的「AI 设置」统一管理。运行时每 5 秒刷新共享设置，测试系统不应再维护第二份 `server-providers.yml` 或 Provider 凭据。
+正式系统以自身 `DATABASE_URL` 中的全局 `ProviderCredential` 为 AI 设置唯一来源。测试系统保留独立业务数据库，并将 `PROVIDER_CONFIG_DATABASE_URL` 指向正式数据库、`PROVIDER_CONFIG_ENCRYPTION_KEY` 设为正式系统的同一密钥；这样语言、语音、图像、视频等 Provider 的密钥、默认模型、音色和启用状态都由正式系统教师端的「个人中心 → AI 服务」统一管理。运行时每 5 秒刷新共享设置，测试系统不应维护第二份 Provider 凭据。
 
-## 课程前置空间计算
+## 课程计量与预览
 
-新课程在成稿前使用 Playwright Chromium 加载播放器同源 Noto Sans SC 字体、CSS 和 KaTeX，计算文字、公式与表格容量，并按需生成区域草图。宿主部署首次安装运行 `pnpm exec playwright install chromium`；缺少系统库时由管理员安装 Chromium 依赖。已有系统 Chromium 可通过 `OPENPBL_CHROMIUM_EXECUTABLE_PATH` 指定完整路径。Docker 镜像已安装 Alpine Chromium 并设置该路径。精确度量会自动尝试配置路径、Playwright 自带浏览器与常见系统 Chromium，页面崩溃时重启重试。多次尝试仍失败时，仅当前空间计算切换到保守文本估算；草图截图不可用时继续传递已持久化的文本空间预算，不因辅助排版能力中断整门课程。
+课件容量与实际渲染检查使用 Playwright Chromium、播放器同源 Noto Sans SC、渲染器 CSS 与 KaTeX。首次宿主安装运行 `pnpm exec playwright install chromium`；已有系统 Chromium 可通过 `OPENPBL_CHROMIUM_EXECUTABLE_PATH` 指定。Docker 镜像已安装 Alpine Chromium 并设置该路径。浏览器不可用、容量过载与教学质量差异分别记录诊断，不能将辅助估计当成实际渲染通过。
 
-浏览器复用、默认单并发，空闲后释放；度量结果在进程内缓存。布局引擎 elkjs 仅提供关系图候选坐标，最终课程保持 OpenMAIC DSL。来源和版本见 [空间设计参考](../docs/slide-spatial-sources.md)。既有准备大纲和成功场景检查点不重新排版。
+当前正式生成按知识小节联合产出页面与连续讲稿，再执行原生页面编译；通用分区空间规划与 ELK 候选布局用于对应适配路径。局部修复、原稿选择和恢复遵循[生成合同](../docs/course-generation.md)，来源与计量职责见[空间设计参考](../docs/slide-spatial-sources.md)。
 
 课程预览默认显示“未检查”；教师可主动检查，也可在权限、版本与资源完整性满足时直接确认发布。打开预览、生成完成和资源更新均不自动安排质量审核或重新生成。
 
@@ -58,7 +83,7 @@ AI 模式复用 AI 服务设置中的默认语言模型及连接配置。第一�
 
 `scripts/setup-speech-alignment.py` 建立独立的 `.openpbl-runtime/speech-alignment-venv`，安装 `deploy/speech-alignment-requirements.txt` 固定的运行版本，并下载固定提交的 `Qwen3-ForcedAligner-0.6B` 到 `.openpbl-runtime/speech-alignment-models`。服务启动后完全离线，只监听 `127.0.0.1:3004`，不经 Nginx 暴露；输入限制为本机音频绝对路径、原讲稿和模型支持的语言，音频统一解码为 16 kHz 单声道且不得超过五分钟。
 
-当前宿主机的 CUDA 驱动出现无法被 SIGKILL 终止的锁等待，异常捕获不能处理这种阻塞；反复重启只会留下更多阻塞进程。生产服务模板因此设置 `OPENPBL_ALIGNMENT_FORCE_CPU=1`、隐藏 CUDA 设备并限制 CPU 推理为八线程，保留同一固定模型、普通 attention 和 FP32 精度。CPU 模式在设备选择阶段不探测 CUDA，避免启动再次卡在驱动上。恢复 GPU 推理须先由宿主机维护解除驱动阻塞，再移除相应环境覆盖并执行真实模型验收；不要依靠重启循环恢复。
+当前生产服务模板设置 `OPENPBL_ALIGNMENT_FORCE_CPU=1`、隐藏 CUDA 设备并限制 CPU 推理为八线程，使用固定模型、普通 attention 和 FP32 精度。CPU 模式在设备选择阶段不探测 CUDA。切换 GPU 前核对宿主驱动、实际模型兼容性和资源，再调整环境并执行真实对齐验收；服务健康不能替代触发时间误差验证。
 
 可选的 TITAN Xp GPU 路径使用 PyTorch CUDA 11.8 wheel 中与 `sm_61` 二进制兼容的 Pascal `sm_60` 内核。安装校验会执行真实 FP32 CUDA 运算并加载固定模型；可抛出的 CUDA 异常、wheel 不支持当前架构或模型加载失败时自动改用 CPU。推理严格单并发，应用侧按音频内容、讲稿、语言和对齐版本写入 `.openpbl-data/speech-alignment-cache`。可用 `OPENPBL_SPEECH_ALIGNMENT_CACHE_DIR` 更换缓存目录。应用对可重试技术故障最多请求三次，并以同一总超时守护请求、响应读取和退避；同步修复仅处理未完成或指纹失效的语音，保留已验证的时间线。
 
@@ -66,7 +91,7 @@ AI 模式复用 AI 服务设置中的默认语言模型及连接配置。第一�
 
 ## 基础设施
 
-IP/HTTP 部署使用：
+当前宿主网络与域名 HTTPS 配置使用：
 
 ```bash
 docker compose --env-file deploy/.deploy.env \
@@ -74,13 +99,15 @@ docker compose --env-file deploy/.deploy.env \
   up -d postgres redis nginx
 ```
 
-HTTPS 环境可按需启用 certificate 和 observability profile。阿里云只保留管理员显式触发的正式学生账号与首课问卷精简备份，具体命令与范围见 `deploy/backup/README.md`。Nginx 只代理当前宿主机应用端口，不再创建旧版 blue/green 应用容器。
+首次准备 [Secret 文件](secrets.example/README.md)、`deploy/.deploy.env` 和 HTTPS 证书。Compose 中有必需变量插值，包括迁移镜像标识、域名和精简备份目标；按实际启用服务准备其配置。证书初始化入口见 [bootstrap-certificate.sh](bootstrap-certificate.sh)。
+
+监控按需启用 observability profile；生产 Compose 的 Grafana 默认映射 `127.0.0.1:3002`，启用前需在部署覆盖中改为空闲端口，以免与代码运行器冲突。异地仅保留管理员显式触发的学生账号与首课问卷精简备份，范围见[备份说明](backup/README.md)。Nginx 的应用、WebSocket 和内部检查端口须与已安装服务一致。
 
 不要运行 `docker compose down -v`，因为 `-v` 会删除持久化数据卷。备份与恢复演练说明位于 `deploy/backup/`。
 
 ## GitHub Actions
 
-手动触发 `.github/workflows/deploy.yml`，先执行共享验证，再通过 SSH 在服务器的专用 Git checkout 中部署本次 workflow 对应的完整提交 SHA。服务器自行构建应用，由已有 systemd 用户服务运行；不再发布旧应用容器或调用蓝绿脚本。
+手动触发 [.github/workflows/deploy.yml](../.github/workflows/deploy.yml)，先执行共享验证，再通过 SSH 在服务器的专用 Git checkout 中部署本次 workflow 对应的完整提交 SHA。服务器构建应用，由已安装的 systemd 用户服务运行。
 
 每个 GitHub environment 配置 `DEPLOY_HOST`、`DEPLOY_USER`、`DEPLOY_SSH_KEY`、`DEPLOY_HOST_KEY` secrets，以及绝对路径变量 `DEPLOY_PATH`。服务器需具备 Node.js、pnpm、Python 3.10+、Git、flock、curl，能够从 origin 拉取提交，并已安装指向该路径的用户服务及所需 secrets。不同环境使用独立用户或主机，不能共用同一组生产服务。
 
