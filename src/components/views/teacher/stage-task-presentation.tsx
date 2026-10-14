@@ -6,6 +6,7 @@ import type { Course } from "@/lib/session/types";
 import { getCourseStageRequirements } from "@/lib/resource-package/course-requirements";
 import { deriveClassroomTimingSnapshot } from "@/lib/classroom/timing";
 import styles from "./project-practice-countdown.module.css";
+import board from "./project-practice-board.module.css";
 
 function formatClock(totalSeconds: number): string {
   const seconds = Math.max(0, Math.round(totalSeconds));
@@ -76,13 +77,52 @@ export function StageTaskPresentation({ course, timerControls }: { course: Cours
   const projectTask = stage?.key === "make"
     ? requirements?.projectTask?.trim() || ""
     : "";
+  if (stage?.key === "make") {
+    const headline = projectTask || drivingQuestion;
+    // Compare formatting only: never guess that two different requirements mean the same thing.
+    const normalize = (text: string) => text.trim().replace(/\s+/gu, " ").replace(/[。！？!?；;]+$/u, "");
+    const seen = new Set([normalize(headline)]);
+    const items = (text: string) => text.split(/\n+/u).map((line) => line.trim()).filter((line) => {
+      const key = normalize(line);
+      if (!key || seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+    const taskItems = items(requirements?.requirements || (!requirements ? stage.description || "" : ""));
+    const outputItems = items(requirements?.outputs || "");
+    const fallbackSections = !requirements ? sections.map((section) => ({
+      ...section, items: items([section.teachingGoal, section.studentActivity].filter(Boolean).join("\n")),
+    })).filter((section) => section.items.length) : [];
+    return <section aria-label="当前阶段任务" className={`teacher-project-board ${board.board}`}>
+      <header className={board.header}>
+        <div className={board.identity}>
+          <h3 className={board.eyebrow}>{projectTask ? "项目任务" : "任务驱动问题"}</h3>
+          {headline ? <p className={board.headline}>{headline}</p> : <p className={board.headline}>项目实践</p>}
+          {projectTask && drivingQuestion && normalize(projectTask) !== normalize(drivingQuestion) ? <details className={board.question}>
+            <summary>查看驱动问题</summary><p>{drivingQuestion}</p>
+          </details> : null}
+        </div>
+        <ProjectPracticeCountdown controls={timerControls} course={course} />
+      </header>
+      <section aria-label="项目任务说明" className={board.details}>
+        {taskItems.length ? <article className={board.requirements}>
+          <h3><span aria-hidden="true">01</span>任务要求</h3>
+          <ul>{taskItems.map((item) => <li key={item}>{item}</li>)}</ul>
+        </article> : null}
+        {outputItems.length ? <article className={board.outputs}>
+          <h3><span aria-hidden="true">02</span>交付成果</h3>
+          <ul>{outputItems.map((item) => <li key={item}>{item}</li>)}</ul>
+        </article> : null}
+        {fallbackSections.map((section) => <article className={board.requirements} key={section.id}>
+          <h3>{section.title}</h3><ul>{section.items.map((item) => <li key={item}>{item}</li>)}</ul>
+        </article>)}
+        {!headline && !taskItems.length && !outputItems.length && !fallbackSections.length ? <p>本阶段暂无任务或展示资料。</p> : null}
+      </section>
+    </section>;
+  }
   const taskDetails = <>
-    {projectTask && projectTask !== drivingQuestion ? <div className="text-[clamp(20px,2vw,28px)] leading-relaxed">
-      <h3 className="font-bold">项目任务</h3>
-      <p className="mt-2 whitespace-pre-wrap">{projectTask}</p>
-    </div> : null}
     {requirements ? <div className="space-y-4 text-[clamp(20px,2vw,28px)] leading-relaxed">
-      {requirements.requirements ? <p className="whitespace-pre-wrap">{stage?.key === "make" ? "任务要求：" : ""}{requirements.requirements}</p> : null}
+      {requirements.requirements ? <p className="whitespace-pre-wrap">{requirements.requirements}</p> : null}
       {requirements.outputs ? <p className="whitespace-pre-wrap">交付要求：{requirements.outputs}</p> : null}
       {stage?.key === "reflection" ? requirements.reflectionQuestions.map((item, index) => <p key={index}>{item}</p>) : null}
     </div> : stage?.description ? <p className="whitespace-pre-wrap text-[clamp(20px,2vw,28px)] leading-relaxed">{stage.description}</p> : null}
@@ -95,15 +135,8 @@ export function StageTaskPresentation({ course, timerControls }: { course: Cours
   </>;
   return (
     <section aria-label="当前阶段任务" className="teacher-presentation-task rounded-2xl border border-stone-200 bg-white p-6 text-stone-900">
-      {stage?.key !== "make" ? <h2 className="text-[clamp(28px,3vw,48px)] font-bold">{stage?.label ?? "当前阶段"}</h2> : null}
-      {drivingQuestion ? <div className="project-driving-question rounded-[14px] border border-blue-200 bg-blue-50 px-6 py-5 text-blue-950">
-        <h3 className="text-lg font-bold text-blue-700">任务驱动问题</h3>
-        <p className="mt-2 whitespace-pre-wrap text-[clamp(28px,3vw,44px)] font-bold leading-snug">{drivingQuestion}</p>
-      </div> : null}
-      {stage?.key === "make" ? <div className="mt-5 grid items-start gap-5 lg:grid-cols-[minmax(0,1fr)_minmax(280px,340px)]">
-        <section aria-label="项目任务说明" className="min-w-0 space-y-5">{taskDetails}</section>
-        <ProjectPracticeCountdown controls={timerControls} course={course} />
-      </div> : <div className="mt-5 space-y-5">{taskDetails}</div>}
+      <h2 className="text-[clamp(28px,3vw,48px)] font-bold">{stage?.label ?? "当前阶段"}</h2>
+      <div className="mt-5 space-y-5">{taskDetails}</div>
     </section>
   );
 }

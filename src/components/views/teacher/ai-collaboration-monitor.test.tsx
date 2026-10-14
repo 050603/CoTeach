@@ -1,5 +1,6 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
+import { TeacherPresentationActionsProvider } from "@/components/classroom/teacher-presentation-actions";
 import type { Course } from "@/lib/session/types";
 import { AiCollaborationTeacherMonitor, deriveAiCollaborationMetrics } from "./ai-collaboration-monitor";
 
@@ -164,11 +165,13 @@ describe("practice projection", () => {
       submissions: [{ id: "work-1", studentId: "student-1", stageKey: "make", type: "document", title: "学生方案", content: "<p>已经选中的公开作品</p>", updatedAt: "2026-09-01T01:00:00.000Z" }],
       aiInteractionEvents: [{ id: "private-1", courseId: "course-1", studentId: "student-1", stageKey: "make", source: "sidebar", eventType: "request", actorRole: "student", content: "不应投影的私人提问", createdAt: "2026-09-01T01:00:00.000Z" }],
     } as unknown as Course;
-    const { rerender } = render(<AiCollaborationTeacherMonitor course={projectedCourse} presentation="teaching" />);
+    const { rerender } = render(<AiCollaborationTeacherMonitor course={projectedCourse} presentation="teaching" />, { wrapper: ({ children }) => <TeacherPresentationActionsProvider target={document.body}>{children}</TeacherPresentationActionsProvider> });
     expect(screen.getByText("比较实验数据并提交方案。")).toBeTruthy();
     expect(screen.queryByText("小明")).toBeNull();
     expect(screen.queryByText("已经选中的公开作品")).toBeNull();
+    expect(screen.getAllByRole("button", { name: "选择学生成果" })).toHaveLength(1);
     fireEvent.click(screen.getByRole("button", { name: "选择学生成果" }));
+    expect(screen.queryByRole("region", { name: "当前阶段任务" })).toBeNull();
     expect(screen.queryByText("已经选中的公开作品")).toBeNull();
     fireEvent.change(screen.getByLabelText("选择展示学生成果"), { target: { value: "student-1" } });
     expect(screen.getByText("已经选中的公开作品")).toBeTruthy();

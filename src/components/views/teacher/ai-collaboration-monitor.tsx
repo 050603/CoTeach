@@ -191,8 +191,8 @@ export function AiCollaborationTeacherMonitor({ course, focus, presentation = "w
       {presentation === "teaching" ? <TeacherPresentationActions>
         <button aria-expanded={showWorks} data-tone="primary" onClick={() => { setShowWorks((value) => !value); setSelectedStudentId(undefined); }} type="button"><FileText size={20} />{showWorks ? "收起学生成果" : "选择学生成果"}</button>
       </TeacherPresentationActions> : null}
-      <StageTaskPresentation course={course} timerControls={projectTimerControls} />
-      <button aria-expanded={showWorks} className="min-h-11 rounded-lg border border-blue-300 bg-white px-4 py-2 text-xl font-semibold text-blue-800" onClick={() => { setShowWorks((value) => !value); setSelectedStudentId(undefined); }} type="button">{showWorks ? "收起学生成果" : "选择学生成果"}</button>
+      {!showWorks ? <StageTaskPresentation course={course} timerControls={projectTimerControls} /> : null}
+      {presentation !== "teaching" ? <button aria-expanded={showWorks} className="min-h-11 rounded-lg border border-blue-300 bg-white px-4 py-2 text-xl font-semibold text-blue-800" onClick={() => { setShowWorks((value) => !value); setSelectedStudentId(undefined); }} type="button">{showWorks ? "收起学生成果" : "选择学生成果"}</button> : null}
       {showWorks ? <section aria-label="选择展示成果" className="space-y-4">
         <label className="flex flex-wrap items-center gap-3 text-xl">展示成果
           <select aria-label="选择展示学生成果" className="min-h-11 max-w-full rounded-lg border border-stone-300 bg-white px-3" value={selectedStudentId ?? ""} onChange={(event) => setSelectedStudentId(event.target.value || undefined)}>

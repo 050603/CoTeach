@@ -1,0 +1,37 @@
+.board {
+  min-height: 100%;
+  padding: clamp(16px, 2vw, 40px);
+  border: 1px solid #d8d6d0;
+  border-radius: 14px;
+  background: #fcfbf8;
+  color: #1f2933;
+}
+.header { display: grid; grid-template-columns: minmax(0, 1fr) minmax(240px, 310px); align-items: start; gap: clamp(20px, 3vw, 56px); }
+.identity { min-width: 0; }
+.eyebrow { margin: 0 0 10px; color: #344a6a; font-size: clamp(18px, 1.2vw, 26px); font-weight: 700; }
+.headline { margin: 0; color: #263b55; font-size: clamp(26px, 2.3vw, 48px); font-weight: 700; line-height: 1.4; white-space: pre-wrap; overflow-wrap: anywhere; }
+.question { margin-top: 12px; color: #344a6a; font-size: clamp(16px, 1.1vw, 24px); }
+.question summary { display: list-item; width: fit-content; min-height: 44px; padding: 10px 0; cursor: pointer; }
+.question summary:focus-visible { outline: 2px solid #344a6a; outline-offset: 2px; }
+.question p { margin: 4px 0 0; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
+.details { display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr); gap: clamp(20px, 3vw, 56px); margin-top: clamp(16px, 2.5vh, 32px); padding-top: clamp(16px, 2.5vh, 32px); border-top: 1px solid #d8d6d0; }
+.details > :only-child { grid-column: 1 / -1; }
+.details article { min-width: 0; }
+.details h3 { display: flex; align-items: center; gap: 12px; margin: 0 0 16px; color: #344a6a; font-size: clamp(22px, 1.6vw, 34px); font-weight: 700; line-height: 1.3; }
+.details h3 span { font-size: .75em; font-variant-numeric: tabular-nums; }
+.details ul { display: grid; gap: 14px; margin: 0; padding: 0; list-style: none; }
+.details li { padding-left: 16px; border-left: 3px solid #8395ad; font-size: clamp(20px, 1.45vw, 32px); line-height: 1.55; white-space: pre-wrap; overflow-wrap: anywhere; }
+.outputs h3 { color: #2f6f65; }
+.outputs li { border-color: #2f6f65; color: #24594f; font-weight: 600; }
+@media (max-height: 750px) {
+  .board { padding: 16px 24px; }
+  .headline { font-size: clamp(24px, 2vw, 32px); }
+  .details { margin-top: 12px; padding-top: 16px; }
+  .details h3 { margin-bottom: 12px; font-size: 22px; }
+  .details ul { gap: 10px; }
+  .details li { font-size: 20px; line-height: 1.45; }
+}
+@media (max-width: 760px) {
+  .header, .details { grid-template-columns: minmax(0, 1fr); }
+  .board { padding: 16px; }
+}

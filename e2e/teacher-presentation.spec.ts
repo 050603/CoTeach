@@ -2,6 +2,7 @@ import { expect, test, type Page, type TestInfo } from "@playwright/test";
 import { SignJWT } from "jose";
 import { PDFDocument, rgb } from "pdf-lib";
 import { readFileSync } from "node:fs";
+import { emptyResourcePackageDraft } from "../src/lib/resource-package/types";
 import { DEFAULT_STAGES, type Course } from "../src/lib/session/types";
 
 // All API traffic and sockets are intercepted. This suite never creates users,
@@ -42,8 +43,22 @@ async function samplePdf() {
   return Buffer.from(await document.save());
 }
 
-async function mockClassroom(page: Page, options: { rejectFullscreen?: boolean; empty?: boolean; pdfResource?: boolean; activeShowcase?: boolean; waitingShowcase?: boolean; posttestResponses?: boolean; mountain?: boolean } = {}) {
+async function mockClassroom(page: Page, options: { rejectFullscreen?: boolean; empty?: boolean; pdfResource?: boolean; activeShowcase?: boolean; waitingShowcase?: boolean; posttestResponses?: boolean; mountain?: boolean; project?: boolean } = {}) {
   let course = classroom();
+  if (options.project) {
+    const draft = emptyResourcePackageDraft();
+    course.currentStageIndex = 2;
+    course.content.stagePlan = {
+      ...draft, schemaVersion: 1, source: "resource-package", totalMinutes: 60,
+      drivingQuestion: "怎样改进校园能源使用？",
+      projectTask: "设计一份有数据依据、可在校园实施的节能改进方案",
+      stages: draft.stages.map((stage) => ({ ...stage,
+        requirements: "设计一份有数据依据、可在校园实施的节能改进方案。\n观察校园用电情况，记录三个时段的数据。\n比较至少两种节能措施，说明选择依据。\n与 AI 伙伴讨论可行性，独立完成个人方案。",
+        outputs: "提交个人节能方案，包含观察数据、改进措施与预期效果。\n准备三分钟汇报，说明方案依据和实施步骤。",
+      })),
+    };
+    course.uiState!.classroomTiming!.activeStageKey = "make";
+  }
   if (options.mountain) {
     course.students = Array.from({ length: 40 }, (_, index) => ({ id: `student-${index}`, name: `私密学生${index + 1}`, joinedAt: fixedTime, stageProgress: {} }));
     course.currentStageIndex = 1;
@@ -728,3 +743,33 @@ test("fullscreen denial falls back to an immersive window and Escape restores th
   expect(fixture.writes).toEqual([]);
   expect(fixture.errors).toEqual([]);
 });
+
+for (const viewport of [{ width: 1024, height: 576 }, { width: 1280, height: 720 }, { width: 1920, height: 1080 }, { width: 3840, height: 2160 }]) {
+  test(`project task fits one presentation screen ${viewport.width}x${viewport.height}`, async ({ page }, info) => {
+    await page.setViewportSize(viewport);
+    const fixture = await mockClassroom(page, { project: true });
+    await enterFullscreen(page);
+    const board = page.getByRole("region", { name: "当前阶段任务", exact: true });
+    await expect(board.getByRole("heading", { name: "项目任务", exact: true })).toBeVisible();
+    await expect(board.getByRole("listitem")).toHaveCount(5);
+    await expect(page.getByRole("button", { name: "选择学生成果", exact: true })).toHaveCount(1);
+    const overflow = await board.evaluate((node) => {
+      const result = [];
+      for (let element: HTMLElement | null = node; element; element = element.parentElement) {
+        if (element.scrollHeight > element.clientHeight + 1) result.push({ tag: element.tagName, className: element.className });
+      }
+      return result;
+    });
+    expect(overflow).toEqual([]);
+    await screenshot(page, info, "project-task");
+    await board.locator("summary").click();
+    await expect(board.getByText("怎样改进校园能源使用？", { exact: true })).toBeVisible();
+    await board.locator("summary").click();
+    await page.getByRole("button", { name: "选择学生成果", exact: true }).click();
+    await expect(board).toHaveCount(0);
+    await page.getByRole("button", { name: "收起学生成果", exact: true }).click();
+    await expect(board).toBeVisible();
+    expect(fixture.errors).toEqual([]);
+    expect(fixture.writes).toEqual([]);
+  });
+}

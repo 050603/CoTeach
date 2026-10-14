@@ -43,7 +43,7 @@ describe("StageTaskPresentation", () => {
     expect(screen.queryByRole("heading", { name: "项目实践" })).toBeNull();
     expect(screen.getByRole("heading", { name: "任务驱动问题" })).toBeTruthy();
     expect(screen.getByText("如何改善校园环境？")).toBeTruthy();
-    expect(screen.getByText("如何改善校园环境？").className).toContain("font-bold");
+    expect(screen.getByText("如何改善校园环境？").className).toContain("headline");
     expect(screen.queryByRole("heading", { name: "项目任务" })).toBeNull();
     expect(screen.getByText("完成个人方案")).toBeTruthy();
   });
@@ -58,20 +58,32 @@ describe("StageTaskPresentation", () => {
     } } } as unknown as Course;
     render(<StageTaskPresentation course={course} />);
     expect(screen.queryByRole("heading", { name: "项目实践" })).toBeNull();
-    expect(screen.getByRole("heading", { name: "任务驱动问题" })).toBeTruthy();
+    expect(screen.getByText("查看驱动问题")).toBeTruthy();
     expect(screen.getByText("如何设计一堂有趣的 AI 体验课？")).toBeTruthy();
     expect(screen.getByRole("heading", { name: "项目任务" })).toBeTruthy();
-    const details = screen.getByRole("region", { name: "项目任务说明" });
-    const timer = screen.getByRole("complementary", { name: "项目制作计时" });
-    expect(timer.parentElement).toBe(details.parentElement);
-    expect(timer.parentElement?.className).toContain("lg:grid-cols-");
+    expect(screen.getByRole("region", { name: "项目任务说明" })).toBeTruthy();
+    expect(screen.getByRole("complementary", { name: "项目制作计时" })).toBeTruthy();
     expect(screen.getByText("设计一堂面向六年级的 AI 体验课")).toBeTruthy();
-    expect(screen.getByText(/任务要求：每位学生与自己的 AI 伙伴协作/)).toBeTruthy();
-    expect(screen.getByText("交付要求：提交个人教案")).toBeTruthy();
+    expect(screen.getByText(/每位学生与自己的 AI 伙伴协作/)).toBeTruthy();
+    expect(screen.getByText("提交个人教案")).toBeTruthy();
     expect(screen.queryByText(/评价标准/)).toBeNull();
     expect(screen.queryByText("用理论解释设计选择")).toBeNull();
     expect(screen.queryByText("旧的默认说明")).toBeNull();
     expect(screen.queryByText("教师私人提示")).toBeNull();
+  });
+
+  it("deduplicates repeated task lines while preserving distinct constraints and deliverables", () => {
+    const draft = emptyResourcePackageDraft();
+    const course = { currentStageIndex: 0, stages: [{ key: "make" }], content: { stagePlan: {
+      ...draft, projectTask: "设计校园节能方案。", drivingQuestion: "设计校园节能方案？", source: "resource-package",
+      stages: draft.stages.map((stage) => ({ ...stage, requirements: "设计校园节能方案\n记录三天用电量\n记录三天用电量。\n至少比较两种方案", outputs: "提交个人报告\n附上数据表" })),
+    } } } as unknown as Course;
+    render(<StageTaskPresentation course={course} />);
+    expect(screen.queryByText("查看驱动问题")).toBeNull();
+    expect(screen.getAllByText("设计校园节能方案。")).toHaveLength(1);
+    expect(screen.getAllByRole("listitem").map((item) => item.textContent)).toEqual([
+      "记录三天用电量", "至少比较两种方案", "提交个人报告", "附上数据表",
+    ]);
   });
 
   it("shows a flip countdown with one control entry and keeps pause and overtime in sync", () => {
