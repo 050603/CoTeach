@@ -1,8 +1,10 @@
 'use client';
 
 import { useRef, useEffect, useCallback, useMemo, useImperativeHandle, forwardRef } from 'react';
+import { flushSync } from 'react-dom';
 import { debounce } from 'lodash';
 import { useKeyboardStore, useCanvasStore } from '@openmaic/lib/store';
+import { useSceneHistory } from '@openmaic/lib/contexts/scene-context';
 import type { EditorView } from 'prosemirror-view';
 import { toggleMark, wrapIn, lift } from 'prosemirror-commands';
 import { initProsemirrorEditor, createDocument } from '@openmaic/lib/prosemirror';
@@ -31,7 +33,8 @@ import {
 } from '@openmaic/lib/prosemirror/active-editor-registry';
 import { shouldPushAttrs } from '@openmaic/lib/prosemirror/selection-sync';
 import type { TextFormatPainterKeys } from '@openmaic/lib/types/edit';
-import { KEYS } from '@openmaic/configs/hotkey';
+
+const EXTERNAL_CONTENT_SYNC = 'external-content-sync';
 
 export interface ProsemirrorEditorProps {
   elementId: string;
@@ -75,6 +78,12 @@ export const ProsemirrorEditor = forwardRef<ProsemirrorEditorRef, ProsemirrorEdi
     // Mutable refs so the single-init dispatchTransaction always reads fresh values
     const editableRef = useRef(editable);
     const pushTextAttrsRef = useRef<((view: EditorView) => void) | null>(null);
+    const valueRef = useRef(value);
+    const onUpdateRef = useRef(onUpdate);
+    const lastEmittedValueRef = useRef<string | null>(null);
+    const sceneHistory = useSceneHistory();
+    valueRef.current = value;
+    onUpdateRef.current = onUpdate;
 
     const handleElementId = useCanvasStore.use.handleElementId();
     const editingElementId = useCanvasStore.use.editingElementId();
@@ -94,19 +103,21 @@ export const ProsemirrorEditor = forwardRef<ProsemirrorEditorRef, ProsemirrorEdi
           (isHandleHistory = false) => {
             if (!editorView.current) return;
             if (
-              value.replace(/ style=""/g, '') ===
+              valueRef.current.replace(/ style=""/g, '') ===
               editorView.current.dom.innerHTML.replace(/ style=""/g, '')
             )
               return;
-            onUpdate?.({
-              value: editorView.current.dom.innerHTML,
+            const nextValue = editorView.current.dom.innerHTML;
+            lastEmittedValueRef.current = nextValue;
+            onUpdateRef.current?.({
+              value: nextValue,
               ignore: isHandleHistory,
             });
           },
           300,
           { trailing: true },
         ),
-      [value, onUpdate],
+      [],
     );
 
     // Handle focus
@@ -115,14 +126,16 @@ export const ProsemirrorEditor = forwardRef<ProsemirrorEditorRef, ProsemirrorEdi
       if (!ctrlOrShiftKeyActive || activeElementIdList.length <= 1) {
         setDisableHotkeysState(true);
       }
+      if (editorView.current) pushTextAttrsRef.current?.(editorView.current);
       onFocus?.();
     }, [ctrlOrShiftKeyActive, activeElementIdList.length, setDisableHotkeysState, onFocus]);
 
     // Handle blur
     const handleBlur = useCallback(() => {
+      handleInput.flush();
       setDisableHotkeysState(false);
       onBlur?.();
-    }, [setDisableHotkeysState, onBlur]);
+    }, [handleInput, setDisableHotkeysState, onBlur]);
 
     // Handle click
     // eslint-disable-next-line react-hooks/exhaustive-deps -- debounce returns a stable function reference
@@ -142,6 +155,22 @@ export const ProsemirrorEditor = forwardRef<ProsemirrorEditorRef, ProsemirrorEdi
       [defaultColor, defaultFontName, setRichtextAttrs],
     );
 
+    const handleKeydown = useCallback((event: KeyboardEvent) => {
+      const key = event.key.toLowerCase();
+      if (sceneHistory && (event.ctrlKey || event.metaKey) && !event.altKey && !event.isComposing
+        && (key === 'z' || key === 'y')) {
+        event.preventDefault();
+        // Flush the pending text before moving the shared history cursor.
+        // Restoring a snapshot must also restore its original HTML and size.
+        flushSync(() => handleInput.flush());
+        if (key === 'y' || event.shiftKey) sceneHistory.redo();
+        else sceneHistory.undo();
+        return true;
+      }
+      handleClick();
+      return false;
+    }, [sceneHistory, handleInput, handleClick]);
+
     // Stable attrs push used by the selection-sync dispatchTransaction guard
     const pushTextAttrs = useCallback(
       (view: EditorView) => {
@@ -152,21 +181,6 @@ export const ProsemirrorEditor = forwardRef<ProsemirrorEditorRef, ProsemirrorEdi
     // Keep mutable refs current on every render so the once-init dispatchTransaction reads fresh values
     editableRef.current = editable;
     pushTextAttrsRef.current = pushTextAttrs;
-
-    // Handle keydown
-    const handleKeydown = useCallback(
-      (view: EditorView, e: KeyboardEvent) => {
-        const { ctrlKey, shiftKey, metaKey } = e;
-        const ctrlActive = ctrlKey || shiftKey || metaKey;
-        const key = e.key.toUpperCase();
-
-        const isHandleHistory = ctrlActive && (key === KEYS.Z || key === KEYS.Y);
-
-        handleInput(isHandleHistory);
-        handleClick();
-      },
-      [handleInput, handleClick],
-    );
 
     // Execute rich text command
     const execCommand = useCallback(
@@ -369,10 +383,9 @@ export const ProsemirrorEditor = forwardRef<ProsemirrorEditorRef, ProsemirrorEdi
         }
 
         editorView.current.focus();
-        handleInput();
         handleClick();
       },
-      [handleElementId, elementId, richTextAttrs, handleInput, handleClick],
+      [handleElementId, elementId, richTextAttrs, handleClick],
     );
 
     // Additive bridge: map a surface-driven TextCommandPayload onto the SAME
@@ -427,7 +440,7 @@ export const ProsemirrorEditor = forwardRef<ProsemirrorEditorRef, ProsemirrorEdi
     // renderer is byte-unchanged on the playback/uncontrolled path (PR1-shaped).
     useEffect(() => {
       if (!editable) return;
-      const off = registerActiveTextEditor(elementId, runCommand);
+      const off = registerActiveTextEditor(elementId, runCommand, () => editorView.current?.focus());
       return off;
     }, [editable, elementId, runCommand]);
 
@@ -453,23 +466,34 @@ export const ProsemirrorEditor = forwardRef<ProsemirrorEditorRef, ProsemirrorEdi
       handleClick();
     }, [handleElementId, elementId, handleClick]);
 
+    // The EditorView is mounted once. Its DOM listeners must still use the
+    // current callbacks after a selection, formatting or content change.
+    const handlersRef = useRef({ handleFocus, handleBlur, handleKeydown, handleClick, handleMouseup });
+    handlersRef.current = { handleFocus, handleBlur, handleKeydown, handleClick, handleMouseup };
+
     // Initialize ProseMirror Editor
     useEffect(() => {
       if (!editorViewRef.current) return;
 
       editorView.current = initProsemirrorEditor(editorViewRef.current, value, {
         handleDOMEvents: {
-          focus: handleFocus,
-          blur: handleBlur,
-          keydown: handleKeydown,
-          click: handleClick,
-          mouseup: handleMouseup,
+          focus: () => { handlersRef.current.handleFocus(); },
+          blur: () => {
+            handlersRef.current.handleClick.cancel();
+            handlersRef.current.handleBlur();
+          },
+          keydown: (_view, event) => handlersRef.current.handleKeydown(event),
+          click: () => { handlersRef.current.handleClick(); },
+          mouseup: () => { handlersRef.current.handleMouseup(); },
         },
         editable: () => editable,
         dispatchTransaction(this: EditorView, tr) {
           // Apply the transaction (replicates ProseMirror's default dispatch)
           const newState = this.state.apply(tr);
           this.updateState(newState);
+          if (editableRef.current && tr.docChanged && !tr.getMeta(EXTERNAL_CONTENT_SYNC)) {
+            handleInput();
+          }
           // Additive: push toolbar attrs on selection/doc/marks change — editable only.
           // Playback path (editable=false) is never reached → byte-unchanged.
           if (editableRef.current && shouldPushAttrs(tr)) {
@@ -483,9 +507,12 @@ export const ProsemirrorEditor = forwardRef<ProsemirrorEditorRef, ProsemirrorEdi
       }
 
       return () => {
-        if (editorView.current) {
-          editorView.current.destroy();
-        }
+        handleInput.flush();
+        handleInput.cancel();
+        handlersRef.current.handleClick.cancel();
+        if (editorView.current?.hasFocus()) setDisableHotkeysState(false);
+        editorView.current?.destroy();
+        editorView.current = null;
       };
       // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
@@ -493,17 +520,31 @@ export const ProsemirrorEditor = forwardRef<ProsemirrorEditorRef, ProsemirrorEdi
     // Sync content to DOM
     useEffect(() => {
       if (!editorView.current) return;
-      if (editorView.current.hasFocus()) return;
+      // A saved value can return through the canvas after typing has already
+      // continued. Its acknowledgement must not replace the newer input.
+      if (value === lastEmittedValueRef.current) {
+        lastEmittedValueRef.current = null;
+        return;
+      }
+      lastEmittedValueRef.current = null;
 
       const { doc, tr } = editorView.current.state;
-      editorView.current.dispatch(tr.replaceRangeWith(0, doc.content.size, createDocument(value)));
-    }, [value]);
+      const nextDoc = createDocument(value);
+      if (doc.eq(nextDoc)) return;
+      handleInput.cancel();
+      editorView.current.dispatch(tr.replaceRangeWith(0, doc.content.size, nextDoc)
+        .setMeta(EXTERNAL_CONTENT_SYNC, true).setMeta('addToHistory', false));
+    }, [value, handleInput]);
 
     // Toggle editable mode
     useEffect(() => {
       if (!editorView.current) return;
+      if (!editable) {
+        handleInput.flush();
+        if (editorView.current.hasFocus()) editorView.current.dom.blur();
+      }
       editorView.current.setProps({ editable: () => editable });
-    }, [editable]);
+    }, [editable, handleInput]);
 
     // Setup emitter listeners
     useEffect(() => {

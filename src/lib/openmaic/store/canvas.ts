@@ -272,7 +272,11 @@ const useCanvasStoreBase = create<CanvasState>((set, get) => ({
   // ===== Element Selection Actions =====
 
   setActiveElementIdList: (ids) => {
-    set({ activeElementIdList: ids });
+    set({
+      activeElementIdList: ids,
+      editingElementId: ids.length === 1 && ids[0] === get().editingElementId
+        ? get().editingElementId : '',
+    });
     // Auto-set handleElementId: set to that element for single select, empty for multi-select or none
     if (ids.length === 1) {
       set({ handleElementId: ids[0] });

@@ -184,6 +184,7 @@
       }
     },
     "text": {
+      "edit": "编辑文字",
       "label": "文本",
       "font": "字体",
       "fontDefault": "默认",
@@ -223,7 +224,13 @@
       "deckLabel": "场景",
       "moreActions": "更多操作",
       "rename": "重命名",
-      "sceneIncomplete": "本页内容不完整"
+      "sceneIssues": "本页讲解需补充：{{issues}}"
+    },
+    "validation": {
+      "emptyActions": "尚未添加讲解动作",
+      "emptySpeech": "讲稿为空",
+      "unboundCue": "指引未选择元素",
+      "emptyDiscussion": "讨论主题为空"
     },
     "zorder": {
       "toFront": "置于顶层",
@@ -366,11 +373,16 @@
       "fieldTrigger": "触发条件",
       "fieldWait": "继续条件",
       "fieldFallback": "安全兜底",
+      "fieldDuration": "计划时长",
       "fieldPurpose": "活动类型",
+      "fieldIssue": "待补充",
       "fallbackTimeout": "最长 {{seconds}} 秒后自动继续",
       "activityGateTitle": "等待学生活动",
       "activityGateSummary": "页面报告学习任务真正完成后，AI 才继续讲解。",
       "activityGateMax": "最长等待 {{seconds}} 秒",
+      "timelinePauseTitle": "时间线停顿",
+      "timelinePauseSummary": "用于学生阅读、思考或翻页过渡。",
+      "timelinePauseDuration": "计划停顿 {{seconds}} 秒",
       "triggerHint": "悬停或点击时间线符号查看触发条件",
       "trigger": {
         "sceneStart": "当前页面切换并激活",
@@ -378,6 +390,7 @@
       },
       "completion": {
         "speechEnded": "讲解音频播放结束；没有音频时按文本长度计时",
+        "timelinePauseEnded": "短暂停顿后继续",
         "activityCompleted": "页面发送 activity-complete；未发送时会一直等到安全超时",
         "immediate": "立即完成；此视觉提示不会阻塞后续动作",
         "widgetSettled": "操作指令发给互动页面，约 0.3 秒后继续",
@@ -387,7 +400,10 @@
       },
       "purpose": {
         "interaction": "互动学习任务",
-        "quiz": "测验任务"
+        "quiz": "测验任务",
+        "quiz-submit": "测验作答",
+        "learner-reflection": "阅读与思考",
+        "page-transition": "翻页过渡"
       },
       "addDiscussion": "添加讨论",
       "addDiscussionExists": "每个场景仅支持一个讨论",
@@ -449,21 +465,29 @@
     }
   },
   "classroomComplete": {
-    "quizScorePoints": "小测总成绩 {{score}} / {{total}} 分",
-    "quizScorePercent": "小测总成绩 {{score}} / 100 分",
-    "quizPending": "小测总成绩待完成批阅",
-    "title": "课程完成",
-    "trailLabels": {
-      "slide": "页",
-      "quiz": "小测",
-      "interactive": "互动",
-      "pbl": "项目"
-    },
-    "encouragement": {
-      "high": "太棒了，完美发挥！",
-      "mid": "表现不错，继续加油！",
-      "low": "万事开头难，回去再练练吧。"
-    }
+    "reviewTitle": "学习回顾",
+    "announcement": "已到达本课结尾，可以回看课程或小测。",
+    "headline": "又向前迈进了一步！",
+    "emptyHeadline": "准备开启新的探索",
+    "emptyDescription": "这里还没有可回顾的学习内容。",
+    "quizReview": "小测回顾",
+    "submittedLabel": "已提交",
+    "submittedQuestions": "{{count}} / {{total}} 题",
+    "correctLabel": "完全答对",
+    "questionCount": "{{count}} 题",
+    "scoreLabel": "小测得分",
+    "scorePoints": "{{score}} / {{total}} 分",
+    "pendingLabel": "待批阅",
+    "unsubmittedLabel": "待提交",
+    "unfinishedGuidance": "还有小测未完成，提交后别忘了回看作答与解析。",
+    "pendingGuidance": "作答已提交，批阅完成后记得回来看看解析。",
+    "mistakesGuidance": "别忘了回看错题与解析，把还不熟悉的地方再巩固一次。",
+    "allCorrectGuidance": "这次小测全部答对了！也可以回看解析，把思路记得更牢。",
+    "reviewCourse": "回顾本课内容",
+    "continueQuiz": "继续完成小测",
+    "reviewAnswers": "查看作答记录",
+    "reviewMistakes": "回看错题与解析",
+    "reviewQuiz": "回看小测"
   },
   "whiteboard": {
     "pages": "板书翻页",

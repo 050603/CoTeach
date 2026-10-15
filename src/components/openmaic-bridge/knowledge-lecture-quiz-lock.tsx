@@ -16,6 +16,10 @@ export function KnowledgeLectureQuizLockProvider({
 }
 
 export function useLockedKnowledgeLectureAttempt(sceneId: string, quizOutlineId?: string): KnowledgeLectureAttempt | undefined {
-  const attempts = useContext(KnowledgeLectureQuizLockContext);
+  const attempts = useKnowledgeLectureQuizAttempts();
   return (quizOutlineId ? attempts.get(quizOutlineId) : undefined) ?? attempts.get(sceneId);
+}
+
+export function useKnowledgeLectureQuizAttempts(): ReadonlyMap<string, KnowledgeLectureAttempt> {
+  return useContext(KnowledgeLectureQuizLockContext);
 }

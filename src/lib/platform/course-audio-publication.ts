@@ -25,6 +25,8 @@ export { hashJson } from '@/lib/course-quality-review/audio-publication';
 
 export type PublishCourseAudioInput = {
   courseId: string;
+  /** An explicitly requested display-name change accompanying the audio update. */
+  courseName?: string;
   sourceVersionId: string;
   sourceSnapshotFingerprint: string;
   expectedCourseUpdatedAt: string;
@@ -71,12 +73,13 @@ function sourceSpeechFor(action: SpeechAction, speeches: SpeechAction[]): Speech
       && /^[1-9]\d*$/.test(action.id.slice(source.id.length + 5)));
 }
 
-function assertClassroomAudioOnly(source: PersistedClassroomData, candidate: PersistedClassroomData): void {
+function assertClassroomAudioOnly(source: PersistedClassroomData, candidate: PersistedClassroomData, courseName?: string): void {
   if (!isValidClassroomId(source.id) || !isValidClassroomId(candidate.id) || source.id === candidate.id
     || candidate.stage.id !== candidate.id || candidate.assetGeneration?.status !== 'completed') {
     throw new PlatformError('INVALID_AUDIO_CANDIDATE', '音频候选课堂必须独立保存且资源已生成完成。', 409);
   }
-  assertSame(stripFields(candidate.stage, ['id', 'updatedAt']), stripFields(source.stage, ['id', 'updatedAt']), '音频更新不能改变课堂设定。');
+  const expectedStage = { ...source.stage, ...(courseName !== undefined ? { name: courseName } : {}) };
+  assertSame(stripFields(candidate.stage, ['id', 'updatedAt']), stripFields(expectedStage, ['id', 'updatedAt']), '音频更新不能改变课堂设定。');
   if (!source.scenes.length || source.scenes.length !== candidate.scenes.length) {
     throw new PlatformError('AUDIO_CONTENT_CHANGED', '音频更新不能增删页面。', 409);
   }
@@ -213,9 +216,13 @@ export async function publishCourseAudioVersion(
   input: PublishCourseAudioInput,
   db: PrismaClient = prisma,
 ): Promise<{ version: number; versionId: string; classroomId: string; courseVersion: number }> {
+  const courseName = input.courseName?.trim();
+  if (input.courseName !== undefined && !courseName) {
+    throw new PlatformError('INVALID_COURSE_NAME', '课程名称不能为空。', 400);
+  }
   const sourceClassroom = normalizePersistedClassroom(input.sourceClassroom);
   const candidate = normalizePersistedClassroom(input.candidate);
-  assertClassroomAudioOnly(sourceClassroom, candidate);
+  assertClassroomAudioOnly(sourceClassroom, candidate, courseName);
   await assertCompleteAudio(candidate);
   const publish = async (tx: Prisma.TransactionClient) => {
     await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`pbl-template:${input.courseId}`}, 0))`;
@@ -247,8 +254,10 @@ export async function publishCourseAudioVersion(
       || (input.snapshot.design.aiLearningClassroomId || input.snapshot.design.content._openmaicClassroomId) !== candidate.id) {
       throw new PlatformError('INVALID_AUDIO_CANDIDATE', '新版本没有绑定完整的候选课堂。', 409);
     }
+    const expectedSnapshot = structuredClone(source.snapshot) as unknown as PblTemplateSnapshot;
+    if (courseName !== undefined) expectedSnapshot.design.name = courseName;
     assertSame(fixedSnapshotProjection(input.snapshot, sourceClassroom.id, candidate.id),
-      fixedSnapshotProjection(source.snapshot as unknown as PblTemplateSnapshot, sourceClassroom.id, sourceClassroom.id),
+      fixedSnapshotProjection(expectedSnapshot, sourceClassroom.id, sourceClassroom.id),
       '音频更新不能改变教学内容、来源、讲稿节点身份、大纲或原有审核证据。');
     const sourceMap = sourceDesign.content.courseMindMap;
     const inputMap = input.snapshot.design.content.courseMindMap;
@@ -295,7 +304,9 @@ export async function publishCourseAudioVersion(
       ...(input.mediaRefs !== undefined ? { mediaRefs: input.mediaRefs } : source.mediaRefs ? { mediaRefs: source.mediaRefs as Prisma.InputJsonValue } : {}),
     } });
     const updatedAt = new Date(Math.max(Date.now(), template.updatedAt.getTime() + 1));
-    await tx.classroomTemplate.update({ where: { id: input.courseId }, data: { updatedAt } });
+    await tx.classroomTemplate.update({ where: { id: input.courseId }, data: {
+      updatedAt, ...(courseName !== undefined ? { title: courseName } : {}),
+    } });
     return { version, versionId: created.id, classroomId: candidate.id, courseVersion: updatedAt.getTime() };
   };
   return db === prisma ? runMutationTransaction(publish) : db.$transaction(publish, {

@@ -56,10 +56,9 @@ import {
   SelectValue,
 } from '@openmaic/components/ui/select';
 import type { Action, DiscussionAction, LaserAction } from '@openmaic/lib/types/action';
-import {
-  getActionTriggerDiagnostic,
-  isActivityPauseAction,
-} from './action-trigger-description';
+import { getActionTriggerDiagnostic } from './action-trigger-description';
+import { getSpeechPause, type SpeechPause } from '@openmaic/lib/utils/speech-pause';
+import { validateActions } from '@openmaic/lib/edit/content-validation';
 import { ELEMENT_BOUND, cueLabel, cueMeta, elementLabel } from './cue-meta';
 import { applyCuePreview, clearCuePreview, cuePreviewFor } from './cue-preview';
 import {
@@ -142,10 +141,15 @@ interface TooltipState {
 
 type TFn = (key: string, options?: Record<string, unknown>) => string;
 
+function pauseTitle(pause: SpeechPause, t: TFn): string {
+  return t(pause.kind === 'activity' ? 'edit.timeline.activityGateTitle' : 'edit.timeline.timelinePauseTitle');
+}
+
 function propsOf(a: Action, actionIndex: number, t: TFn): Array<[string, string]> {
   const diagnostic = getActionTriggerDiagnostic(a, actionIndex);
-  const actionLabel = isActivityPauseAction(a)
-    ? t('edit.timeline.activityGateTitle')
+  const pause = getSpeechPause(a);
+  const actionLabel = pause
+    ? pauseTitle(pause, t)
     : cueLabel(a.type, t);
   const rows: Array<[string, string]> = [[t('edit.timeline.fieldAction'), actionLabel]];
   rows.push([
@@ -162,11 +166,20 @@ function propsOf(a: Action, actionIndex: number, t: TFn): Array<[string, string]
       t('edit.timeline.fallbackTimeout', { seconds: diagnostic.fallbackSec }),
     ]);
   }
+  if (diagnostic.durationSec) {
+    rows.push([
+      t('edit.timeline.fieldDuration'),
+      t('edit.timeline.timelinePauseDuration', { seconds: diagnostic.durationSec }),
+    ]);
+  }
   if (diagnostic.purpose) {
     rows.push([
       t('edit.timeline.fieldPurpose'),
       t(`edit.timeline.purpose.${diagnostic.purpose}`),
     ]);
+  }
+  for (const issue of validateActions([a])) {
+    rows.push([t('edit.timeline.fieldIssue'), t(`edit.validation.${issue.kind}`)]);
   }
   const el = (a as { elementId?: string }).elementId;
   if (el) rows.push([t('edit.timeline.fieldElement'), el]);
@@ -207,9 +220,9 @@ function CueTooltip({ tip }: { tip: TooltipState }) {
   );
 }
 
-/** Generated activity gate: wait for page mastery evidence, with timeout fallback. */
-function ActivityGateClip({
-  seconds,
+/** A generated wait action has timing intent even when it carries no speech. */
+function PauseClip({
+  pause,
   onDelete,
   onMoveLeft,
   onMoveRight,
@@ -218,7 +231,7 @@ function ActivityGateClip({
   onDragStart,
   onDragEnd,
 }: {
-  seconds: number;
+  pause: SpeechPause;
   onDelete: () => void;
   onMoveLeft: () => void;
   onMoveRight: () => void;
@@ -243,7 +256,7 @@ function ActivityGateClip({
         </span>
         <Clock3 className="size-3.5 text-cyan-700 dark:text-cyan-300" />
         <span className="text-[10px] font-semibold text-cyan-800 dark:text-cyan-200">
-          {t('edit.timeline.activityGateTitle')}
+          {pauseTitle(pause, t)}
         </span>
         <span className="ml-auto flex items-center">
           <MoveButtons
@@ -257,10 +270,10 @@ function ActivityGateClip({
       </div>
       <div className="flex flex-1 flex-col justify-center gap-2 px-3 py-2">
         <p className="text-[11px] leading-relaxed text-cyan-950/75 dark:text-cyan-100/75">
-          {t('edit.timeline.activityGateSummary')}
+          {t(pause.kind === 'activity' ? 'edit.timeline.activityGateSummary' : 'edit.timeline.timelinePauseSummary')}
         </p>
         <span className="w-fit rounded-full bg-cyan-500/10 px-2 py-0.5 font-mono text-[10px] text-cyan-700 dark:text-cyan-300">
-          {t('edit.timeline.activityGateMax', { seconds })}
+          {t(pause.kind === 'activity' ? 'edit.timeline.activityGateMax' : 'edit.timeline.timelinePauseDuration', { seconds: pause.seconds })}
         </span>
       </div>
     </div>
@@ -552,6 +565,7 @@ function SpeechClip({
 
   return (
     <div
+      title={needsText ? t('edit.validation.emptySpeech') : undefined}
       className={cn(
         'group/clip relative flex h-full w-[228px] shrink-0 flex-col overflow-hidden rounded-xl border border-gray-200/80 bg-white/70 shadow-sm transition-colors focus-within:border-violet-400 hover:border-violet-300/70 dark:border-gray-700/60 dark:bg-stone-800/50 dark:hover:border-violet-500/40',
         needsText && INCOMPLETE_CLIP,
@@ -731,6 +745,7 @@ function DiscussionClip({
 
   return (
     <div
+      title={needsTopic ? t('edit.validation.emptyDiscussion') : undefined}
       className={cn(
         'group/disc relative flex h-full w-[228px] shrink-0 flex-col overflow-hidden rounded-xl border border-gray-200/80 bg-white/70 shadow-sm transition-colors focus-within:border-yellow-400 hover:border-yellow-300/70 dark:border-gray-700/60 dark:bg-stone-800/50 dark:hover:border-yellow-500/40',
         needsTopic && INCOMPLETE_CLIP,
@@ -868,7 +883,7 @@ function CueMarker({
   const Icon = m.icon;
   const bound = ELEMENT_BOUND.has(action.type);
   const elementId = (action as { elementId?: string }).elementId ?? '';
-  const needsTarget = bound && !elementId;
+  const needsTarget = bound && !elementId.trim();
   const laserRoute = teacherPreparation && action.type === 'laser'
     ? [action.elementId, ...(action.waypoints ?? []).map((waypoint) => waypoint.elementId)]
     : null;
@@ -904,6 +919,7 @@ function CueMarker({
         needsTarget && INCOMPLETE_CLIP,
       )}
       aria-label={label}
+      title={needsTarget ? t('edit.validation.unboundCue') : undefined}
     >
       <span className={cn('absolute inset-x-0 top-0 h-[3px]', m.accent)} />
       <div className="flex items-center gap-0.5 px-1 pt-1">
@@ -989,15 +1005,15 @@ function NodeDot({
   // marker (square, filled yellow) so it reads as the end stop, not a regular
   // cue. Its flag glyph comes from cue-meta like every other type's.
   const isDiscussion = action.type === 'discussion';
-  const activityGate = isActivityPauseAction(action);
+  const pause = getSpeechPause(action);
   const bound = ELEMENT_BOUND.has(action.type);
   const elementId = (action as { elementId?: string }).elementId ?? '';
-  const needsTarget = bound && !elementId;
+  const needsTarget = bound && !elementId.trim();
   const m = cueMeta(action.type);
-  const label = activityGate
-    ? t('edit.timeline.activityGateTitle')
+  const label = pause
+    ? pauseTitle(pause, t)
     : cueLabel(action.type, t);
-  const Icon = activityGate ? Clock3 : m.icon;
+  const Icon = pause ? Clock3 : m.icon;
   return (
     <span
       draggable={canDrag}
@@ -1043,7 +1059,7 @@ function NodeDot({
           ? 'text-amber-600 bg-amber-100 ring-amber-200 animate-pulse dark:bg-amber-500/20 dark:text-amber-400'
           : isDiscussion
             ? 'bg-yellow-400 text-yellow-950 ring-yellow-200 dark:bg-yellow-500 dark:text-stone-900 dark:ring-yellow-500/30'
-            : activityGate
+            : pause
               ? 'bg-cyan-100 text-cyan-700 ring-cyan-200 dark:bg-cyan-500/20 dark:text-cyan-300'
               : m.glyph,
         bound
@@ -1282,7 +1298,7 @@ export function ActionsBar({
   );
 
   const speechCount = actions.filter(
-    (a) => a.type === 'speech' && !isActivityPauseAction(a),
+    (a) => a.type === 'speech' && !getSpeechPause(a),
   ).length;
   const cueCount = actions.length - speechCount;
 
@@ -1314,8 +1330,8 @@ export function ActionsBar({
     const block = boards.find((board) => board.start === index);
     const speechIndex = actions
       .slice(0, index + 1)
-      .filter((candidate) => candidate.type === 'speech' && !isActivityPauseAction(candidate)).length;
-    return [{ action, index, endIndex: block?.end ?? index, block, key: (action.id ?? `a-${index}`) as string, speechIndex }];
+      .filter((candidate) => candidate.type === 'speech' && !getSpeechPause(candidate)).length;
+    return [{ action, index, endIndex: block?.end ?? index, block, key: (action.id ?? `a-${index}`) as string, speechIndex, pause: getSpeechPause(action) }];
   });
 
   return (
@@ -1490,7 +1506,7 @@ export function ActionsBar({
               onEnter={() => setDragOver(0)}
               onDrop={() => handleDrop(0)}
             />
-            {items.map(({ action, index, endIndex, block, key, speechIndex: si }) => {
+            {items.map(({ action, index, endIndex, block, key, speechIndex: si, pause }) => {
               // A discussion is pinned terminal, so it can't be drag-reordered.
               const isDiscussion = action.type === 'discussion';
               const onDragStart = isDiscussion || block
@@ -1559,9 +1575,9 @@ export function ActionsBar({
                               canMoveLeft={index > 0}
                               canMoveRight={endIndex < lastMovableIndex}
                             />
-                          ) : isActivityPauseAction(action) ? (
-                            <ActivityGateClip
-                              seconds={Math.round(action.activityPauseSec)}
+                          ) : pause ? (
+                            <PauseClip
+                              pause={pause}
                               onDelete={() => commit((cur) => removeById(cur, key))}
                               onMoveLeft={() => commit((cur) => nudge(cur, key, -1))}
                               onMoveRight={() => commit((cur) => nudge(cur, key, 1))}

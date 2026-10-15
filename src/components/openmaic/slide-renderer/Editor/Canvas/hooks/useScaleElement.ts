@@ -12,6 +12,7 @@ import { SHAPE_PATH_FORMULAS } from '@openmaic/configs/shapes';
 import { type AlignLine, uniqAlignLines } from '@openmaic/lib/utils/element';
 import { useHistorySnapshot } from '@openmaic/lib/hooks/use-history-snapshot';
 import { useCanvasOperations } from '@openmaic/lib/hooks/use-canvas-operations';
+import { measureTextElement } from '@openmaic/lib/edit/text-element-layout';
 
 interface RotateElementData {
   left: number;
@@ -533,11 +534,19 @@ export function useScaleElement(
         const currentPageX = e instanceof MouseEvent ? e.pageX : e.changedTouches[0].pageX;
         const currentPageY = e instanceof MouseEvent ? e.pageY : e.changedTouches[0].pageY;
 
-        if (startPageX === currentPageX && startPageY === currentPageY) return;
-
         setScalingState(false);
 
-        updateSlide({ elements: elementListRef.current });
+        if (startPageX === currentPageX && startPageY === currentPageY) return;
+
+        // The DOM already reflects the dragged width/height. Include natural
+        // text geometry in this gesture instead of a later observer write.
+        const elements = elementListRef.current.map((item) => {
+          if (item.id !== element.id || item.type !== 'text') return item;
+          const content = document.getElementById(`editable-element-${item.id}`)
+            ?.querySelector<HTMLElement>('.editable-element-text .element-content') ?? null;
+          return { ...item, ...measureTextElement(content, item.vertical) };
+        });
+        updateSlide({ elements });
         addHistorySnapshot();
       };
 

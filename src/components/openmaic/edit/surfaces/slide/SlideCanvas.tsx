@@ -15,6 +15,7 @@ import {
 import { AnchoredTextBar } from './AnchoredTextBar';
 import { AnchoredElementBar } from './AnchoredElementBar';
 import { ElementPickLayer } from './ElementPickLayer';
+import { isTextInput, useSlideClipboard } from './use-slide-clipboard';
 
 /**
  * The slide surface's canvas. Reuses the unmodified slide renderer
@@ -32,18 +33,24 @@ import { ElementPickLayer } from './ElementPickLayer';
  */
 export function SlideCanvas() {
   const slideRootRef = useRef<HTMLDivElement>(null);
+  const editorRef = useRef<HTMLDivElement>(null);
   const { controller, gestureProps } = useSlideCanvasController();
   const editingElementId = useEditingTextElementId();
   const nonTextElement = useSelectedNonTextElement();
   useSyncEditingElementId(editingElementId);
+  useSlideClipboard(editorRef);
 
   // Esc disarms in-flight insert mode. Read via getState so the listener mounts
   // once; checking inside the handler keeps us inert when nothing is armed.
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
-      if (e.key !== 'Escape') return;
+      if (e.key !== 'Escape' || e.isComposing) return;
       const cs = useCanvasStore.getState();
       if (cs.creatingElement) cs.setCreatingElement(null);
+      if (cs.editingElementId) {
+        cs.setEditingElementId('');
+        editorRef.current?.focus({ preventScroll: true });
+      }
     };
     document.addEventListener('keydown', handler);
     return () => document.removeEventListener('keydown', handler);
@@ -58,8 +65,20 @@ export function SlideCanvas() {
     // same canvas bounding rect — switching scene type no longer
     // resizes / reflows the frame, which used to cause the slide↔
     // interactive layout jump.
-    <div className="relative h-full w-full" {...gestureProps}>
-      <SceneProvider controller={controller}>
+    <div
+      ref={editorRef}
+      tabIndex={0}
+      className="relative h-full w-full outline-none"
+      {...gestureProps}
+      onPointerDownCapture={(event) => {
+        gestureProps.onPointerDownCapture();
+        if (!isTextInput(event.target)
+          && !(event.target as HTMLElement).closest('button, [role="menuitem"]')) {
+          editorRef.current?.focus({ preventScroll: true });
+        }
+      }}
+    >
+      <SceneProvider key={controller.sceneId} controller={controller}>
         <Canvas slideRootRef={slideRootRef} />
         {/* Same spotlight + laser effects as playback, retargeted to the
             editor's element ids — driven by useCanvasStore.setSpotlight /

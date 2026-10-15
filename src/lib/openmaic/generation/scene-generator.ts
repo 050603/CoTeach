@@ -1101,7 +1101,7 @@ export async function generateLegacyCustomizedSlideContent(
  */
 type PlannedQuizQuestionType = NonNullable<SceneOutline['quizConfig']>['questionTypes'][number];
 
-export const QUIZ_GENERATION_POLICY_VERSION = 'grounded-section-quiz-v23-misconception-first-diagnostic-items';
+export const QUIZ_GENERATION_POLICY_VERSION = 'grounded-section-quiz-v24-learning-transition-before-assessment';
 
 export function objectiveQuestionRequiresWrittenExplanation(stem: string): boolean {
   const value = stem.replace(/\s+/g, ' ').trim();

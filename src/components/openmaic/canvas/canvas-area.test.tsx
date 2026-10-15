@@ -19,7 +19,9 @@ vi.mock('@openmaic/lib/hooks/use-i18n', () => ({
   useI18n: () => ({ t: (key: string) => key }),
 }));
 vi.mock('@openmaic/components/scene-renderers/classroom-complete', () => ({
-  ClassroomCompletePageConnected: () => <div>complete</div>,
+  ClassroomCompletePageConnected: ({ onReviewScene }: { onReviewScene?: (sceneId: string) => void }) => (
+    <button type="button" onClick={() => onReviewScene?.('review-scene')}>complete</button>
+  ),
 }));
 
 import { CanvasArea } from './canvas-area';
@@ -63,6 +65,13 @@ const baseProps = {
   onWhiteboardClose: vi.fn(),
   hideToolbar: true,
 };
+
+it('passes completion review navigation back to the player', () => {
+  const onReviewScene = vi.fn();
+  render(<CanvasArea {...baseProps} currentScene={null} whiteboardOpen={false} isPendingScene isCourseComplete onReviewScene={onReviewScene} />);
+  fireEvent.click(screen.getByRole('button', { name: 'complete' }));
+  expect(onReviewScene).toHaveBeenCalledWith('review-scene');
+});
 
 describe('CanvasArea whiteboard restore entry', () => {
   it('lets the user reopen a minimized whiteboard when the toolbar is hidden', () => {

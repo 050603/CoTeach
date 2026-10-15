@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useState, useEffect, useCallback } from 'react';
+import { useMemo, useCallback } from 'react';
 import type { PPTShapeElement, ShapeText } from '@openmaic/dsl';
 import { useCanvasStore } from '@openmaic/lib/store';
 import { useCanvasOperations } from '@openmaic/lib/hooks/use-canvas-operations';
@@ -29,8 +29,9 @@ export interface ShapeElementProps {
  * Supports gradients, patterns, and rich text content
  */
 export function ShapeElement({ elementInfo, selectElement }: ShapeElementProps) {
-  const handleElementId = useCanvasStore.use.handleElementId();
-  const { updateElement, removeElementProps } = useCanvasOperations();
+  const editingElementId = useCanvasStore.use.editingElementId();
+  const activeElementIds = useCanvasStore.use.activeElementIdList();
+  const { updateElement } = useCanvasOperations();
   const { addHistorySnapshot } = useHistorySnapshot();
 
   const { shadowStyle } = useElementShadow(elementInfo.shadow);
@@ -38,21 +39,14 @@ export function ShapeElement({ elementInfo, selectElement }: ShapeElementProps) 
   const { fill } = useElementFill(elementInfo, 'editable');
   const { outlineWidth, outlineColor, strokeDashArray } = useElementOutline(elementInfo.outline);
 
-  const [editable, setEditable] = useState(false);
+  const editable = !elementInfo.lock && editingElementId === elementInfo.id
+    && activeElementIds.length === 1 && activeElementIds[0] === elementInfo.id;
 
   const handleSelectElement = (e: React.MouseEvent | React.TouchEvent, canMove = true) => {
     if (elementInfo.lock) return;
     e.stopPropagation();
     selectElement?.(e, elementInfo, canMove);
   };
-
-  // Stop editing when element is no longer active
-  useEffect(() => {
-    if (handleElementId !== elementInfo.id && editable) {
-      // eslint-disable-next-line react-hooks/set-state-in-effect -- Sync editable state with active element
-      setEditable(false);
-    }
-  }, [handleElementId, elementInfo.id, editable]);
 
   // Default text configuration
   const text = useMemo<ShapeText>(() => {
@@ -80,21 +74,11 @@ export function ShapeElement({ elementInfo, selectElement }: ShapeElementProps) 
     [elementInfo.id, text, updateElement, addHistorySnapshot],
   );
 
-  // Check and remove empty text
-  const checkEmptyText = useCallback(() => {
-    if (!elementInfo.text) return;
-
-    const pureText = elementInfo.text.content.replace(/<[^>]+>/g, '');
-    if (!pureText) {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- 'text' is specific to PPTShapeElement, not in keyof PPTElement union
-      removeElementProps({ id: elementInfo.id, propName: 'text' as any });
-      addHistorySnapshot();
-    }
-  }, [elementInfo.id, elementInfo.text, removeElementProps, addHistorySnapshot]);
-
   // Start editing on double click
   const startEdit = () => {
-    setEditable(true);
+    if (elementInfo.lock || activeElementIds.length !== 1
+      || activeElementIds[0] !== elementInfo.id) return;
+    useCanvasStore.getState().setEditingElementId(elementInfo.id);
   };
 
   return (
@@ -163,8 +147,8 @@ export function ShapeElement({ elementInfo, selectElement }: ShapeElementProps) 
           </svg>
 
           <div
-            className={`shape-text absolute inset-0 flex flex-col p-[10px] leading-[1.5] break-words pointer-events-none ${
-              editable || text.content ? 'pointer-events-auto' : ''
+            className={`shape-text absolute inset-0 flex flex-col p-[10px] leading-[1.5] break-words ${
+              editable || text.content ? 'pointer-events-auto' : 'pointer-events-none'
             } ${
               text.align === 'top'
                 ? 'justify-start'
@@ -184,11 +168,10 @@ export function ShapeElement({ elementInfo, selectElement }: ShapeElementProps) 
                 elementId={elementInfo.id}
                 defaultColor={text.defaultColor}
                 defaultFontName={text.defaultFontName}
-                editable={!elementInfo.lock && editable}
+                editable={editable}
                 value={text.content}
                 onUpdate={({ value, ignore }) => updateText(value, ignore)}
-                onBlur={checkEmptyText}
-                onMouseDown={(e) => handleSelectElement(e as React.MouseEvent, false)}
+                onMouseDown={(e) => handleSelectElement(e as React.MouseEvent, !editable)}
               />
             )}
           </div>

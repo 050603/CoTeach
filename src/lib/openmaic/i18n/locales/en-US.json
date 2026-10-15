@@ -184,6 +184,7 @@
       }
     },
     "text": {
+      "edit": "Edit text",
       "label": "Text",
       "font": "Font",
       "fontDefault": "Default",
@@ -223,7 +224,13 @@
       "deckLabel": "Scenes",
       "moreActions": "More actions",
       "rename": "Rename",
-      "sceneIncomplete": "This page has incomplete content"
+      "sceneIssues": "Narration needs attention: {{issues}}"
+    },
+    "validation": {
+      "emptyActions": "No narration actions added",
+      "emptySpeech": "Narration is empty",
+      "unboundCue": "Cue has no target element",
+      "emptyDiscussion": "Discussion topic is empty"
     },
     "zorder": {
       "toFront": "Bring to front",
@@ -366,11 +373,16 @@
       "fieldTrigger": "Triggered by",
       "fieldWait": "Continues when",
       "fieldFallback": "Safety fallback",
+      "fieldDuration": "Planned duration",
       "fieldPurpose": "Activity type",
+      "fieldIssue": "Needs attention",
       "fallbackTimeout": "Automatically continues after at most {{seconds}} seconds",
       "activityGateTitle": "Wait for learner activity",
       "activityGateSummary": "Narration continues when the page reports meaningful task completion.",
       "activityGateMax": "Maximum wait: {{seconds}}s",
+      "timelinePauseTitle": "Timeline pause",
+      "timelinePauseSummary": "Allows reading, reflection, or a page transition.",
+      "timelinePauseDuration": "Planned pause: {{seconds}} sec",
       "triggerHint": "Hover or click a timeline symbol to inspect its trigger",
       "trigger": {
         "sceneStart": "The scene becomes active",
@@ -378,6 +390,7 @@
       },
       "completion": {
         "speechEnded": "The narration audio ends; without audio, a text-length timer is used",
+        "timelinePauseEnded": "Continue after a brief pause",
         "activityCompleted": "The page sends activity-complete; otherwise this waits for the safety timeout",
         "immediate": "Immediately; this visual cue does not block the next action",
         "widgetSettled": "The command is sent to the interactive page, then settles for about 0.3 seconds",
@@ -387,7 +400,10 @@
       },
       "purpose": {
         "interaction": "Interactive learning task",
-        "quiz": "Quiz task"
+        "quiz": "Quiz task",
+        "quiz-submit": "Quiz response",
+        "learner-reflection": "Reading and reflection",
+        "page-transition": "Page transition"
       },
       "addDiscussion": "Add discussion",
       "addDiscussionExists": "Only one discussion per scene",
@@ -449,21 +465,30 @@
     }
   },
   "classroomComplete": {
-    "quizScorePoints": "Quiz score {{score}} / {{total}}",
-    "quizScorePercent": "Quiz score {{score}} / 100",
-    "quizPending": "Quiz score awaiting completed grading",
-    "title": "Course complete",
-    "trailLabels": {
-      "slide": "pages",
-      "quiz": "quizzes",
-      "interactive": "interactives",
-      "pbl": "projects"
-    },
-    "encouragement": {
-      "high": "Outstanding — you nailed it.",
-      "mid": "Solid work — keep it up.",
-      "low": "A good start — review and try again."
-    }
+    "reviewTitle": "Lesson review",
+    "announcement": "You have reached the end of this lesson. Revisit the lesson or your quiz answers.",
+    "headline": "Another step forward!",
+    "emptyHeadline": "Ready for a new discovery",
+    "emptyDescription": "There is no lesson content to review yet.",
+    "quizReview": "Quiz review",
+    "submittedLabel": "Submitted",
+    "submittedQuestions": "{{count}} / {{total}} questions",
+    "correctLabel": "Fully correct",
+    "questionCount_one": "{{count}} question",
+    "questionCount_other": "{{count}} questions",
+    "scoreLabel": "Quiz score",
+    "scorePoints": "{{score}} / {{total}} points",
+    "pendingLabel": "Awaiting grading",
+    "unsubmittedLabel": "Still to submit",
+    "unfinishedGuidance": "Finish the remaining quiz questions, then revisit your answers and explanations.",
+    "pendingGuidance": "Your answers are submitted. Come back for the explanations when grading is complete.",
+    "mistakesGuidance": "Revisit your mistakes and explanations to practice the ideas that need more attention.",
+    "allCorrectGuidance": "Every answer earned full credit! Revisit the explanations to reinforce your reasoning.",
+    "reviewCourse": "Review this lesson",
+    "continueQuiz": "Continue the quiz",
+    "reviewAnswers": "Review your answers",
+    "reviewMistakes": "Review mistakes and explanations",
+    "reviewQuiz": "Revisit the quiz"
   },
   "whiteboard": {
     "pages": "Whiteboard pages",

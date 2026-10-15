@@ -244,7 +244,7 @@ export function EditableElement({
       }}
     >
       <ContextMenu>
-        <ContextMenuTrigger>
+        <ContextMenuTrigger onContextMenu={(event) => selectElement(event, elementInfo, false)}>
           <CurrentElementComponent elementInfo={elementInfo} selectElement={selectElement} />
         </ContextMenuTrigger>
         <ContextMenuContent>

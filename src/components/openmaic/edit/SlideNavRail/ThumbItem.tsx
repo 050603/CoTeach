@@ -12,7 +12,7 @@ import {
 } from '@openmaic/components/ui/dropdown-menu';
 import { SceneThumbnailContent } from '@openmaic/components/stage/scene-thumbnail-content';
 import { SCENE_CREATION_ENABLED } from '@openmaic/lib/edit/scene-creation-enabled';
-import { sceneHasIssues } from '@openmaic/lib/edit/content-validation';
+import { validateScene } from '@openmaic/lib/edit/content-validation';
 import type { Scene } from '@openmaic/lib/types/stage';
 import { useCanvasStore } from '@openmaic/lib/store/canvas';
 import { useStageStore } from '@openmaic/lib/store/stage';
@@ -43,6 +43,10 @@ function ThumbItemComponent({
   const updateScene = useStageStore.use.updateScene();
   const ref = useRef<HTMLLIElement>(null);
   const visible = useNearViewport(ref);
+  const issues = validateScene(scene);
+  const issueDescription = t('edit.nav.sceneIssues', {
+    issues: [...new Set(issues.map((issue) => t(`edit.validation.${issue.kind}`)))].join(' · '),
+  });
 
   // Inline title-edit state. `draft` is only used while renaming; when
   // idle we derive the visible title from `scene.title` directly so an
@@ -126,13 +130,13 @@ function ThumbItemComponent({
             : 'hover:bg-zinc-50/80 dark:hover:bg-zinc-800/50',
         )}
       >
-        {/* Page-level "incomplete content" dot — surfaces a scene with any
+        {/* Page-level diagnosis dot — surfaces a scene with any
             content issue (blank narration / no actions / unbound cue …) so the
             user can spot it in the rail without opening every page. */}
-        {sceneHasIssues(scene) && (
+        {issues.length > 0 && (
           <span
-            title={t('edit.nav.sceneIncomplete')}
-            aria-label={t('edit.nav.sceneIncomplete')}
+            title={issueDescription}
+            aria-label={issueDescription}
             className="absolute right-1 top-1 z-10 size-2 rounded-full bg-amber-400 shadow-sm ring-2 ring-white dark:ring-slate-900"
           />
         )}

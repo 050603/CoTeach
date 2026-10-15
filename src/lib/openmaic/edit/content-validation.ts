@@ -2,6 +2,7 @@ import type { Action } from '@openmaic/lib/types/action';
 import type { Scene } from '@openmaic/lib/types/stage';
 import type { SceneOutline } from '@openmaic/lib/types/generation';
 import { ELEMENT_BOUND } from '@openmaic/components/edit/ActionsBar/cue-meta';
+import { getSpeechPause } from '@openmaic/lib/utils/speech-pause';
 
 /**
  * Pure content-validity checks for the editor. These surface *meaningless* edit
@@ -35,7 +36,7 @@ const isBlank = (s: string | undefined): boolean => !s || s.trim() === '';
 export function validateActions(actions: Action[]): ActionIssue[] {
   const issues: ActionIssue[] = [];
   for (const a of actions) {
-    if (a.type === 'speech' && isBlank((a as { text?: string }).text)) {
+    if (a.type === 'speech' && isBlank((a as { text?: string }).text) && !getSpeechPause(a)) {
       issues.push({ kind: 'emptySpeech', actionId: a.id });
     } else if (ELEMENT_BOUND.has(a.type) && isBlank((a as { elementId?: string }).elementId)) {
       issues.push({ kind: 'unboundCue', actionId: a.id });

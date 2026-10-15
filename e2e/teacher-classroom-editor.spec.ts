@@ -108,7 +108,7 @@ function resource(): ClassroomResource {
   };
 }
 
-async function mockEditor(page: Page, baseURL = 'http://localhost:3000', initialResource = resource()): Promise<Fixture> {
+async function mockEditor(page: Page, baseURL = 'http://localhost:3000', initialResource = resource(), agentOutcome: 'complete' | 'disconnect' = 'complete'): Promise<Fixture> {
   let saved = initialResource;
   const fixture: Fixture = {
     resource: () => saved,
@@ -136,7 +136,9 @@ async function mockEditor(page: Page, baseURL = 'http://localhost:3000', initial
     .sign(new TextEncoder().encode(secret));
   await page.context().addCookies([{ name: 'openpbl_teacher', value: token, domain: new URL(baseURL).hostname, path: '/', httpOnly: true, sameSite: 'Lax' }]);
 
-  await page.routeWebSocket(/.*/, (socket) => {
+  // Next's development bootstrap needs its own HMR handshake. Only mock
+  // application sockets; classroom traffic still cannot reach the database.
+  await page.routeWebSocket((url) => !url.pathname.startsWith('/_next/'), (socket) => {
     socket.onMessage((message) => {
       const payload = JSON.parse(String(message)) as { type?: string; courseId?: string };
       if (payload.type === 'subscribe') socket.send(JSON.stringify({ type: 'subscribed', courseId: payload.courseId }));
@@ -210,14 +212,22 @@ async function mockEditor(page: Page, baseURL = 'http://localhost:3000', initial
         { type: 'message_end', message: summary },
         { type: 'agent_end', messages: [toolMessage, summary] },
       ];
-      return route.fulfill({ status: 200, contentType: 'text/event-stream', body: events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join('') });
+      const sentEvents = agentOutcome === 'disconnect' ? [...events.slice(0, 3),
+        { type: 'message_start', message: { role: 'assistant' } },
+        { type: 'message_end', message: { role: 'assistant', content: [{ type: 'toolCall',
+          id: 'e2e-interrupted-redraw', name: 'regenerate_scene', arguments: { sceneId: body.scene.id, instruction: '补充图示' },
+        }] } },
+      ] : events;
+      return route.fulfill({ status: 200, contentType: 'text/event-stream',
+        body: ': heartbeat\n\n' + sentEvents.map((event) => `data: ${JSON.stringify(event)}\n\n`).join(''),
+      });
     }
     fixture.unexpected.push(entry);
     return route.fulfill({ status: 404, contentType: 'application/json', body: JSON.stringify({ error: 'No fixture for this API request' }) });
   });
 
   await page.goto(`/teacher/prepare/${courseId}/classroom-editor`);
-  await expect(page.getByRole('button', { name: '保存课堂', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: '保存课堂', exact: true })).toBeVisible({ timeout: 20_000 });
   await expect(page.locator('.canvas').filter({ visible: true })).toBeVisible({ timeout: 20_000 });
   await expect(page.getByRole('button', { name: '添加白板', exact: true })).toBeVisible();
   return fixture;
@@ -311,6 +321,408 @@ async function screenshot(page: Page, info: TestInfo, name: string) {
   await page.screenshot({ path, fullPage: true });
   await info.attach(name, { path, contentType: 'image/png' });
 }
+
+function untouchedTextResource(): ClassroomResource {
+  const initial = resource();
+  const first = initial.scenes[0];
+  if (first.content.type !== 'slide') throw new Error('Expected slide');
+  const base = { type: 'text' as const, left: 80, top: 80, width: 320, height: 92, rotate: 0,
+    defaultFontName: 'Noto Sans SC', defaultColor: '#243447' };
+  first.content.canvas.elements = [
+    { ...base, id: 'untouched-note', content: '<p class="source">浏览时保留原文及尺寸</p>' },
+    { ...base, id: 'untouched-vertical', left: 500, width: 96, height: 280, vertical: true, content: '<p>竖排文字</p>' },
+    { ...base, id: 'untouched-empty', top: 320, content: '<p></p>' },
+    { ...base, id: 'untouched-locked', top: 430, lock: true, content: '<p>锁定文字</p>' },
+  ];
+  first.actions = [...first.actions!,
+    { id: 'reflection', type: 'speech', text: '', timelinePauseSec: 30, timelinePausePurpose: 'learner-reflection' },
+    { id: 'transition', type: 'speech', text: '', timelinePauseSec: 2, timelinePausePurpose: 'page-transition' },
+  ] as Action[];
+  const second = structuredClone(first);
+  second.id = 'untouched-second'; second.title = '第二页合法活动等待'; second.order = 1;
+  if (second.content.type !== 'slide') throw new Error('Expected slide');
+  second.content.canvas.id = 'untouched-second-canvas';
+  second.actions = [{ id: 'activity', type: 'speech', text: '', activityPauseSec: 60, activityPausePurpose: 'interaction' }] as Action[];
+  initial.scenes.push(second);
+  return initial;
+}
+
+test('opening and browsing text pages preserves data, saved status and valid wait diagnostics', async ({ page, baseURL }) => {
+  test.setTimeout(60_000);
+  await page.setViewportSize({ width: 1440, height: 900 });
+  const initial = untouchedTextResource();
+  const expected = structuredClone(initial.scenes);
+  const fixture = await mockEditor(page, baseURL, initial);
+  const save = page.getByRole('button', { name: '保存课堂', exact: true });
+  const rail = page.getByTestId('slide-nav-rail');
+  const note = page.locator('#editable-element-untouched-note .ProseMirror');
+  const dialogs: string[] = [];
+  page.on('dialog', async (dialog) => { dialogs.push(dialog.message()); await dialog.dismiss(); });
+  await page.evaluate(() => document.fonts.ready);
+  await note.click();
+  await page.keyboard.press('ControlOrMeta+a');
+  await page.keyboard.press('Escape');
+  await page.setViewportSize({ width: 1024, height: 768 });
+  await rail.getByTitle('第二页合法活动等待', { exact: true }).first().click();
+  await expect(page.getByText('等待学生活动', { exact: true })).toBeVisible();
+  await rail.getByTitle('观察能源使用', { exact: true }).first().click();
+  await expect(page.getByText('时间线停顿', { exact: true }).first()).toBeVisible();
+  await expect(page.locator('#editable-element-untouched-empty')).toBeAttached();
+  // Allow the old observer and delayed empty-text cleanup paths to settle.
+  await page.waitForTimeout(600);
+  await expect(save).toBeDisabled();
+  await expect(page.getByText('所有修改已保存', { exact: true })).toBeVisible();
+  await expect(rail.locator('[aria-label^="本页讲解需补充"]')).toHaveCount(0);
+  expect(fixture.patches).toHaveLength(0);
+  expect(await page.evaluate(() => !window.dispatchEvent(new Event('beforeunload', { cancelable: true })))).toBe(false);
+
+  // Saving one explicit title edit also inspects all canonical data: browsing
+  // must not have changed text HTML, geometry, empty elements or wait actions.
+  await rail.getByTestId('slide-nav-more').first().click();
+  await page.getByRole('menuitem', { name: '重命名', exact: true }).click();
+  const rename = rail.getByRole('textbox', { name: '重命名', exact: true });
+  await rename.fill('教师修改的标题');
+  await rename.press('Enter');
+  expected[0].title = '教师修改的标题';
+  const patch = await saveClassroom(page, fixture, 1);
+  expect(patch.scenes).toEqual(expected);
+  await page.reload();
+  await expect(note).toBeVisible();
+  await expect(save).toBeDisabled();
+  await page.route(`**/teacher/prepare/${courseId}/preview`, (route) => route.fulfill({
+    contentType: 'text/html; charset=utf-8', body: '<main>测试预览</main>',
+  }));
+  await page.getByRole('button', { name: '返回预览发布', exact: true }).click();
+  await expect(page.getByText('测试预览', { exact: true })).toBeVisible();
+  expect(dialogs).toEqual([]);
+  expect(fixture.unexpected).toEqual([]);
+  expect(fixture.errors).toEqual([]);
+});
+
+test('real text edits restore the exact saved baseline on undo and survive save and reload', async ({ page, baseURL }) => {
+  test.setTimeout(60_000);
+  const fixture = await mockEditor(page, baseURL, untouchedTextResource());
+  const save = page.getByRole('button', { name: '保存课堂', exact: true });
+  const note = page.locator('#editable-element-untouched-note .ProseMirror');
+  await expect(save).toBeDisabled();
+  await note.fill('教师编辑后的正文\n需要额外一行的完整说明');
+  await note.press('ControlOrMeta+z');
+  await expect(note).toHaveText('浏览时保留原文及尺寸');
+  await expect(save).toBeDisabled();
+  await note.press('ControlOrMeta+Shift+z');
+  await expect(note).toContainText('需要额外一行的完整说明');
+  await note.blur();
+  await expect(save).toBeEnabled();
+  await page.getByRole('button', { name: '撤销', exact: true }).click();
+  await expect(note).toHaveText('浏览时保留原文及尺寸');
+  await page.waitForTimeout(400);
+  await expect(save).toBeDisabled();
+  await page.getByRole('button', { name: '重做', exact: true }).click();
+  await expect(note).toContainText('需要额外一行的完整说明');
+  await saveClassroom(page, fixture, 1);
+  await page.reload();
+  await expect(note).toContainText('教师编辑后的正文');
+  await expect(save).toBeDisabled();
+  expect(fixture.unexpected).toEqual([]);
+  expect(fixture.errors).toEqual([]);
+});
+
+test('horizontal and vertical text resizing forms one undo step and a click without movement stays saved', async ({ page, baseURL }) => {
+  test.setTimeout(60_000);
+  await page.setViewportSize({ width: 1440, height: 900 });
+  const fixture = await mockEditor(page, baseURL, untouchedTextResource());
+  const save = page.getByRole('button', { name: '保存课堂', exact: true });
+  for (const id of ['untouched-note', 'untouched-vertical']) {
+    await page.locator(`#editable-element-${id} .element-content`).click({ position: { x: 10, y: 10 } });
+    const handle = page.locator('.text-element-operate .resize-handler').last();
+    await expect(handle).toBeVisible();
+    await handle.click();
+    await expect(save).toBeDisabled();
+    const bounds = await handle.boundingBox();
+    if (!bounds) throw new Error('Missing text resize handle');
+    const x = bounds.x + bounds.width / 2;
+    const y = bounds.y + bounds.height / 2;
+    await page.mouse.move(x, y);
+    await page.mouse.down();
+    await page.mouse.move(x - (id === 'untouched-note' ? 100 : 0), y - (id === 'untouched-vertical' ? 60 : 0), { steps: 5 });
+    await page.mouse.up();
+    await expect(save).toBeEnabled();
+    await page.getByRole('button', { name: '撤销', exact: true }).click();
+    await expect(save).toBeDisabled();
+    await page.getByRole('button', { name: '重做', exact: true }).click();
+    await expect(save).toBeEnabled();
+    await page.getByRole('button', { name: '撤销', exact: true }).click();
+    await expect(save).toBeDisabled();
+  }
+  expect(fixture.patches).toHaveLength(0);
+  expect(fixture.unexpected).toEqual([]);
+  expect(fixture.errors).toEqual([]);
+});
+
+function clipboardResource(): ClassroomResource {
+  const initial = resource();
+  const first = initial.scenes[0];
+  if (first.content.type !== 'slide') throw new Error('Expected a slide');
+  first.content.canvas.elements = [
+    { id: 'clipboard-image', type: 'image', left: 80, top: 80, width: 160, height: 120, rotate: 0, src: imageDataUrl, fixedRatio: true },
+    { id: 'clipboard-text', type: 'text', left: 440, top: 100, width: 320, height: 80, rotate: 0,
+      content: '<p>保留文字复制粘贴</p>', defaultFontName: 'Noto Sans SC', defaultColor: '#243447' },
+  ];
+  const second = structuredClone(first);
+  second.id = 'clipboard-target';
+  second.title = '粘贴目标页';
+  second.order = 1;
+  if (second.content.type !== 'slide') throw new Error('Expected a slide');
+  second.content.canvas.id = 'clipboard-target-canvas';
+  second.content.canvas.elements = [];
+  initial.scenes.push(second);
+  return initial;
+}
+
+test('slide element keyboard copy, paste and cut preserve text editing and support undo', async ({ page, baseURL }) => {
+  test.setTimeout(60_000);
+  await page.setViewportSize({ width: 1440, height: 900 });
+  const fixture = await mockEditor(page, baseURL, clipboardResource());
+  const canvas = page.locator('.canvas');
+  const elements = canvas.locator('[data-slide-element-id]');
+  await expect(elements).toHaveCount(2);
+  await canvas.locator('#editable-element-clipboard-image .element-content').click();
+  await page.keyboard.press('ControlOrMeta+c');
+  await page.keyboard.press('ControlOrMeta+v');
+  await expect(elements).toHaveCount(3);
+  await page.getByRole('button', { name: '撤销', exact: true }).click();
+  await expect(elements).toHaveCount(2);
+  await page.getByRole('button', { name: '重做', exact: true }).click();
+  await expect(elements).toHaveCount(3);
+  const copy = elements.filter({ has: page.locator('.editable-element-image') }).last();
+  await copy.locator('.element-content').click();
+  await page.keyboard.press('ControlOrMeta+x');
+  await expect(elements).toHaveCount(2);
+  await page.keyboard.press('ControlOrMeta+v');
+  await expect(elements).toHaveCount(3);
+
+  const text = canvas.locator('#editable-element-clipboard-text [contenteditable="true"]');
+  await text.click();
+  await page.keyboard.press('ControlOrMeta+a');
+  await expect.poll(() => page.evaluate(() => window.getSelection()?.toString())).toBe('保留文字复制粘贴');
+  await page.keyboard.press('ControlOrMeta+c');
+  await page.keyboard.press('End');
+  await expect.poll(() => page.evaluate(() => window.getSelection()?.isCollapsed)).toBe(true);
+  await page.keyboard.press('ControlOrMeta+v');
+  await expect(text).toHaveText('保留文字复制粘贴保留文字复制粘贴');
+  await expect(elements).toHaveCount(3);
+  await expect(page.getByRole('button', { name: '保存课堂', exact: true })).toBeEnabled();
+  // Rich-text updates debounce for 300 ms; wait for the actual content to save.
+  await page.waitForTimeout(400);
+  const saved = (await saveClassroom(page, fixture, 1)).scenes[0];
+  if (saved.content.type !== 'slide') throw new Error('Expected slide content');
+  expect(saved.content.canvas.elements).toHaveLength(3);
+  const savedText = saved.content.canvas.elements.find((element) => element.id === 'clipboard-text');
+  if (savedText?.type !== 'text') throw new Error('Expected text element');
+  expect(savedText.content.replace(/<[^>]+>/g, '')).toBe('保留文字复制粘贴保留文字复制粘贴');
+  expect(new Set(saved.content.canvas.elements.map((element) => element.id)).size).toBe(3);
+  expect(saved.actions).toEqual(resource().scenes[0].actions);
+  expect(fixture.errors).toEqual([]);
+  expect(fixture.unexpected).toEqual([]);
+});
+
+for (const nativeClipboard of [true, false]) {
+  test(`slide element context menus copy and paste across pages ${nativeClipboard ? 'with the native clipboard' : 'without clipboard permission'}`, async ({ page, baseURL }) => {
+    test.setTimeout(60_000);
+    await page.setViewportSize({ width: 1440, height: 900 });
+    // Classroom hosts can use plain HTTP; menu operations must work without this API.
+    if (!nativeClipboard) {
+      await page.addInitScript(() => Object.defineProperty(navigator, 'clipboard', { configurable: true, value: undefined }));
+    }
+    const fixture = await mockEditor(page, baseURL, clipboardResource());
+    const canvas = page.locator('.canvas');
+    await canvas.locator('#editable-element-clipboard-image .element-content').click({ button: 'right' });
+    await page.getByRole('menuitem', { name: /^复制/ }).click();
+    await page.getByRole('button', { name: /粘贴目标页/ }).click();
+    await expect(canvas.locator('[data-slide-element-id]')).toHaveCount(0);
+    await canvas.click({ button: 'right', position: { x: 20, y: 20 } });
+    await page.getByRole('menuitem', { name: /^粘贴/ }).click();
+    await expect(canvas.locator('[data-slide-element-id]')).toHaveCount(1);
+    await page.getByRole('button', { name: '撤销', exact: true }).click();
+    await expect(canvas.locator('[data-slide-element-id]')).toHaveCount(0);
+    await page.getByRole('button', { name: '重做', exact: true }).click();
+    await expect(canvas.locator('[data-slide-element-id]')).toHaveCount(1);
+    const patch = await saveClassroom(page, fixture, 1);
+    const target = patch.scenes[1];
+    expect(target.content.type).toBe('slide');
+    if (target.content.type !== 'slide') throw new Error('Expected slide content');
+    expect(target.content.canvas.elements[0]).toMatchObject({ type: 'image', src: imageDataUrl, left: 80, top: 80, width: 160, height: 120 });
+    expect(target.content.canvas.elements[0].id).not.toBe('clipboard-image');
+    await page.reload();
+    await page.getByRole('button', { name: /粘贴目标页/ }).click();
+    await expect(page.locator('.canvas [data-slide-element-id]')).toHaveCount(1);
+    expect(fixture.errors).toEqual([]);
+    expect(fixture.unexpected).toEqual([]);
+  });
+}
+
+function shapeTextResource(): ClassroomResource {
+  const initial = resource();
+  const first = initial.scenes[0];
+  first.title = '支架式教学法的五步实施流程';
+  if (first.content.type !== 'slide') throw new Error('Expected slide content');
+  // Minimal native structure of the reported page: five labeled shapes,
+  // four independent arrows, and the corresponding explanations on the right.
+  const labels = ['搭脚手架：明确任务', '进入情境：分析问题', '独立探索：解决问题', '协作学习：集思广益', '效果评价：完成建构'];
+  const elements = first.content.canvas.elements;
+  for (let index = 0; index < labels.length; index += 1) {
+    elements.push({
+      id: `flow-step-${index + 1}`, type: 'shape', left: 100, top: 130 + index * 65,
+      width: 230, height: 48, rotate: 0, fixedRatio: false,
+      viewBox: [100, 100], path: 'M0 0 L100 0 L100 100 L0 100 Z', fill: '#EFF6FF',
+      text: { content: `<p style="font-size:18px;text-align:center">${labels[index]}</p>`,
+        defaultFontName: 'Noto Sans SC', defaultColor: '#1E3A8A', align: 'middle' },
+    });
+    elements.push({
+      id: `explanation-${index + 1}`, type: 'text', left: 380, top: 130 + index * 65,
+      width: 500, height: 50, rotate: 0, content: `<p>第${index + 1}步的具体教学说明</p>`,
+      defaultFontName: 'Noto Sans SC', defaultColor: '#243447',
+    });
+    if (index < labels.length - 1) elements.push({
+      id: `flow-arrow-${index + 1}`, type: 'line', left: 215, top: 178 + index * 65,
+      start: [0, 0], end: [0, 17], points: ['', 'arrow'], width: 2, color: '#1E3A8A', style: 'solid',
+    });
+  }
+  const empty = structuredClone(elements[0]);
+  if (empty.type !== 'shape') throw new Error('Expected shape');
+  empty.id = 'empty-shape'; empty.top = 480; delete empty.text;
+  elements.push(empty, { ...empty, id: 'locked-shape', left: 500, lock: true,
+    text: { content: '<p>锁定文字</p>', defaultFontName: 'Noto Sans SC', defaultColor: '#243447', align: 'middle' } });
+  const next = structuredClone(first);
+  next.id = 'flow-next-page'; next.title = '流程图后续页'; next.order = 1;
+  if (next.content.type !== 'slide') throw new Error('Expected slide');
+  next.content.canvas.id = 'flow-next-canvas';
+  next.content.canvas.elements = [{ ...empty, id: 'flow-step-1', top: 130,
+    text: { content: '<p>后续页原文</p>', defaultFontName: 'Noto Sans SC', defaultColor: '#243447', align: 'middle' } }];
+  initial.scenes.push(next);
+  return initial;
+}
+
+test('shape text supports direct editing, formatting, history and save without media generation', async ({ page, baseURL }, info) => {
+  test.setTimeout(90_000);
+  await page.setViewportSize({ width: 1440, height: 900 });
+  const initial = shapeTextResource();
+  const fixture = await mockEditor(page, baseURL, initial);
+  const canvas = page.locator('.canvas');
+  const node = (id: string) => canvas.locator(`#editable-element-${id}`);
+  for (let step = 1; step <= 5; step += 1) {
+    const shape = node(`flow-step-${step}`);
+    await shape.locator('.shape-text').dblclick();
+    const editor = shape.locator('[contenteditable="true"]');
+    await expect(editor).toBeFocused();
+    await editor.fill(`修改后的第${step}步`);
+    if (step === 1) {
+      await page.keyboard.press('ControlOrMeta+a');
+      await page.getByRole('button', { name: '加粗', exact: true }).click();
+      await page.getByRole('button', { name: '左对齐', exact: true }).click();
+      const alignment = await editor.locator('p').evaluate((element) => ({
+        textAlign: getComputedStyle(element).textAlign, direction: getComputedStyle(element).direction,
+      }));
+      expect(['left', 'start']).toContain(alignment.textAlign);
+      expect(alignment.direction).toBe('ltr');
+      await page.getByRole('textbox', { name: '字号', exact: true }).fill('20');
+      await page.getByRole('textbox', { name: '字号', exact: true }).press('Enter');
+      await page.getByRole('combobox', { name: '字体', exact: true }).click();
+      await page.getByRole('option', { name: '思源宋体', exact: true }).click();
+      await expect(editor).toBeFocused();
+      await page.getByRole('button', { name: '文字颜色', exact: true }).click();
+      await page.getByRole('button', { name: '#3b82f6', exact: true }).click();
+      await expect(editor).toBeFocused();
+      await page.getByRole('button', { name: '居中对齐', exact: true }).click();
+      await expect(editor.locator('p')).toHaveCSS('text-align', 'center');
+    }
+  }
+  // A plain text region continues to edit normally, and switching focus
+  // commits the last node even inside its 300 ms debounce window.
+  const note = node('explanation-1').locator('[contenteditable="true"]');
+  await note.click();
+  await note.fill('修改后的教学说明\n新增一段需要独立换行显示的具体说明。');
+  await page.getByRole('button', { name: '保存课堂', exact: true }).click();
+  await expect.poll(() => fixture.patches.length).toBe(1);
+  const saved = fixture.resource().scenes[0];
+  if (saved.content.type !== 'slide' || initial.scenes[0].content.type !== 'slide') throw new Error('Expected slide');
+  for (let step = 1; step <= 5; step += 1) {
+    const element = saved.content.canvas.elements.find((item) => item.id === `flow-step-${step}`);
+    expect(element?.type === 'shape' && element.text?.content).toContain(`修改后的第${step}步`);
+  }
+  const first = saved.content.canvas.elements.find((item) => item.id === 'flow-step-1');
+  if (first?.type !== 'shape') throw new Error('Expected shape');
+  expect(first.text?.content).toMatch(/<strong>/);
+  expect(first.text?.content).toContain('Noto Serif SC');
+  expect(first.text?.content).toMatch(/font-size:\s*20px/);
+  expect(first.text?.content).toMatch(/text-align:\s*center/);
+  expect(first.text?.content).toMatch(/rgb\(59, 130, 246\)|#3b82f6/i);
+  expect(saved.content.canvas.elements.filter((item) => item.type === 'line'))
+    .toEqual(initial.scenes[0].content.canvas.elements.filter((item) => item.type === 'line'));
+  expect(saved.actions).toEqual(initial.scenes[0].actions);
+
+  await page.getByRole('button', { name: '撤销', exact: true }).click();
+  await expect(note).toHaveText('第1步的具体教学说明');
+  // Let ResizeObserver restore the shorter text's height before redo.
+  await page.waitForTimeout(400);
+  await page.getByRole('button', { name: '重做', exact: true }).click();
+  await expect(note).toContainText('新增一段需要独立换行显示的具体说明。');
+  // Redo returns to the content already saved in the first PATCH.
+  await expect(page.getByRole('button', { name: '保存课堂', exact: true })).toBeDisabled();
+  expect(fixture.patches).toHaveLength(1);
+  await page.reload();
+  await expect(node('flow-step-1')).toContainText('修改后的第1步');
+  await expect(node('explanation-1')).toContainText('修改后的教学说明');
+  await screenshot(page, info, 'native-flowchart-text-saved');
+  expect(fixture.requests.some((request) => /generate|media-generation/.test(request))).toBe(false);
+  expect(fixture.unexpected).toEqual([]);
+  expect(fixture.errors).toEqual([]);
+});
+
+test('shape text action edits empty shapes and quick page changes preserve repeated element IDs', async ({ page, baseURL }) => {
+  test.setTimeout(60_000);
+  await page.setViewportSize({ width: 1024, height: 768 });
+  const fixture = await mockEditor(page, baseURL, shapeTextResource());
+  const canvas = page.locator('.canvas');
+  const empty = canvas.locator('#editable-element-empty-shape');
+  await empty.locator('.shape-path').click();
+  const editButton = page.getByRole('button', { name: '编辑文字', exact: true });
+  await expect(editButton).toBeVisible();
+  expect((await editButton.boundingBox())!.height).toBeGreaterThanOrEqual(44);
+  await editButton.click();
+  await expect(empty.locator('[contenteditable="true"]')).toBeFocused();
+  await empty.locator('[contenteditable="true"]').fill('空方块中的新增文字');
+  await page.keyboard.press('Escape');
+  await expect(empty.locator('[contenteditable="true"]')).toHaveCount(0);
+  await expect(empty).toContainText('空方块中的新增文字');
+  await empty.locator('.shape-text').click();
+  await expect(editButton).toBeVisible();
+  const bounds = await empty.locator('.editable-element-shape').boundingBox();
+  if (!bounds) throw new Error('Missing shape bounds');
+  await page.mouse.move(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(bounds.x + bounds.width / 2 + 25, bounds.y + bounds.height / 2 + 15, { steps: 5 });
+  await page.mouse.up();
+  await expect.poll(async () => (await empty.locator('.editable-element-shape').boundingBox())!.x)
+    .toBeGreaterThan(bounds.x + 10);
+
+  const step = canvas.locator('#editable-element-flow-step-1');
+  await step.locator('.shape-text').dblclick();
+  await step.locator('[contenteditable="true"]').fill('第一页保留文字');
+  await page.getByTestId('slide-nav-rail').getByTitle('流程图后续页', { exact: true }).first().click();
+  await expect(canvas.locator('#editable-element-flow-step-1')).toContainText('后续页原文');
+  await page.getByTestId('slide-nav-rail').getByTitle('支架式教学法的五步实施流程', { exact: true }).first().click();
+  await expect(step).toContainText('第一页保留文字');
+  const patch = await saveClassroom(page, fixture, 1);
+  const next = patch.scenes[1];
+  if (next.content.type !== 'slide') throw new Error('Expected slide');
+  expect(next.content.canvas.elements[0]).toMatchObject({ id: 'flow-step-1', text: { content: '<p>后续页原文</p>' } });
+  await canvas.locator('#editable-element-locked-shape .shape-text').dblclick();
+  await expect(canvas.locator('#editable-element-locked-shape [contenteditable="true"]')).toHaveCount(0);
+  await assertNoPageOverflow(page);
+  expect(fixture.unexpected).toEqual([]);
+  expect(fixture.errors).toEqual([]);
+});
 
 test('whiteboard text, narration, table, image and step history survive saving and reload', async ({ page, baseURL }, info) => {
   test.setTimeout(90_000);
@@ -628,6 +1040,34 @@ test('mock model whiteboard edit updates the board, preserves other steps and su
   await assertNoPageOverflow(page);
   await screenshot(page, info, 'mock-model-whiteboard-saved');
   expect(fixture.patches).toHaveLength(1);
+  expect(fixture.unexpected).toEqual([]);
+  expect(fixture.errors).toEqual([]);
+});
+
+test('an interrupted AI edit keeps completed changes and restoration while failing the unfinished redraw', async ({ page, baseURL }) => {
+  test.setTimeout(60_000);
+  await page.setViewportSize({ width: 1440, height: 900 });
+  const initial = resource();
+  const initialContent = structuredClone(initial.scenes[0].content);
+  const fixture = await mockEditor(page, baseURL, initial, 'disconnect');
+  const dialog = await addBoard(page);
+  await dialog.getByRole('textbox', { name: '板书内容', exact: true }).fill(boardText);
+  await dialog.getByRole('textbox', { name: '白板 AI 修改要求', exact: true }).fill('先改白板，再补充页面图示。');
+  await dialog.getByRole('button', { name: '交给 AI 修改', exact: true }).click();
+  await expect(dialog).toHaveCount(0);
+  const rail = page.getByTestId('right-rail');
+  await expect(rail.getByText(/连接提前结束.*已完成的修改已保留/)).toBeVisible();
+  await expect(rail.getByTitle('白板已更新', { exact: true })).toBeVisible();
+  await expect(rail.getByTitle('未生成', { exact: true })).toBeVisible();
+  const board = page.locator('[data-whiteboard-id]');
+  await expect(board).toContainText(aiBoardText);
+  expect(fixture.agentRequests).toHaveLength(1);
+  await rail.getByRole('button', { name: '还原到重生成前', exact: true }).click();
+  await expect(board).toContainText(boardText);
+  await rail.getByRole('button', { name: '恢复', exact: true }).click();
+  await expect(board).toContainText(aiBoardText);
+  const patch = await saveClassroom(page, fixture, 1);
+  expect(patch.scenes[0].content).toEqual(initialContent);
   expect(fixture.unexpected).toEqual([]);
   expect(fixture.errors).toEqual([]);
 });

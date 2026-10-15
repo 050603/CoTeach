@@ -37,6 +37,8 @@ curl --fail http://127.0.0.1:3000/api/health/live
 
 `pnpm start` 会从 `.next-build` 创建 `.openpbl-runtime/releases/<BUILD_ID>` 不可变运行目录，避免下一次构建覆盖正在服务的版本。重启前先执行 `prepare`，可避免服务启动探测期间另一个构建清空暂存目录、导致服务继续使用旧版本。健康检查通过后，还应核对实际运行目录的 `BUILD_ID` 与本次准备的版本一致。
 
+AI 课堂右侧编辑接口 `/api/openmaic/agent/edit` 使用 SSE。所有 Nginx 模板须将其纳入流式路由，关闭代理缓冲与 gzip，并使用 300 秒读取超时；接口在模型或工具尚无新输出时每 15 秒发送注释心跳，并返回 `X-Accel-Buffering: no`。不能将工具等待期间的无输出视为请求已完成，也不能通过自动重放整次编辑来恢复断线，以免重复应用已完成的修改。
+
 第三阶段文档项目的后台主动批注默认开启。需要暂停新检查时，在应用服务环境中设置 `DOCUMENT_AI_PROACTIVE_REVIEW_ENABLED=false` 并重启 `openpbl.service`；已有批注及学生主动发起的文稿检查、讨论和辅助任务仍可使用。移除该变量或设为其他值后重启即可恢复。该开关只作用于文档协作，不影响编程工作区。
 
 ## IPv6 主机的模型出站

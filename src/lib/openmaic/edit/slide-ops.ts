@@ -1,6 +1,6 @@
 import { current, produce } from 'immer';
 import type { SlideContent } from '@openmaic/lib/types/stage';
-import type { PPTElement, Slide } from '@openmaic/dsl';
+import type { PPTAnimation, PPTElement, Slide } from '@openmaic/dsl';
 import { getElementListRange } from '@openmaic/lib/utils/element';
 
 type ElementPatch = Partial<PPTElement>;
@@ -32,6 +32,11 @@ export type SlideEditOperation =
       type: 'element.add';
       element: PPTElement;
       index?: number;
+    }
+  | {
+      type: 'element.paste';
+      elements: PPTElement[];
+      animations?: PPTAnimation[];
     }
   | {
       type: 'element.update';
@@ -176,6 +181,22 @@ function applyOperationToContent(
             ? Math.max(0, Math.min(operation.index, draft.canvas.elements.length))
             : draft.canvas.elements.length;
         draft.canvas.elements.splice(index, 0, cloneElement(operation.element));
+        return;
+      }
+      case 'element.paste': {
+        if (!operation.elements.length) return;
+        const ids = new Set(draft.canvas.elements.map((element) => element.id));
+        for (const element of operation.elements) {
+          if (ids.has(element.id)) {
+            throw new Error(`element.paste: id "${element.id}" already exists`);
+          }
+          ids.add(element.id);
+        }
+        draft.canvas.elements.push(...operation.elements.map(cloneElement));
+        if (operation.animations?.length) {
+          draft.canvas.animations ??= [];
+          draft.canvas.animations.push(...structuredClone(operation.animations));
+        }
         return;
       }
       case 'element.update': {

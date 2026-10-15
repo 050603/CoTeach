@@ -18,7 +18,7 @@ const content = { questions: [{
 describe('three-phase quiz narration', () => {
   it('uses actual neighboring narration and question explanations in one authoring call', async () => {
     const ai = vi.fn().mockResolvedValue(JSON.stringify([
-      { type: 'text', phase: 'intro', content: '刚才学习了入样机会。请独立作答。' },
+      { type: 'text', phase: 'intro', content: '这一节的内容我们已经学习完了，接下来做个小测，看看自己理解得怎么样。请根据刚才所学独立作答。' },
       { type: 'text', phase: 'review-guidance', content: '解析显示后，对照检查判断依据，读完后确认理解。' },
       { type: 'text', phase: 'handoff', content: '入样的判断还要联系结果的解释。接下来进入实验设计。' },
     ]));
@@ -33,6 +33,8 @@ describe('three-phase quiz narration', () => {
 
     expect(ai).toHaveBeenCalledTimes(1);
     expect(ai.mock.calls[0][0]).toContain('review-guidance');
+    expect(ai.mock.calls[0][0]).toContain('First acknowledge that the learner has just finished this section, then explicitly introduce a short quiz to check their understanding');
+    expect(ai.mock.calls[0][0]).toContain('Do not open abruptly with an instruction such as “请独立作答”');
     expect(ai.mock.calls[0][1]).toContain('随机抽取让总体成员获得入样机会');
     expect(ai.mock.calls[0][1]).toContain('实验设计首先要控制其他因素');
     expect(ai.mock.calls[0][1]).toContain('三段口播共用约 200');
@@ -51,7 +53,7 @@ describe('three-phase quiz narration', () => {
     } };
     const question = { ...content.questions[0], knowledgePointIds: ['sampling'] };
     const phaseNarration = [
-      { type: 'text', phase: 'intro', content: '抽样机会影响偏差，请独立判断。' },
+      { type: 'text', phase: 'intro', content: '这一节我们已经学完了，现在通过一个小测检查理解。请根据刚才所学独立判断。' },
       { type: 'text', phase: 'review-guidance', content: '请等解析显示后核对依据，再确认理解。' },
       { type: 'text', phase: 'handoff', content: '抽样之外，还需要控制实验条件。' },
     ];
@@ -61,6 +63,8 @@ describe('three-phase quiz narration', () => {
     expect(generated).toMatchObject({ phaseNarration });
     const actions = await generateSceneActions(page, generated as GeneratedQuizContent, ai);
     expect(ai).toHaveBeenCalledOnce();
+    expect(ai.mock.calls[0][0]).toContain('First acknowledge that the learner has just finished this section, then explicitly introduce a short quiz to check their understanding');
+    expect(ai.mock.calls[0][0]).toContain('Do not open abruptly with an instruction such as “请独立作答”');
     const gates = addPageTimingPauses(page, actions).flatMap((action) => action.type === 'speech'
       && 'activityPausePurpose' in action ? [action.activityPausePurpose] : []);
     expect(gates).toEqual(['quiz-submit', 'quiz']);

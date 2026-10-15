@@ -47,6 +47,15 @@ import { toPiParts, type PiAssistantContent } from './to-pi-parts';
 import { useThinkingTimers } from './thinking-timers';
 import { useSceneRuntimeErrors } from '@openmaic/lib/store/scene-runtime-errors';
 import { toast } from 'sonner';
+import { readSse } from './read-sse';
+
+const INTERRUPTED_EDIT_NOTICE = '已完成的修改已保留，未完成的修改未应用。请重试。';
+
+class AgentResponseError extends Error {}
+
+function interruptionMessage(message: string): string {
+  return `⚠️ ${message.replace(/[。.!！?？]+$/, '')}。${INTERRUPTED_EDIT_NOTICE}`;
+}
 
 export interface UseAgentRuntimeOptions {
   scene?: { id: string; title: string };
@@ -113,6 +122,13 @@ function reseedReasoningTimers(saved: SerializedMessage[] | undefined): void {
 export function useAgentRuntime(opts: UseAgentRuntimeOptions) {
   const [messages, setMessages] = useState<ThreadMessageLike[]>([]);
   const [isRunning, setIsRunning] = useState(false);
+  // Declare the run refs before the stage-switch effect that also owns them.
+  const turnsRef = useRef<PiPart[][]>([]);
+  const toolResultsRef = useRef<Map<string, { result: unknown; isError: boolean }>>(new Map());
+  const errorRef = useRef<string>('');
+  const phaseRef = useRef<'running' | 'complete' | 'error' | 'cancelled'>('complete');
+  // Closing the fetch body cancels the server stream and its running agent.
+  const abortRef = useRef<AbortController | null>(null);
 
   // Mirror the latest committed messages so `onNew` (which is not re-created on
   // every message change) can read the prior conversation to send as history.
@@ -261,15 +277,6 @@ export function useAgentRuntime(opts: UseAgentRuntimeOptions) {
     }).then(() => refreshSessions());
   }, [messages, isRunning, refreshSessions]);
 
-  // Per-run accumulated state: chronological turns + tool results.
-  const turnsRef = useRef<PiPart[][]>([]);
-  const toolResultsRef = useRef<Map<string, { result: unknown; isError: boolean }>>(new Map());
-  const errorRef = useRef<string>('');
-  const phaseRef = useRef<'running' | 'complete' | 'error' | 'cancelled'>('complete');
-  // Aborts the in-flight run; closing the fetch body cancels the server stream
-  // (the route's ReadableStream.cancel() calls agent.abort()).
-  const abortRef = useRef<AbortController | null>(null);
-
   useEffect(() => () => {
     // Reloading a classroom unmounts this runtime while retaining scene ids.
     // A late tool response must not write into the newly hydrated document.
@@ -373,6 +380,14 @@ export function useAgentRuntime(opts: UseAgentRuntimeOptions) {
 
   const handleEvent = useCallback((event: AgentEvent, refresh: () => void, assistantId: string) => {
     switch (event.type) {
+      case 'agent_end': {
+        const failed = event.messages?.find((message) => message.role === 'assistant' && message.errorMessage);
+        if (failed?.role === 'assistant' && failed.errorMessage) {
+          errorRef.current = interruptionMessage(failed.errorMessage);
+          phaseRef.current = 'error';
+        }
+        break;
+      }
       case 'message_start': {
         const msg = (event as { message?: { role?: string } }).message;
         if (msg?.role === 'assistant') {
@@ -389,7 +404,10 @@ export function useAgentRuntime(opts: UseAgentRuntimeOptions) {
           }
         ).message;
         if (msg?.role !== 'assistant') break;
-        if (msg.errorMessage) errorRef.current = msg.errorMessage;
+        if (msg.errorMessage) {
+          errorRef.current = interruptionMessage(msg.errorMessage);
+          phaseRef.current = 'error';
+        }
         if (Array.isArray(msg.content)) {
           if (turnsRef.current.length === 0) turnsRef.current.push([]);
           // Replace the CURRENT turn's content wholesale (pi re-emits the full
@@ -445,6 +463,7 @@ export function useAgentRuntime(opts: UseAgentRuntimeOptions) {
             result: { ...e.result, isError: true, content: [{ type: 'text', text: applyError }] },
           });
           errorRef.current = applyError;
+          phaseRef.current = 'error';
           toast.error(applyError);
           refresh();
           break;
@@ -586,33 +605,41 @@ export function useAgentRuntime(opts: UseAgentRuntimeOptions) {
           }),
           signal: abort.signal,
         });
-        if (!res.ok || !res.body) throw new Error(`agent request failed: ${res.status}`);
+        if (!res.ok || !res.body) throw new AgentResponseError(`课堂编辑请求失败（HTTP ${res.status}）`);
 
-        const reader = res.body.getReader();
-        const decoder = new TextDecoder();
-        let buffer = '';
-        for (;;) {
-          const { value, done } = await reader.read();
-          if (done) break;
-          buffer += decoder.decode(value, { stream: true });
-          const chunks = buffer.split('\n\n');
-          buffer = chunks.pop() ?? '';
-          for (const chunk of chunks) {
-            const line = chunk.split('\n').find((l) => l.startsWith('data:'));
-            if (!line) continue;
-            const json = line.slice(5).trim();
-            if (!json || json === '{}') continue;
-            let event: AgentEvent;
+        let receivedEnd = false;
+        for await (const frame of readSse(res.body, abort.signal)) {
+          // An abort can race with an already-buffered frame. A stopped run
+          // must never apply another tool patch, even before its catch settles.
+          if (!isCurrent() || abort.signal.aborted) break;
+          if (frame.event === 'error') {
+            let message = '课堂编辑请求失败';
             try {
-              event = JSON.parse(json) as AgentEvent;
-            } catch {
-              continue;
-            }
-            // Skip late events from a superseded run (don't apply stale tool
-            // results to the stage or rewrite the new run's message).
-            if (isCurrent()) handleEvent(event, refresh, assistantId);
+              const failure = JSON.parse(frame.data) as { message?: unknown };
+              if (typeof failure.message === 'string' && failure.message.trim()) message = failure.message;
+            } catch { /* A malformed error envelope is still a failure. */ }
+            throw new AgentResponseError(message);
+          }
+          if (frame.event === 'close') {
+            receivedEnd = true;
+            break;
+          }
+          const json = frame.data.trim();
+          if (!json || json === '{}') continue;
+          let event: AgentEvent;
+          try {
+            event = JSON.parse(json) as AgentEvent;
+          } catch {
+            throw new AgentResponseError('课堂编辑响应不完整');
+          }
+          handleEvent(event, refresh, assistantId);
+          if (event.type === 'agent_end') {
+            receivedEnd = true;
+            break;
           }
         }
+        if (abort.signal.aborted) throw new DOMException('The operation was aborted.', 'AbortError');
+        if (!receivedEnd && !errorRef.current) throw new AgentResponseError('课堂编辑连接提前结束');
       } catch (err) {
         if (!isCurrent()) return;
         // User-initiated stop — keep whatever streamed, don't surface an error.
@@ -632,7 +659,8 @@ export function useAgentRuntime(opts: UseAgentRuntimeOptions) {
             phaseRef.current = 'cancelled';
           }
         } else {
-          errorRef.current = `⚠️ ${err instanceof Error ? err.message : String(err)}`;
+          errorRef.current = interruptionMessage(err instanceof AgentResponseError
+            ? err.message : 'AI 编辑连接中断');
           phaseRef.current = 'error';
         }
       } finally {
@@ -642,6 +670,25 @@ export function useAgentRuntime(opts: UseAgentRuntimeOptions) {
         // message, or it would clobber the new run.
         const superseded = !isCurrent();
         if (!superseded) {
+          // Completed tools keep their results and restore snapshots. Every
+          // unfinished tool needs an explicit failure/stopped result so a lost
+          // stream cannot leave its card spinning or showing a success mark.
+          for (const turn of turnsRef.current) {
+            for (const part of turn) {
+              if (part.type === 'toolCall' && !toolResultsRef.current.has(part.id)) {
+                if (phaseRef.current === 'running') {
+                  errorRef.current = interruptionMessage('课堂编辑尚未完成');
+                  phaseRef.current = 'error';
+                }
+                toolResultsRef.current.set(part.id, {
+                  isError: true,
+                  result: phaseRef.current === 'cancelled'
+                    ? { __stopped: true }
+                    : { __interrupted: true, content: [{ type: 'text', text: INTERRUPTED_EDIT_NOTICE }] },
+                });
+              }
+            }
+          }
           abortRef.current = null;
           if (phaseRef.current === 'running') phaseRef.current = 'complete';
           // Close any reasoning block still open (e.g. the run ended with the

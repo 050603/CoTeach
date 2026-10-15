@@ -41,6 +41,17 @@ function changedKeys(prev: AnyRecord, next: AnyRecord, skip: ReadonlySet<string>
 const ELEMENT_SKIP = new Set(['id']);
 const SLIDE_META_SKIP = new Set(['elements', 'animations']);
 
+/** Text input and formatting commit after the pointer gesture has ended. */
+export function hasSlideTextChanges(prev: SlideContent, next: SlideContent): boolean {
+  const before = new Map(prev.canvas.elements.map((element) => [element.id, element]));
+  return next.canvas.elements.some((element) => {
+    const old = before.get(element.id);
+    if (element.type === 'text' && old?.type === 'text') return element.content !== old.content;
+    if (element.type === 'shape' && old?.type === 'shape') return !isEqual(element.text, old.text);
+    return false;
+  });
+}
+
 /**
  * Diff two `SlideContent` snapshots into the canonical ops that transform
  * `prev` into `next`. Returns `[]` when they are deep-equal.

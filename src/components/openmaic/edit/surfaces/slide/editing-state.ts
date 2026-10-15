@@ -16,7 +16,9 @@ export function resolveSelectedElement(
 /**
  * The slide surface's text-editing policy: a single selected text element is,
  * by definition, the element being edited (there is no separate
- * "selected-not-editing" state for text). Anything else resolves to "".
+ * "selected-not-editing" state for text). Shape text enters editing explicitly,
+ * through double click or the edit-text action, so selecting a shape still
+ * allows moving and resizing it.
  *
  * This is the value the surface writes into the canvas store's
  * `editingElementId`, which the renderer's `TextElementOperate` reads to swap
@@ -25,7 +27,10 @@ export function resolveSelectedElement(
 export function resolveEditingElementId(
   activeElementIdList: readonly string[],
   elements: readonly PPTElement[],
+  requestedElementId = '',
 ): string {
   const el = resolveSelectedElement(activeElementIdList, elements);
-  return el?.type === 'text' ? el.id : '';
+  if (!el || el.lock) return '';
+  return el.type === 'text' || (el.type === 'shape' && el.id === requestedElementId)
+    ? el.id : '';
 }

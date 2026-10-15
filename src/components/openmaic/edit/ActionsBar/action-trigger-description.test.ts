@@ -36,6 +36,33 @@ describe('getActionTriggerDiagnostic', () => {
     });
   });
 
+  it.each(['learner-reflection', 'page-transition'])('describes a %s pause as a timed wait', (purpose) => {
+    const pause = action({ id: 'pause', type: 'speech', text: '', timelinePauseSec: 2.5, timelinePausePurpose: purpose });
+    expect(getActionTriggerDiagnostic(pause, 1)).toEqual({
+      trigger: 'previousCompleted',
+      completion: 'timelinePauseEnded',
+      durationSec: 2.5,
+      purpose,
+    });
+    expect(isActivityPauseAction(pause)).toBe(false);
+  });
+
+  it('uses timeline timing when legacy actions have both pause fields', () => {
+    expect(getActionTriggerDiagnostic(action({
+      id: 'pause', type: 'speech', text: '', timelinePauseSec: 2, activityPauseSec: 30,
+    }), 0)).toMatchObject({ completion: 'timelinePauseEnded', durationSec: 2 });
+  });
+
+  it.each(['activityPauseSec', 'timelinePauseSec'])('does not describe invalid %s as a wait', (field) => {
+    for (const value of [0, -1, NaN, Infinity, -Infinity, '30']) {
+      const invalid = action({ id: 'empty', type: 'speech', text: '', [field]: value });
+      expect(getActionTriggerDiagnostic(invalid, 0), `${field}=${String(value)}`).toEqual({
+        trigger: 'sceneStart', completion: 'speechEnded',
+      });
+      expect(isActivityPauseAction(invalid)).toBe(false);
+    }
+  });
+
   it.each([
     ['spotlight', 'immediate'],
     ['laser', 'immediate'],

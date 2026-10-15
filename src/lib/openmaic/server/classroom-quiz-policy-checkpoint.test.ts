@@ -6,7 +6,7 @@ import { fingerprintSceneOutline, restoreSceneCheckpoint, restoreSceneStageCheck
 import { restoreAuthoringResponse, type AuthoringResponseCheckpoint } from '@/lib/course-generation/authoring-checkpoints';
 
 const mocks = vi.hoisted(() => ({ ai: vi.fn(), persist: vi.fn(),
-  storedPolicy: null as null | 'v22' | 'v21',
+  storedPolicy: null as null | 'v23' | 'v22' | 'v21',
 }));
 // Issue old production fingerprints, then resume under the actual current
 // policy. Storage uses the real outline, model and input identity checks.
@@ -15,6 +15,10 @@ vi.mock('@/lib/course-generation/page-checkpoints', async (original) => {
   return { ...actual, fingerprintGenerationValue: (value: unknown) => {
     if (mocks.storedPolicy && value && typeof value === 'object'
       && 'pipeline' in value && value.pipeline === 'adaptive-course-page-v4') {
+      if (mocks.storedPolicy === 'v23') return actual.fingerprintGenerationValue({ ...value,
+        quizPolicy: 'quizPolicy' in value && value.quizPolicy === null
+          ? null : 'grounded-section-quiz-v23-misconception-first-diagnostic-items',
+      });
       return actual.fingerprintGenerationValue({ ...value,
         quizPolicy: 'quizPolicy' in value && value.quizPolicy === null ? null : mocks.storedPolicy === 'v22'
           ? 'grounded-section-quiz-v22-source-relations-and-explicit-premises'
@@ -138,7 +142,7 @@ describe('quiz policy checkpoint boundaries', () => {
 
   it.each(['page', 'stages', 'raw', 'trial-page', 'trial-stages', 'trial-raw'] as const)(
     'authors fresh questions instead of migrating an older %s quiz checkpoint', async (recovery) => {
-      for (const policy of ['v22', 'v21'] as const) {
+      for (const policy of ['v23', 'v22', 'v21'] as const) {
         const store = checkpointStore();
         mocks.storedPolicy = policy;
         mocks.ai.mockResolvedValue(quizResponse(`old-${policy}`));

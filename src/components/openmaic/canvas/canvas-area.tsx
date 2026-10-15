@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useRef } from 'react';
-import { motion, AnimatePresence } from 'motion/react';
+import { motion, AnimatePresence, useReducedMotion } from 'motion/react';
 import { Maximize2, Play } from 'lucide-react';
 import { cn } from '@openmaic/lib/utils';
 import { SceneRenderer } from '@openmaic/components/stage/scene-renderer';
@@ -22,6 +22,7 @@ interface CanvasAreaProps extends CanvasToolbarProps {
   readonly isCourseComplete?: boolean;
   readonly isGenerationFailed?: boolean;
   readonly onRetryGeneration?: () => void;
+  readonly onReviewScene?: (sceneId: string) => void;
   readonly readOnly?: boolean;
   readonly showCourseComplete?: boolean;
   readonly minimalToolbar?: boolean;
@@ -54,6 +55,7 @@ export function CanvasArea({
   isCourseComplete,
   isGenerationFailed,
   onRetryGeneration,
+  onReviewScene,
   readOnly = false,
   showCourseComplete = true,
   minimalToolbar = false,
@@ -61,6 +63,7 @@ export function CanvasArea({
   autoAdvancePending = false,
 }: CanvasAreaProps) {
   const { t } = useI18n();
+  const prefersReducedMotion = useReducedMotion();
   const whiteboardOpenedPage = useRef<string | null>(null);
   const savedPages = useWhiteboardPagesStore((state) => state.pages);
   const reviewPageId = useWhiteboardPagesStore((state) => state.reviewPageId);
@@ -170,13 +173,13 @@ export function CanvasArea({
             {showCourseComplete && isPendingScene && !currentScene && isCourseComplete && (
               <motion.div
                 key="course-complete"
-                initial={{ opacity: 0 }}
+                initial={prefersReducedMotion ? false : { opacity: 0 }}
                 animate={{ opacity: 1 }}
                 exit={{ opacity: 0 }}
-                transition={{ duration: 0.3, ease: 'easeOut' }}
+                transition={{ duration: prefersReducedMotion ? 0 : 0.3, ease: 'easeOut' }}
                 className="absolute inset-0"
               >
-                <ClassroomCompletePageConnected />
+                <ClassroomCompletePageConnected onReviewScene={onReviewScene} />
               </motion.div>
             )}
             {isPendingScene && !currentScene && !isCourseComplete && (

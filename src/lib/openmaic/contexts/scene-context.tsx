@@ -21,6 +21,7 @@ interface SceneContextValue<T = unknown> {
   // Internal: subscribe to scene data changes
   subscribe: (callback: () => void) => () => void;
   getSnapshot: () => T;
+  history?: SceneDataController['history'];
 }
 
 const SceneContext = createContext<SceneContextValue | null>(null);
@@ -38,6 +39,8 @@ export interface SceneDataController<T = unknown> {
   sceneType: Scene['type'];
   getSnapshot: () => T;
   updateSceneData: (updater: (draft: T) => void) => void;
+  /** Controlled editors share text shortcuts with the canvas undo timeline. */
+  history?: { undo: () => void; redo: () => void };
 }
 
 /**
@@ -108,6 +111,7 @@ export function SceneProvider({
   const updateSceneData = controller
     ? (controller.updateSceneData as (updater: (draft: unknown) => void) => void)
     : storeUpdateSceneData;
+  const history = controller?.history;
 
   const value = useMemo(
     () => ({
@@ -117,8 +121,9 @@ export function SceneProvider({
       updateSceneData,
       subscribe,
       getSnapshot,
+      history,
     }),
-    [sceneId, sceneType, sceneData, updateSceneData, subscribe, getSnapshot],
+    [sceneId, sceneType, sceneData, updateSceneData, subscribe, getSnapshot, history],
   );
 
   // Uncontrolled with no scene: render nothing (parent handles it).
@@ -128,6 +133,11 @@ export function SceneProvider({
   }
 
   return <SceneContext.Provider value={value}>{children}</SceneContext.Provider>;
+}
+
+/** Standalone text editors keep their native history when no controller exists. */
+export function useSceneHistory() {
+  return useContext(SceneContext)?.history;
 }
 
 /**

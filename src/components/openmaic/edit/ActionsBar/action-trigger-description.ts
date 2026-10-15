@@ -1,8 +1,13 @@
 import type { Action } from '@openmaic/lib/types/action';
+import { getSpeechPause } from '@openmaic/lib/utils/speech-pause';
+
+export { isActivityPauseAction } from '@openmaic/lib/utils/speech-pause';
+export type { ActivityPauseAction } from '@openmaic/lib/utils/speech-pause';
 
 export type ActionTrigger = 'sceneStart' | 'previousCompleted';
 export type ActionCompletion =
   | 'speechEnded'
+  | 'timelinePauseEnded'
   | 'activityCompleted'
   | 'immediate'
   | 'widgetSettled'
@@ -10,25 +15,12 @@ export type ActionCompletion =
   | 'videoEnded'
   | 'whiteboardFinished';
 
-export type ActivityPauseAction = Action & {
-  activityPauseSec: number;
-  activityPausePurpose?: 'interaction' | 'quiz' | string;
-};
-
 export interface ActionTriggerDiagnostic {
   trigger: ActionTrigger;
   completion: ActionCompletion;
   fallbackSec?: number;
+  durationSec?: number;
   purpose?: string;
-}
-
-export function isActivityPauseAction(action: Action): action is ActivityPauseAction {
-  const pauseSec = (action as unknown as { activityPauseSec?: unknown }).activityPauseSec;
-  return (
-    action.type === 'speech' &&
-    typeof pauseSec === 'number' &&
-    pauseSec > 0
-  );
 }
 
 export function getActionTriggerDiagnostic(
@@ -37,12 +29,21 @@ export function getActionTriggerDiagnostic(
 ): ActionTriggerDiagnostic {
   const trigger: ActionTrigger = actionIndex === 0 ? 'sceneStart' : 'previousCompleted';
 
-  if (isActivityPauseAction(action)) {
+  const pause = getSpeechPause(action);
+  if (pause?.kind === 'timeline') {
+    return {
+      trigger,
+      completion: 'timelinePauseEnded',
+      durationSec: pause.seconds,
+      purpose: pause.purpose,
+    };
+  }
+  if (pause) {
     return {
       trigger,
       completion: 'activityCompleted',
-      fallbackSec: Math.round(action.activityPauseSec),
-      purpose: action.activityPausePurpose ?? 'interaction',
+      fallbackSec: pause.seconds,
+      purpose: pause.purpose ?? 'interaction',
     };
   }
 

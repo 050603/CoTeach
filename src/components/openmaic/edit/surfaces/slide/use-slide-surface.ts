@@ -7,6 +7,7 @@ import type { SceneDataController } from '@openmaic/lib/contexts/scene-context';
 import type { InsertPaletteItem, SurfaceState } from '@openmaic/lib/edit/scene-editor-surface';
 import { useI18n } from '@openmaic/lib/hooks/use-i18n';
 import { createElementId } from '@openmaic/lib/edit/element-id';
+import { hasSlideTextChanges } from '@openmaic/lib/edit/scene-edit-bridge';
 import { createDefaultImageElement, createDefaultSlide } from '@openmaic/lib/edit/slide-edit-elements';
 import { defaultRichTextAttrs } from '@openmaic/lib/prosemirror/utils';
 import { useCanvasStore } from '@openmaic/lib/store/canvas';
@@ -264,6 +265,10 @@ export function useSlideCanvasController(): SlideCanvasController {
     [],
   );
 
+  useLayoutEffect(() => {
+    useCanvasStore.getState().clearSelection();
+  }, [sceneId]);
+
   useEffect(() => {
     if (!sceneId) return;
     const content = currentSlideContent(sceneId);
@@ -281,12 +286,24 @@ export function useSlideCanvasController(): SlideCanvasController {
       // Read from the canonical stage store; the session writes through to
       // it on every history move so this is always the up-to-date content.
       getSnapshot: () => currentSlideContent(sceneId) ?? EMPTY_SLIDE,
+      history: {
+        undo: () => useSlideEditSession.getState().undo(),
+        redo: () => useSlideEditSession.getState().redo(),
+      },
       updateSceneData: (updater) => {
-        const base =
-          useSlideEditSession.getState().history?.present ?? currentSlideContent(sceneId);
+        const session = useSlideEditSession.getState();
+        const base = session.sceneId === sceneId
+          ? session.history?.present ?? currentSlideContent(sceneId) : currentSlideContent(sceneId);
         if (!base) return;
         const next = produce(base, updater as (draft: SlideContent) => void);
-        useSlideEditSession.getState().commitContent(next, gestureRef.current);
+        if (next === base) return;
+        // A departing editor can flush after the next slide has seeded its
+        // session. That final write still belongs to the departing scene.
+        if (session.sceneId !== sceneId) {
+          useStageStore.getState().updateScene(sceneId, { content: next });
+          return;
+        }
+        session.commitContent(next, gestureRef.current || hasSlideTextChanges(base, next));
       },
     }),
     [sceneId],
@@ -305,8 +322,9 @@ export function useSlideCanvasController(): SlideCanvasController {
  */
 export function useEditingTextElementId(): string {
   const activeElementIds = useCanvasStore.use.activeElementIdList();
+  const requestedElementId = useCanvasStore.use.editingElementId();
   const content = useResolvedSlideContent();
-  return resolveEditingElementId(activeElementIds, content.canvas.elements);
+  return resolveEditingElementId(activeElementIds, content.canvas.elements, requestedElementId);
 }
 
 /**
@@ -317,9 +335,10 @@ export function useEditingTextElementId(): string {
  */
 export function useSelectedNonTextElement(): PPTElement | null {
   const activeElementIds = useCanvasStore.use.activeElementIdList();
+  const editingElementId = useCanvasStore.use.editingElementId();
   const content = useResolvedSlideContent();
   const el = resolveSelectedElement(activeElementIds, content.canvas.elements);
-  return el && el.type !== 'text' ? el : null;
+  return el && el.type !== 'text' && el.id !== editingElementId ? el : null;
 }
 
 /**
@@ -348,6 +367,6 @@ export function useSyncEditingElementId(editingElementId: string): void {
       setRichTextAttrs(defaultRichTextAttrs);
     }
     prevEditingElementId.current = editingElementId;
-    return () => setEditingElementId('');
   }, [editingElementId, setEditingElementId, setRichTextAttrs]);
+  useLayoutEffect(() => () => setEditingElementId(''), [setEditingElementId]);
 }

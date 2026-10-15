@@ -164,6 +164,37 @@ describe('authorized course audio publication', () => {
     expect(mocks.rowLock.mock.calls[0]![0].join(' ')).toContain('FOR UPDATE');
   });
 
+  it('applies an explicit course name to the template, snapshot and classroom while preserving the source review', async () => {
+    input.courseName = '教学理论课程';
+    input.snapshot.design.name = input.courseName;
+    candidate.stage.name = input.courseName;
+    const beforeSource = structuredClone(snapshot);
+    await publishCourseAudioVersion(input);
+    const published = mocks.createVersion.mock.calls[0]![0].data.snapshot as PblTemplateSnapshot;
+    expect(published.design.name).toBe(input.courseName);
+    expect(published.design.content.teacherReview).toEqual(snapshot.design.content.teacherReview);
+    expect(hasAuthenticCourseAudioPublication(createPblTemplateCourse('course', published.design), candidate, 'teacher')).toBe(true);
+    expect(mocks.updateTemplate).toHaveBeenCalledWith({ where: { id: 'course' }, data: {
+      updatedAt: expect.any(Date), title: input.courseName,
+    } });
+    expect(snapshot).toEqual(beforeSource);
+  });
+
+  it.each(['unrequested', 'snapshot', 'classroom', 'empty'] as const)('rejects an inconsistent course name: %s', async (change) => {
+    input.courseName = '教学理论课程';
+    input.snapshot.design.name = input.courseName;
+    candidate.stage.name = input.courseName;
+    if (change === 'unrequested') delete input.courseName;
+    if (change === 'snapshot') input.snapshot.design.name = '另一个名称';
+    if (change === 'classroom') candidate.stage.name = '另一个名称';
+    if (change === 'empty') input.courseName = '  ';
+    await expect(publishCourseAudioVersion(input)).rejects.toMatchObject({
+      code: change === 'empty' ? 'INVALID_COURSE_NAME' : 'AUDIO_CONTENT_CHANGED',
+    });
+    expect(mocks.createVersion).not.toHaveBeenCalled();
+    expect(mocks.updateTemplate).not.toHaveBeenCalled();
+  });
+
   it.each(['version', 'updatedAt', 'snapshot'] as const)('rejects a concurrent change to %s before any database write', async (field) => {
     if (field === 'version') input.sourceVersionId = 'older-version';
     if (field === 'updatedAt') input.expectedCourseUpdatedAt = new Date(now.getTime() - 1).toISOString();

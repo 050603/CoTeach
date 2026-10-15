@@ -183,9 +183,11 @@ export async function POST(req: NextRequest) {
     tools,
     history: toHistoryMessages(body.history),
   });
+  let closeStream = () => {};
   const onRequestAbort = () => {
     abortController.abort(req.signal.reason);
     agent.abort();
+    closeStream();
   };
   if (req.signal.aborted) {
     onRequestAbort();
@@ -196,37 +198,61 @@ export async function POST(req: NextRequest) {
 
   const encoder = new TextEncoder();
   const stream = new ReadableStream({
-    async start(controller) {
-      const send = (event: AgentEvent) => {
-        try {
-          controller.enqueue(encoder.encode(`data: ${JSON.stringify(event)}\n\n`));
-        } catch {
-          /* controller closed */
-        }
-      };
-      const unsubscribe = agent.subscribe((event) => {
-        send(event);
-      });
-      try {
-        await agent.prompt(message);
-        await agent.waitForIdle();
-      } catch (err) {
-        log.error(`agent run failed: ${err instanceof Error ? err.message : String(err)}`);
-      } finally {
+    start(controller) {
+      let closed = false;
+      let unsubscribe = () => {};
+      const heartbeat = setInterval(() => send(': heartbeat\n\n'), 15_000);
+      heartbeat.unref?.();
+      closeStream = () => {
+        if (closed) return;
+        closed = true;
+        clearInterval(heartbeat);
         unsubscribe();
         req.signal.removeEventListener('abort', onRequestAbort);
         try {
-          controller.enqueue(encoder.encode('event: close\ndata: {}\n\n'));
+          controller.close();
         } catch {
-          /* ignore */
+          /* The consumer may already have cancelled the stream. */
         }
-        controller.close();
+      };
+      const send = (frame: string) => {
+        if (closed) return;
+        try {
+          controller.enqueue(encoder.encode(frame));
+        } catch {
+          onRequestAbort();
+        }
+      };
+      if (req.signal.aborted || abortController.signal.aborted) {
+        onRequestAbort();
+        return;
       }
+      unsubscribe = agent.subscribe((event: AgentEvent) => {
+        send(`data: ${JSON.stringify(event)}\n\n`);
+      });
+      // Regeneration can be silent for minutes while a tool awaits the model.
+      // Send comments independently of model events so every proxy sees live
+      // traffic, including before the first token and between tool calls.
+      send(': connected\n\n');
+      void (async () => {
+        try {
+          await agent.prompt(message);
+          await agent.waitForIdle();
+        } catch (err) {
+          if (!abortController.signal.aborted) {
+            log.error(`agent run failed: ${err instanceof Error ? err.message : String(err)}`);
+            send(`event: error\ndata: ${JSON.stringify({
+              code: 'AGENT_RUN_FAILED', message: 'AI 编辑未能完成，请重试未完成的部分。',
+            })}\n\n`);
+          }
+        } finally {
+          send('event: close\ndata: {}\n\n');
+          closeStream();
+        }
+      })();
     },
     cancel() {
-      agent.abort();
-      abortController.abort();
-      req.signal.removeEventListener('abort', onRequestAbort);
+      onRequestAbort();
     },
   });
 
@@ -235,6 +261,7 @@ export async function POST(req: NextRequest) {
       'Content-Type': 'text/event-stream; charset=utf-8',
       'Cache-Control': 'no-cache, no-transform',
       Connection: 'keep-alive',
+      'X-Accel-Buffering': 'no',
     },
   });
 }

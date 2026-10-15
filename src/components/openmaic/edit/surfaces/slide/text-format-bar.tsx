@@ -15,6 +15,7 @@ import {
 import { FONTS } from '@openmaic/configs/font';
 import type { TextAttrs } from '@openmaic/lib/prosemirror/utils';
 import {
+  focusActiveTextEditor,
   runActiveTextCommand,
   type TextCommandPayload,
 } from '@openmaic/lib/prosemirror/active-editor-registry';
@@ -154,7 +155,10 @@ export function TextFormatBar({ elementId, attrs }: TextFormatBarProps) {
               `Microsoft YaHei`, `PingFang SC`) need to be surfaced here. */}
           <SelectValue>{currentFontLabel(attrs.fontname, t)}</SelectValue>
         </SelectTrigger>
-        <SelectContent position="popper" className="max-h-72">
+        <SelectContent position="popper" className="max-h-72" onCloseAutoFocus={(event) => {
+          event.preventDefault();
+          focusActiveTextEditor(elementId);
+        }}>
           {FONTS.map((f) => (
             <SelectItem key={f.value} value={f.value || DEFAULT_FONT} className="text-xs">
               {f.labelKey ? t(f.labelKey) : f.label}
@@ -253,6 +257,10 @@ export function TextFormatBar({ elementId, attrs }: TextFormatBarProps) {
           // preventing onFocusOutside, that focus shift triggers Radix's
           // dismiss path and the picker closes the instant the drag starts.
           onOpenAutoFocus={(e) => e.preventDefault()}
+          onCloseAutoFocus={(event) => {
+            event.preventDefault();
+            focusActiveTextEditor(elementId);
+          }}
           onFocusOutside={(e) => e.preventDefault()}
         >
           <ColorPicker

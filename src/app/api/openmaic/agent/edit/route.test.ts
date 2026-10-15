@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { NextRequest } from 'next/server';
 import type { SceneContext } from '@openmaic/lib/agent/tools/regenerate-scene-actions';
 import type { ToolsetDeps } from '@openmaic/lib/agent/tools/registry';
@@ -36,6 +36,8 @@ beforeEach(() => {
   mocks.agent.prompt.mockResolvedValue(undefined);
   mocks.agent.waitForIdle.mockResolvedValue(undefined);
 });
+
+afterEach(() => vi.useRealTimers());
 
 describe('authorized PPT redraw source loading', () => {
   it('loads authoritative source facts after ownership authorization, keeping teacher edits and source data server-only', async () => {
@@ -83,5 +85,60 @@ describe('authorized PPT redraw source loading', () => {
       { type: 'text', text: 'prompt' }, { type: 'text', text: 'Image reference: figure' },
       { type: 'file', data: 'https://example.com/source.png', mediaType: 'image/*' },
     ] }] });
+  });
+});
+
+describe('editor SSE lifecycle', () => {
+  it('keeps a silent regeneration connected beyond the old 60-second proxy limit', async () => {
+    vi.useFakeTimers();
+    let complete!: () => void;
+    mocks.agent.prompt.mockImplementation(() => new Promise<void>((resolve) => { complete = resolve; }));
+    const response = await POST(request());
+    expect(response.headers.get('Content-Type')).toContain('text/event-stream');
+    expect(response.headers.get('X-Accel-Buffering')).toBe('no');
+    const reader = response.body!.getReader();
+    const decoder = new TextDecoder();
+    expect(decoder.decode((await reader.read()).value)).toBe(': connected\n\n');
+    for (let beat = 0; beat < 5; beat++) {
+      await vi.advanceTimersByTimeAsync(15_000);
+      expect(decoder.decode((await reader.read()).value)).toBe(': heartbeat\n\n');
+    }
+    complete();
+    expect(decoder.decode((await reader.read()).value)).toBe('event: close\ndata: {}\n\n');
+    expect((await reader.read()).done).toBe(true);
+    expect(vi.getTimerCount()).toBe(0);
+    expect(mocks.agent.abort).not.toHaveBeenCalled();
+  });
+
+  it('sends an explicit error before closing when the agent unexpectedly fails', async () => {
+    mocks.agent.prompt.mockRejectedValue(new Error('private upstream error details'));
+    const response = await POST(request());
+    const body = await response.text();
+    expect(body).toContain('event: error\ndata:');
+    expect(body).toContain('AGENT_RUN_FAILED');
+    expect(body).not.toContain('private upstream error details');
+    expect(body.indexOf('event: error')).toBeLessThan(body.indexOf('event: close'));
+  });
+
+  it.each(['request', 'reader'])('cleans up heartbeat, model and subscription when the %s is cancelled', async (kind) => {
+    vi.useFakeTimers();
+    let complete!: () => void;
+    const unsubscribe = vi.fn();
+    mocks.agent.subscribe.mockReturnValue(unsubscribe);
+    mocks.agent.prompt.mockImplementation(() => new Promise<void>((resolve) => { complete = resolve; }));
+    const abort = new AbortController();
+    const input = new Request(request(), { signal: abort.signal }) as NextRequest;
+    const response = await POST(input);
+    const reader = response.body!.getReader();
+    await reader.read();
+    if (kind === 'request') abort.abort();
+    else await reader.cancel();
+    expect(mocks.agent.abort).toHaveBeenCalledOnce();
+    expect(unsubscribe).toHaveBeenCalledOnce();
+    expect(vi.getTimerCount()).toBe(0);
+    complete();
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect((await reader.read()).done).toBe(true);
+    expect(unsubscribe).toHaveBeenCalledOnce();
   });
 });

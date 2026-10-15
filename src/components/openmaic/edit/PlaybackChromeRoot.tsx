@@ -1420,8 +1420,10 @@ export const PlaybackChromeRoot = forwardRef<PlaybackChromeRootHandle, PlaybackC
     // 192px in playback mode (autonomous hides it). Mode is guaranteed
     // non-'edit' here since the parent Stage unmounts this component
     // when entering Pro mode.
+    const isShowingCourseReview = isStudentCourse && isPendingScene && isCourseComplete;
     const useSideTeachingRail =
       isStudentCourse &&
+      !isShowingCourseReview &&
       !isPresenting &&
       !playbackView.isInLiveFlow &&
       !discussionRequest &&
@@ -1464,7 +1466,7 @@ export const PlaybackChromeRoot = forwardRef<PlaybackChromeRootHandle, PlaybackC
               </div>
             </div>
           ) : null}
-          {showSceneDirectory && sidebarCollapsed && useSideTeachingRail ? (
+          {showSceneDirectory && sidebarCollapsed && (useSideTeachingRail || isShowingCourseReview) ? (
             <button
               aria-label="打开页面目录"
               className="absolute left-3 top-3 z-30 grid size-11 place-items-center rounded-xl border border-stone-200 bg-white/95 text-stone-700 shadow-sm hover:bg-stone-50"
@@ -1509,6 +1511,7 @@ export const PlaybackChromeRoot = forwardRef<PlaybackChromeRootHandle, PlaybackC
                 : undefined}
               onPrevSlide={handlePreviousScene}
               onNextSlide={handleNextScene}
+              onReviewScene={gatedSceneSwitch}
               onPlayPause={handlePlayPause}
               onWhiteboardClose={isStudentCourse ? handleWhiteboardToggle : () => undefined}
               isPresenting={isPresenting}
@@ -1537,7 +1540,7 @@ export const PlaybackChromeRoot = forwardRef<PlaybackChromeRootHandle, PlaybackC
           </div>
 
           {/* Roundtable Area */}
-          {capabilities.showRoundtable && mode === 'playback' && (
+          {capabilities.showRoundtable && mode === 'playback' && !isShowingCourseReview && (
             <div
               className={cn(
                 'transition-opacity duration-300',

@@ -135,7 +135,8 @@ server {
         proxy_buffering off;
     }
 
-    location ~* ^/api/(.*/stream|openmaic/chat|chat/.*)$ {
+    # Agent tools can be silent while regenerating a slide; this is SSE too.
+    location ~* ^/api/(.*/stream|openmaic/(chat|agent/edit)|chat/.*)$ {
         limit_req zone=general burst=1200 nodelay;
         proxy_pass http://openpbl_new_app;
         proxy_buffering off;

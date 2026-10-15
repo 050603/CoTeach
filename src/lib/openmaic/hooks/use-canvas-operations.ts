@@ -27,11 +27,15 @@ import type { SlideContent } from '@openmaic/lib/types/stage';
 import type { PPTElement, Slide } from '@openmaic/dsl';
 import { useCallback, useMemo } from 'react';
 import { useHistorySnapshot } from '@openmaic/lib/hooks/use-history-snapshot';
-import { toast } from 'sonner';
 import { ElementAlignCommands, ElementOrderCommands } from '@openmaic/lib/types/edit';
 import { getElementListRange } from '@openmaic/lib/utils/element';
 import { useOrderElement } from './use-order-element';
 import { nanoid } from 'nanoid';
+import {
+  copySlideElements,
+  cutSlideElements,
+  pasteSlideElementsFromClipboard,
+} from '@openmaic/lib/edit/slide-clipboard';
 
 type PPTElementKey = keyof PPTElement;
 
@@ -179,40 +183,13 @@ export function useCanvasOperations() {
   );
 
   // Copy selected element data to clipboard
-  const copyElement = () => {
-    // if (!activeElementIdList.length) return
-
-    // const text = JSON.stringify({
-    //   type: 'elements',
-    //   data: activeElementList,
-    // })
-
-    // copyText(text).then(() => {
-    //   setEditorareaFocus(true)
-    // })
-    toast.warning('Not implemented');
-  };
+  const copyElement = () => { copySlideElements(); };
 
   // Copy and delete selected elements (cut)
-  const cutElement = () => {
-    // copyElement()
-    // deleteElement()
-    toast.warning('Not implemented');
-  };
+  const cutElement = () => { cutSlideElements(); };
 
   // Attempt to paste element data from clipboard
-  const pasteElement = () => {
-    // readClipboard().then(text => {
-    //   pasteTextClipboardData(text)
-    // }).catch(err => toast.warning(err))
-    toast.warning('Not implemented');
-  };
-
-  // Copy and immediately paste selected elements
-  const _quickCopyElement = () => {
-    copyElement();
-    pasteElement();
-  };
+  const pasteElement = () => { void pasteSlideElementsFromClipboard(); };
 
   // Lock selected elements and clear selection state
   const lockElement = () => {
