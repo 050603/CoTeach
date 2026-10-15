@@ -85,4 +85,22 @@ describe('apply scoped whiteboard changes', () => {
     const forged = { ...whiteboardPatch, steps: [{ id: 'x', type: 'discussion', topic: 'oops' }] as Action[] };
     expect(planRegenerateApply({ sceneId: 'scene', whiteboardPatch: forged }, { content, actions }, 'edit_whiteboard').patch).toBeNull();
   });
+
+  it('preserves both original narration clips and their concurrent edits across a bound-board patch', () => {
+    const timed: Action[] = [
+      { id: 'timed-board', type: 'wb_open', speechId: 's7', speechAnchor: { quote: '开始' } },
+      { id: 'note', type: 'wb_draw_text', content: '原内容', x: 60, y: 60, fontSize: 24, speechId: 's7', speechAnchor: { quote: '要点' } },
+      { id: 's7', type: 'speech', text: '开始讲解要点。', audioUrl: '/s7.wav' },
+      { id: 'close', type: 'wb_close', speechId: 's8', speechAnchor: { quote: '结束' } },
+      { id: 's8', type: 'speech', text: '结束这一阶段。', audioUrl: '/s8.wav' },
+    ];
+    const patch = prepareWhiteboardPatch(timed, 'timed-board', [{ ...timed[1], content: '新内容' }]);
+    const current = timed.map((action) => action.id === 's7' ? { ...action, text: '开始讲解要点，保留教师新补充。' } as Action : action);
+    const plan = planRegenerateApply({ sceneId: 'scene', whiteboardPatch: patch }, { content, actions: current }, 'edit_whiteboard');
+    expect(plan.error).toBeUndefined();
+    expect(plan.patch?.actions?.filter((action) => action.type === 'speech')).toEqual([current[2], current[4]]);
+    expect(plan.patch?.actions?.find((action) => action.id === 'note')).toMatchObject({ speechId: 's7', speechAnchor: { quote: '要点' } });
+    const forged = { ...patch, steps: [{ id: 'new-speech', type: 'speech', text: '侵入同步白板' }] as Action[] };
+    expect(planRegenerateApply({ sceneId: 'scene', whiteboardPatch: forged }, { content, actions: current }, 'edit_whiteboard').patch).toBeNull();
+  });
 });

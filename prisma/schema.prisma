@@ -30,41 +30,41 @@ model User {
   createdAt      DateTime  @default(now())
   updatedAt      DateTime  @updatedAt
 
-  passwordResetTokens    PasswordResetToken[]
-  courseTeachers         CourseTeacher[]
-  invitationsCreated     CourseInvitation[]      @relation("InvitationCreator")
-  enrollments            Enrollment[]
-  templateOwners         ClassroomTemplate[]
-  groupMemberships       GroupMember[]
-  workPlanItems          WorkPlanItem[]
-  announcementReplies    AnnouncementReply[]
-  todoCompletions        TodoCompletion[]
-  uploadedFiles          FileAsset[]             @relation("FileUploader")
-  aiConversations        AiConversation[]
-  aiMessages             AiMessage[]
-  aiTasks                AiTask[]
-  confirmationsRequested AiActionConfirmation[]  @relation("ConfirmationRequester")
-  confirmationsDecided   AiActionConfirmation[]  @relation("ConfirmationDecider")
-  supportRecords         AiSupportRecord[]       @relation("SupportCreator")
-  learningSignals        LearningSignal[]
-  interventions          Intervention[]          @relation("InterventionCreator")
-  agentDirectives        TeacherAgentDirective[] @relation("DirectiveCreator")
-  learningEvents         LearningEvent[]
-  aiInteractionEvents    AiInteractionEvent[]
-  domainEvents           DomainEvent[]           @relation("DomainEventActor")
-  announcementsCreated   Announcement[]          @relation("AnnouncementCreator")
-  evaluationTargets      Evaluation[]            @relation("EvaluationStudent")
-  evaluationsGiven       Evaluation[]            @relation("EvaluationEvaluator")
-  resourcesCreated       Resource[]              @relation("ResourceCreator")
-  todosCreated           Todo[]                  @relation("TodoCreator")
-  reflections            Reflection[]            @relation("ReflectionAuthor")
-  providerCredentials    ProviderCredential[]    @relation("CredentialOwner")
-  loadTestRuns           LoadTestRun[]           @relation("LoadTestInitiator")
-  maintainedTextbooks    Textbook[]              @relation("TextbookMaintainer")
-  publicDiscussionsCreated  PublicDiscussionSession[] @relation("PublicDiscussionCreator")
-  publicDiscussionsAssigned PublicDiscussionSession[] @relation("PublicDiscussionStudent")
+  passwordResetTokens           PasswordResetToken[]
+  courseTeachers                CourseTeacher[]
+  invitationsCreated            CourseInvitation[]        @relation("InvitationCreator")
+  enrollments                   Enrollment[]
+  templateOwners                ClassroomTemplate[]
+  groupMemberships              GroupMember[]
+  workPlanItems                 WorkPlanItem[]
+  announcementReplies           AnnouncementReply[]
+  todoCompletions               TodoCompletion[]
+  uploadedFiles                 FileAsset[]               @relation("FileUploader")
+  aiConversations               AiConversation[]
+  aiMessages                    AiMessage[]
+  aiTasks                       AiTask[]
+  confirmationsRequested        AiActionConfirmation[]    @relation("ConfirmationRequester")
+  confirmationsDecided          AiActionConfirmation[]    @relation("ConfirmationDecider")
+  supportRecords                AiSupportRecord[]         @relation("SupportCreator")
+  learningSignals               LearningSignal[]
+  interventions                 Intervention[]            @relation("InterventionCreator")
+  agentDirectives               TeacherAgentDirective[]   @relation("DirectiveCreator")
+  learningEvents                LearningEvent[]
+  aiInteractionEvents           AiInteractionEvent[]
+  domainEvents                  DomainEvent[]             @relation("DomainEventActor")
+  announcementsCreated          Announcement[]            @relation("AnnouncementCreator")
+  evaluationTargets             Evaluation[]              @relation("EvaluationStudent")
+  evaluationsGiven              Evaluation[]              @relation("EvaluationEvaluator")
+  resourcesCreated              Resource[]                @relation("ResourceCreator")
+  todosCreated                  Todo[]                    @relation("TodoCreator")
+  reflections                   Reflection[]              @relation("ReflectionAuthor")
+  providerCredentials           ProviderCredential[]      @relation("CredentialOwner")
+  loadTestRuns                  LoadTestRun[]             @relation("LoadTestInitiator")
+  maintainedTextbooks           Textbook[]                @relation("TextbookMaintainer")
+  publicDiscussionsCreated      PublicDiscussionSession[] @relation("PublicDiscussionCreator")
+  publicDiscussionsAssigned     PublicDiscussionSession[] @relation("PublicDiscussionStudent")
   publicDiscussionSoundSessions PublicDiscussionSession[] @relation("PublicDiscussionSoundOwner")
-  publicDiscussionTurns     PublicDiscussionTurn[]
+  publicDiscussionTurns         PublicDiscussionTurn[]
 }
 
 model PasswordResetToken {
@@ -165,16 +165,16 @@ model Enrollment {
   completedAt DateTime?
   researchKey String    @unique @default(uuid())
 
-  user             User                     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  offering         CourseOffering           @relation(fields: [offeringId], references: [id], onDelete: Cascade)
-  submissions      ActivitySubmission[]
-  activityProgress ActivityProgress[]
-  participations   ClassroomParticipation[]
+  user                  User                             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  offering              CourseOffering                   @relation(fields: [offeringId], references: [id], onDelete: Cascade)
+  submissions           ActivitySubmission[]
+  activityProgress      ActivityProgress[]
+  participations        ClassroomParticipation[]
   experimentSubmissions ExperimentAssessmentSubmission[]
   experimentAssignments ExperimentAssessmentAssignment[]
-  learningEvents   LearningEvent[]
-  learningSignals  LearningSignal[]
-  interventions    Intervention[]
+  learningEvents        LearningEvent[]
+  learningSignals       LearningSignal[]
+  interventions         Intervention[]
 
   @@unique([userId, offeringId])
   @@index([offeringId, status])
@@ -316,15 +316,15 @@ model ClassroomInstance {
   createdAt         DateTime  @default(now())
   updatedAt         DateTime  @updatedAt
 
-  activity        Activity                 @relation(fields: [activityId], references: [id], onDelete: Restrict)
-  templateVersion ClassroomTemplateVersion @relation(fields: [templateVersionId], references: [id], onDelete: Restrict)
-  participations  ClassroomParticipation[]
+  activity              Activity                         @relation(fields: [activityId], references: [id], onDelete: Restrict)
+  templateVersion       ClassroomTemplateVersion         @relation(fields: [templateVersionId], references: [id], onDelete: Restrict)
+  participations        ClassroomParticipation[]
   experimentSubmissions ExperimentAssessmentSubmission[]
   experimentAssignments ExperimentAssessmentAssignment[]
-  announcements   Announcement[]
-  learningEvents  LearningEvent[]
-  domainEvents    DomainEvent[]
-  publicDiscussions PublicDiscussionSession[]
+  announcements         Announcement[]
+  learningEvents        LearningEvent[]
+  domainEvents          DomainEvent[]
+  publicDiscussions     PublicDiscussionSession[]
 
   @@unique([activityId, runNo])
   @@index([status, startedAt])
@@ -344,7 +344,7 @@ model ExperimentAssessmentAssignment {
   instance    ClassroomInstance                @relation(fields: [instanceId], references: [id], onDelete: Restrict)
   enrollment  Enrollment                       @relation(fields: [enrollmentId], references: [id], onDelete: Restrict)
   submissions ExperimentAssessmentSubmission[]
-  drafts ExperimentAssessmentDraft[]
+  drafts      ExperimentAssessmentDraft[]
 
   @@unique([instanceId, enrollmentId])
   @@index([instanceId, variant])
@@ -363,8 +363,8 @@ model ExperimentAssessmentSubmission {
   objectiveTotal Int
   submittedAt    DateTime @default(now())
 
-  instance   ClassroomInstance @relation(fields: [instanceId], references: [id], onDelete: Restrict)
-  enrollment Enrollment        @relation(fields: [enrollmentId], references: [id], onDelete: Restrict)
+  instance   ClassroomInstance              @relation(fields: [instanceId], references: [id], onDelete: Restrict)
+  enrollment Enrollment                     @relation(fields: [enrollmentId], references: [id], onDelete: Restrict)
   assignment ExperimentAssessmentAssignment @relation(fields: [assignmentId], references: [id], onDelete: Restrict)
 
   @@unique([instanceId, enrollmentId, phase])
@@ -415,10 +415,10 @@ model PublicDiscussionSession {
   updatedAt           DateTime  @updatedAt
   endedAt             DateTime?
 
-  classroomInstance ClassroomInstance @relation(fields: [classroomInstanceId], references: [id], onDelete: Cascade)
-  createdBy         User              @relation("PublicDiscussionCreator", fields: [createdById], references: [id], onDelete: Restrict)
-  currentStudent    User?             @relation("PublicDiscussionStudent", fields: [currentStudentId], references: [id], onDelete: SetNull)
-  soundOwner        User?             @relation("PublicDiscussionSoundOwner", fields: [soundOwnerId], references: [id], onDelete: SetNull)
+  classroomInstance ClassroomInstance      @relation(fields: [classroomInstanceId], references: [id], onDelete: Cascade)
+  createdBy         User                   @relation("PublicDiscussionCreator", fields: [createdById], references: [id], onDelete: Restrict)
+  currentStudent    User?                  @relation("PublicDiscussionStudent", fields: [currentStudentId], references: [id], onDelete: SetNull)
+  soundOwner        User?                  @relation("PublicDiscussionSoundOwner", fields: [soundOwnerId], references: [id], onDelete: SetNull)
   turns             PublicDiscussionTurn[]
 
   @@index([classroomInstanceId, status, updatedAt])
@@ -1542,33 +1542,39 @@ model LoadTestRun {
 
 // No student identity or conversation content belongs in shared explanations.
 model KnowledgeExplanation {
-  id          String   @id
-  status      String   @default("PENDING")
-  input       Json
-  raw         String?  @db.Text
-  error       String?
-  token       String?
-  leaseUntil  DateTime?
-  retryAt     DateTime?
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  id              String    @id
+  contentKey      String?
+  status          String    @default("PENDING")
+  input           Json
+  raw             String?   @db.Text
+  error           String?
+  token           String?
+  leaseUntil      DateTime?
+  retryAt         DateTime?
+  audio           Json?
+  audioToken      String?
+  audioLeaseUntil DateTime?
+  audioError      String?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
 
   @@index([status, leaseUntil])
+  @@index([contentKey, status])
 }
 
 // Publication commits this receipt; startup resumes unfinished warmups.
 model KnowledgeExplanationWarmup {
-  id          String   @id
-  courseId    String
-  input       Json
-  status      String   @default("PENDING")
-  attempts    Int      @default(0)
-  error       String?
-  token       String?
-  leaseUntil  DateTime?
-  retryAt     DateTime?
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  id         String    @id
+  courseId   String
+  input      Json
+  status     String    @default("PENDING")
+  attempts   Int       @default(0)
+  error      String?
+  token      String?
+  leaseUntil DateTime?
+  retryAt    DateTime?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
 
   @@index([status, retryAt, createdAt])
 }

@@ -34,7 +34,7 @@ export function LaserPathEditor({
   const elements: SlideElement[] = scene.content.type === 'slide' ? scene.content.canvas.elements : [];
   const boards = whiteboardBlocks(scene.actions ?? []);
   const speeches = (scene.actions ?? []).flatMap((item, index) =>
-    item.type === 'speech' && !boards.some((board) => index >= board.start && index <= board.end)
+    item.type === 'speech' && !boards.some((board) => board.actionIndexes.includes(index))
       ? [{ id: item.id, text: item.text }]
       : [],
   );

@@ -14,10 +14,10 @@ export function SaveStatus({ lastSavedAt, onRetry, state = "idle" }: { lastSaved
   }[state];
   const Icon = content.icon;
   return (
-    <div aria-live="polite" className={cn("inline-flex min-h-9 items-center gap-2 text-sm text-[var(--pbl-text-muted)]", state === "error" && "text-[var(--pbl-danger)]") }>
+    <div aria-live="polite" data-slot="save-status" title={content.label} className={cn("inline-flex min-h-9 items-center gap-2 text-sm text-[var(--pbl-text-muted)]", state === "error" && "text-[var(--pbl-danger)]") }>
       <Icon aria-hidden="true" className={state === "saving" ? "animate-spin" : ""} size={16} />
       <span>{content.label}</span>
-      {state === "error" && onRetry ? <button className="inline-flex min-h-9 items-center gap-1 font-semibold underline-offset-4 hover:underline" onClick={onRetry} type="button"><RefreshCw size={14} />重试</button> : null}
+      {state === "error" && onRetry ? <button className="inline-flex min-h-11 min-w-11 items-center gap-1 font-semibold underline-offset-4 hover:underline" onClick={onRetry} type="button"><RefreshCw size={14} />重试</button> : null}
     </div>
   );
 }

@@ -30,7 +30,10 @@ import type {
   DiscussionAction,
   SpotlightAction,
   LaserAction,
+  WhiteboardAction,
 } from '@openmaic/lib/types/action';
+import { isWhiteboardAction } from '@openmaic/lib/types/action';
+import { orderedActionExecutionEntries } from '@openmaic/lib/whiteboard/action-timeline';
 import type {
   EngineMode,
   TopicState,
@@ -130,11 +133,18 @@ interface ActiveEffectRange {
   endSpeechId: string;
 }
 
+interface WhiteboardCuePoint {
+  action: WhiteboardAction;
+  startMs: number;
+  startChar: number | null;
+}
+
 function isVisualCue(action: Action): action is VisualCueAction {
   return action.type === 'spotlight' || action.type === 'laser';
 }
 
 function isSpeechBarrier(action: Action): boolean {
+  if (isWhiteboardAction(action) && action.speechId) return false;
   if (action.type !== 'speech') return !isVisualCue(action);
   const timed = action as SpeechAction & {
     timelinePauseSec?: number;
@@ -322,6 +332,8 @@ export class PlaybackEngine {
   private speechCueTimerRemaining = 0;
   private speechCueQueue: VisualCueAction[] = [];
   private speechCueScheduleSpeechId: string | null = null;
+  private whiteboardCuePoints: WhiteboardCuePoint[] = [];
+  private executedWhiteboardCues = new Set<string>();
 
   constructor(
     scenes: Scene[],
@@ -428,8 +440,23 @@ export class PlaybackEngine {
     this.actionIndex = actionIndex;
     this.pendingSpeechStartRatio = Math.max(0, Math.min(0.999, startRatio));
     this.setMode('playing');
-    void this.actionEngine.restoreWhiteboard((scene.actions ?? []).slice(0, actionIndex))
+    const durationMs = Math.max(0, action.audioDurationSec ?? 0) * 1000
+      || validAlignmentSpans(action)?.at(-1)?.endMs || 0;
+    const boardHistory = !(scene.actions ?? []).some((candidate) => isWhiteboardAction(candidate) && candidate.speechId)
+      ? (scene.actions ?? []).slice(0, actionIndex)
+      : orderedActionExecutionEntries(scene.actions ?? []).flatMap(({ action: candidate, actionIndex: index }) => {
+      if (!isWhiteboardAction(candidate)) return [];
+      if (!candidate.speechId) return index < actionIndex ? [candidate] : [];
+      const ownerIndex = scene.actions?.findIndex((item) => item.type === 'speech' && item.id === candidate.speechId) ?? -1;
+      const owner = scene.actions?.[ownerIndex];
+      if (owner?.type !== 'speech' || ownerIndex > actionIndex) return [];
+      const position = this.cueStartPosition(owner, candidate);
+      if (!position) return [];
+      return ownerIndex < actionIndex || position.ms <= this.pendingSpeechStartRatio * durationMs ? [candidate] : [];
+    });
+    void this.actionEngine.restoreWhiteboard(boardHistory)
       .then(async () => {
+        if (this.seekVersion !== seekVersion || this.mode !== 'playing') return;
         const visualCue = findVisualCueForSpeech(scene.actions ?? [], actionIndex);
         if (visualCue) {
           await this.executeActionSafely(visualCue);
@@ -485,7 +512,9 @@ export class PlaybackEngine {
               .reduce((total, chunk) => total + chunk.length, 0);
           window.speechSynthesis?.cancel();
           // Note: cancel fires onerror('canceled'), which we ignore (see playBrowserTTSChunk)
-        } else if (this.audioPlayer.isPlaying()) {
+        } else {
+          // A seek may still be waiting for metadata. Pause that pending start
+          // too, so it cannot begin audibly after the user has paused.
           this.audioPlayer.pause();
         }
       }
@@ -563,6 +592,7 @@ export class PlaybackEngine {
     this.audioPlayer.stop();
     this.cancelBrowserTTS();
     this.actionEngine.clearEffects();
+    useCanvasStore.getState().setWhiteboardOpen(false);
     if (this.triggerDelayTimer) {
       clearTimeout(this.triggerDelayTimer);
       this.triggerDelayTimer = null;
@@ -744,6 +774,8 @@ export class PlaybackEngine {
     this.speechCueTimerRemaining = 0;
     this.speechCueQueue = [];
     this.speechCueScheduleSpeechId = null;
+    this.whiteboardCuePoints = [];
+    this.executedWhiteboardCues.clear();
   }
 
   private pauseSpeechCueSchedule(): void {
@@ -772,7 +804,7 @@ export class PlaybackEngine {
 
   private cueStartPosition(
     speech: AlignedSpeechAction,
-    cue: VisualCueAction | TimedLaserWaypoint,
+    cue: VisualCueAction | TimedLaserWaypoint | WhiteboardAction,
     allowCharacterBoundary = false,
   ): { ms: number; char: number | null } | null {
     const anchor = cue.speechAnchor;
@@ -919,6 +951,7 @@ export class PlaybackEngine {
   }
 
   private activateSpeechCuePoint(point: SpeechCuePoint, currentMs: number): void {
+    if (useCanvasStore.getState().whiteboardOpen) return;
     if (this.activeSpeechCuePointKey === point.key) return;
     const remainingMs = Math.max(150, point.endMs - currentMs);
     const action = point.action.type === 'laser'
@@ -937,6 +970,7 @@ export class PlaybackEngine {
   }
 
   private reconcileSpeechCuesAtMediaTime(currentMs: number): void {
+    this.reconcileWhiteboardCues(currentMs);
     const point = [...this.speechCuePoints]
       .reverse()
       .find((candidate) => currentMs >= candidate.startMs && currentMs < candidate.endMs);
@@ -950,6 +984,7 @@ export class PlaybackEngine {
   }
 
   private reconcileSpeechCuesAtCharacter(charIndex: number): void {
+    this.reconcileWhiteboardCues(charIndex, true);
     const point = [...this.speechCuePoints]
       .reverse()
       .find((candidate) => (
@@ -974,8 +1009,10 @@ export class PlaybackEngine {
       ? duration
       : Math.max(Math.max(0, speech.audioDurationSec ?? 0) * 1000, alignedDuration);
     this.speechCuePoints = this.buildSpeechCuePoints(speech, this.speechClockDurationMs);
+    this.whiteboardCuePoints = this.buildWhiteboardCuePoints(speech);
     const update = () => {
       if (this.mode !== 'playing' || this.currentSpeechActionId !== speech.id) return;
+      if (!this.audioPlayer.isPlaying()) return;
       const currentMs = this.audioPlayer.getCurrentTime?.() ?? 0;
       const liveDuration = this.audioPlayer.getDuration?.() ?? 0;
       if (liveDuration > 0) this.speechClockDurationMs = liveDuration;
@@ -988,6 +1025,32 @@ export class PlaybackEngine {
     };
     update();
     this.speechClockTimer = setInterval(update, SPEECH_CLOCK_INTERVAL_MS);
+  }
+
+  private buildWhiteboardCuePoints(speech: AlignedSpeechAction, allowCharacterBoundary = false): WhiteboardCuePoint[] {
+    return orderedActionExecutionEntries(this.scenes[this.sceneIndex]?.actions ?? []).flatMap(({ action }) => {
+      if (!isWhiteboardAction(action) || action.speechId !== speech.id) return [];
+      const position = this.cueStartPosition(speech, action, allowCharacterBoundary);
+      return position ? [{ action, startMs: position.ms, startChar: position.char }] : [];
+    });
+  }
+
+  private reconcileWhiteboardCues(position: number, byCharacter = false): void {
+    if (this.mode !== 'playing') return;
+    const due = this.whiteboardCuePoints.filter((point) => !this.executedWhiteboardCues.has(point.action.id)
+      && (byCharacter ? point.startChar !== null && point.startChar <= position : point.startMs <= position));
+    if (!due.length) return;
+    try {
+      this.actionEngine.executeWhiteboardTimeline(due.map((point) => point.action));
+      for (const point of due) this.executedWhiteboardCues.add(point.action.id);
+      this.activeEffectRange = null;
+      this.activeSpeechCuePointKey = null;
+    } catch (cause) {
+      const error = cause instanceof Error ? cause : new Error(String(cause));
+      log.error('Whiteboard speech timeline failed:', error);
+      this.stop();
+      this.callbacks.onError?.(error);
+    }
   }
 
   private scheduleNextSpeechCue(delayMs: number): void {
@@ -1115,17 +1178,24 @@ export class PlaybackEngine {
   private async processNext(): Promise<void> {
     if (this.mode !== 'playing') return;
 
+    const playbackVersion = this.seekVersion;
+    const previousSceneIndex = this.sceneIndex;
+    const current = this.getCurrentAction();
+
     // Check for scene boundary (fire scene change callback at start of each new scene)
-    if (this.actionIndex === 0 && this.sceneIndex < this.scenes.length) {
+    if (current && (this.actionIndex === 0 || previousSceneIndex !== this.sceneIndex)) {
       const scene = this.scenes[this.sceneIndex];
       this.actionEngine.clearEffects();
       this.activeEffectRange = null;
       this.clearSpeechCueSchedule();
       this.callbacks.onSceneChange?.(scene.id);
       this.callbacks.onSpeakerChange?.('teacher');
+      useCanvasStore.getState().setWhiteboardOpen(false);
+      if (scene.actions?.some((candidate) => isWhiteboardAction(candidate) && candidate.speechId)) {
+        await this.actionEngine.restoreWhiteboard?.([]);
+        if (this.mode !== 'playing' || this.seekVersion !== playbackVersion) return;
+      }
     }
-
-    const current = this.getCurrentAction();
     if (!current) {
       // All scenes complete
       this.clearSpeechCueSchedule();
@@ -1143,6 +1213,13 @@ export class PlaybackEngine {
     this.callbacks.onProgress?.(this.getSnapshot());
 
     this.actionIndex++;
+
+    // Bound board actions are dispatched by their owning speech clock, wherever
+    // they are stored in the action array. Never reveal them before the audio.
+    if (isWhiteboardAction(action) && action.speechId) {
+      void this.processNext();
+      return;
+    }
 
     switch (action.type) {
       case 'speech': {
@@ -1238,6 +1315,7 @@ export class PlaybackEngine {
           ) return;
           if (this.speechClockTimer) clearInterval(this.speechClockTimer);
           this.speechClockTimer = null;
+          this.reconcileWhiteboardCues(this.speechClockDurationMs);
           this.callbacks.onSpeechProgress?.(1);
           this.finishSpeechEffect(speechAction.id);
           this.callbacks.onSpeechEnd?.();
@@ -1297,16 +1375,29 @@ export class PlaybackEngine {
               estimatedSpeechMediaDurationMs(speechAction.text),
               true,
             ).filter((point) => point.startChar !== null);
+            this.whiteboardCuePoints = this.buildWhiteboardCuePoints(speechAction, true);
             this.playBrowserTTS(speechAction);
           } else {
             scheduleReadingTimer();
           }
         };
 
+        const preserveSpeechForRetry = () => {
+          this.actionIndex = speechActionIndex;
+          this.pendingSpeechStartRatio = speechStartRatio;
+          if (this.mode !== 'paused') this.setMode('idle');
+          this.actionEngine.clearEffects();
+          this.activeEffectRange = null;
+        };
+
         this.audioPlayer
           .play(speechAction.audioId || '', speechAction.audioUrl, speechStartRatio)
           .then((audioStarted) => {
-            if (this.mode !== 'playing' || this.currentSpeechActionId !== speechAction.id) {
+            if ((this.mode !== 'playing' && this.mode !== 'paused') || this.currentSpeechActionId !== speechAction.id || this.seekVersion !== speechPlaybackVersion) {
+              return;
+            }
+            if (this.mode === 'paused') {
+              if (!audioStarted && !this.audioPlayer.hasActiveAudio()) preserveSpeechForRetry();
               return;
             }
             if (audioStarted) {
@@ -1315,11 +1406,7 @@ export class PlaybackEngine {
               if (this.scenes[this.sceneIndex]?.ttsPolicy === 'target-duration') {
                 const error = new Error(`课堂语音资源缺失：${speechAction.id}`);
                 log.error(error.message);
-                this.actionIndex = speechActionIndex;
-                this.pendingSpeechStartRatio = speechStartRatio;
-                this.setMode('idle');
-                this.actionEngine.clearEffects();
-                this.activeEffectRange = null;
+                preserveSpeechForRetry();
                 this.callbacks.onError?.(error);
                 return;
               }
@@ -1330,12 +1417,16 @@ export class PlaybackEngine {
             }
           })
           .catch((err) => {
-            if (this.mode !== 'playing' || this.currentSpeechActionId !== speechAction.id) {
+            if ((this.mode !== 'playing' && this.mode !== 'paused') || this.currentSpeechActionId !== speechAction.id || this.seekVersion !== speechPlaybackVersion) {
               return;
             }
             log.error('TTS error:', err);
             const error = err instanceof Error ? err : new Error(String(err));
             this.callbacks.onError?.(error);
+            if (this.mode === 'paused') {
+              preserveSpeechForRetry();
+              return;
+            }
             // Browser-native TTS is an explicit configured provider, not fake
             // narration. If it is disabled, stop and surface the real media
             // failure instead of silently advancing on a reading timer.
@@ -1347,11 +1438,7 @@ export class PlaybackEngine {
             if (browserNativeEnabled) playSpeechFallback();
             else {
               // Keep the failed cue so the next Play retries its narration.
-              this.actionIndex = speechActionIndex;
-              this.pendingSpeechStartRatio = speechStartRatio;
-              this.setMode('idle');
-              this.actionEngine.clearEffects();
-              this.activeEffectRange = null;
+              preserveSpeechForRetry();
             }
           });
         break;
@@ -1475,6 +1562,7 @@ export class PlaybackEngine {
   }
 
   private async executeActionSafely(action: Action): Promise<void> {
+    if (isVisualCue(action) && useCanvasStore.getState().whiteboardOpen) return;
     try {
       await this.actionEngine.execute(action);
     } catch (error) {
@@ -1483,6 +1571,7 @@ export class PlaybackEngine {
   }
 
   private fireEffectCallback(action: VisualCueAction): void {
+    if (useCanvasStore.getState().whiteboardOpen) return;
     this.callbacks.onEffectFire?.({
       kind: action.type,
       targetId: action.elementId,
@@ -1554,6 +1643,7 @@ export class PlaybackEngine {
       // All chunks done
       this.browserTTSActive = false;
       this.browserTTSChunks = [];
+      this.reconcileWhiteboardCues(this.browserTTSTotalChars, true);
       this.callbacks.onSpeechProgress?.(1);
       this.finishSpeechEffect(this.currentSpeechActionId);
       this.callbacks.onSpeechEnd?.();

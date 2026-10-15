@@ -6,11 +6,11 @@ import { prisma } from "@/lib/db/client";
 import { runMutationTransaction } from "@/lib/db/transaction-retry";
 import { publishCourseEvent } from "@/lib/realtime/event-bus";
 import { requireStudentUser, requireTeacherUser } from "./access";
-import { ExperimentConfigSchema, ExperimentPhaseSchema, ExperimentQuestionSchema, composeExperimentForms, experimentConfigFromActivity, gradeExperimentAnswers, isPosttestOpen, normalizeExperimentDraftAnswers, posttestOpenedAt, publicExperimentQuestions, type ExperimentVariant } from "./experiment";
+import { EXPERIMENT_QUESTION_LIMIT, ExperimentConfigSchema, ExperimentPhaseSchema, ExperimentQuestionSchema, composeExperimentForms, experimentConfigFromActivity, gradeExperimentAnswers, isPosttestOpen, normalizeExperimentDraftAnswers, posttestOpenedAt, publicExperimentQuestions, type ExperimentVariant } from "./experiment";
 import { PlatformError } from "./repository";
 
 const ENROLLED = ["ACTIVE", "active", "COMPLETED", "completed"];
-const assignedFormSchema = z.array(ExperimentQuestionSchema).max(61);
+const assignedFormSchema = z.array(ExperimentQuestionSchema).max(EXPERIMENT_QUESTION_LIMIT);
 
 function isPretestAvailable(instance: {
   status: string;

@@ -15,7 +15,7 @@
  * each field's value shape. Both describe the same contract. No runtime
  * dependencies.
  */
-import { isActionType, MAX_LASER_WAYPOINTS } from './action.js';
+import { isActionType, MAX_LASER_WAYPOINTS, WHITEBOARD_ACTION_TYPES } from './action.js';
 import type { ActionType } from './action.js';
 import { isWidgetType } from './interactive.js';
 import { isPBLProject } from './pbl.js';
@@ -345,7 +345,8 @@ function checkAction(doc: unknown, path: string, errors: ValidationIssue[]): voi
       });
     }
   }
-  if (doc.type === 'spotlight' || doc.type === 'laser') {
+  if (doc.type === 'spotlight' || doc.type === 'laser'
+    || (WHITEBOARD_ACTION_TYPES as readonly string[]).includes(doc.type)) {
     if (doc.speechId !== undefined && (typeof doc.speechId !== 'string' || !doc.speechId.trim())) {
       errors.push({
         path: `${path}/speechId`,
@@ -358,6 +359,8 @@ function checkAction(doc: unknown, path: string, errors: ValidationIssue[]): voi
     if (doc.speechAnchor !== undefined) {
       checkSpeechAnchor(doc.speechAnchor, `${path}/speechAnchor`, errors);
     }
+  }
+  if (doc.type === 'spotlight' || doc.type === 'laser') {
     if (doc.endSpeechAnchor !== undefined) {
       checkSpeechAnchor(doc.endSpeechAnchor, `${path}/endSpeechAnchor`, errors);
     }

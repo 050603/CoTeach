@@ -6,6 +6,7 @@ import { runMutationTransaction } from "@/lib/db/transaction-retry";
 import type { PlatformDb } from "./access";
 import { PlatformError } from "./repository";
 import { createPblTemplateCourse, decodePblTemplate, encodePblTemplate } from "./pbl-template";
+import { enqueueKnowledgeExplanationWarmup } from "@/lib/courses/knowledge-explanation-enqueue";
 
 export type PblTemplatePublicationState = {
   latestVersion: number | null;
@@ -205,6 +206,9 @@ export async function savePblTemplateCourse(course: Course, ownerId?: string, db
         await tx.classroomTemplateVersion.create({ data: { templateId: course.id, version: (latest?.version ?? 0) + 1, status: "DRAFT", snapshot } });
       }
     }
+    // Resource saves, generation completion, and adopted teacher edits all use
+    // this boundary. The receipt is pure SQL and deduplicates unrelated saves.
+    await enqueueKnowledgeExplanationWarmup(tx, course);
     return (await loadPblTemplateCourse(course.id, tx))!;
   };
   return db ? save(db) : runMutationTransaction(save);

@@ -112,6 +112,26 @@ beforeEach(() => {
 });
 
 describe('teacher classroom resource route', () => {
+  it('returns the concept map with its authorized classroom and refreshes only bindings after an edit', async () => {
+    const map = { schemaVersion: 1, sourceFingerprint: 'source', bindingFingerprint: 'old-audio', rootId: 'root',
+      nodes: [{ id: 'root', label: '教学方法', knowledgePointIds: [] },
+        { id: 'method', label: '抛锚式教学法', parentId: 'root', knowledgePointIds: [] }],
+      relations: [], bindings: [{ sceneId: 'scene-1', defaultNodeId: 'root', cues: [
+        { speechId: 'speech-1', nodeId: 'method', anchor: { quote: '讲稿' }, startMs: 12, speechTextHash: 'old-text', audioHash: 'old-audio' },
+      ] }], diagnostics: [] };
+    mocks.getCourse.mockResolvedValue({ ...course, content: { ...course.content, courseMindMap: map } });
+    mocks.updateCourse.mockImplementation(async (_id, updater) => updater({ ...course, content: { ...course.content, courseMindMap: map } }));
+    const loaded = await GET(new Request('https://app.test/api/courses/course-1/classroom-resource'), context);
+    expect((await loaded.json()).courseMindMap).toEqual(map);
+    const saved = await PATCH(editRequest(), context);
+    expect(saved.status).toBe(200);
+    const next = await mocks.updateCourse.mock.results[0].value;
+    expect(next.content.courseMindMap.nodes).toEqual(map.nodes);
+    expect(next.content.courseMindMap.sourceFingerprint).toBe(map.sourceFingerprint);
+    expect(next.content.courseMindMap.bindingFingerprint).not.toBe(map.bindingFingerprint);
+    expect(next.content.courseMindMap.bindings[0].cues[0]).not.toHaveProperty('startMs');
+    expect(next.content.courseMindMap.bindings[0].cues[0]).not.toHaveProperty('audioHash');
+  });
   it('loads only the classroom linked to the authorized course', async () => {
     const response = await GET(new Request('https://app.test/api/courses/course-1/classroom-resource'), context);
     expect(response.status).toBe(200);
@@ -128,6 +148,28 @@ describe('teacher classroom resource route', () => {
     expect(mocks.updateClassroom).not.toHaveBeenCalled();
     expect(mocks.persistClassroom).not.toHaveBeenCalled();
     await expect(response.json()).resolves.toMatchObject({ code: 'REVISION_CONFLICT' });
+  });
+
+  it('records only the edited board page and preserves audio when a published classroom is forked', async () => {
+    mocks.findPublished.mockResolvedValue({ id: 'published-version' });
+    const original = { ...scene, actions: [{ ...scene.actions[0], audioUrl: '/api/openmaic/classroom-media/classroom-1/audio/original.wav' }] };
+    const untouched = { ...original, id: 'other-page', order: 1,
+      content: { type: 'slide', canvas: { id: 'other-canvas', elements: [{ id: 'image', type: 'image',
+        src: '/api/openmaic/classroom-media/classroom-1/media/original.png', left: 40, top: 40, width: 200, height: 100, rotate: 0, fixedRatio: true }] } } };
+    mocks.readClassroom.mockResolvedValue({ ...classroom, scenes: [original, untouched] });
+    const updated = { ...original, actions: [
+      { id: 'board-note', type: 'wb_draw_text', elementId: 'note', content: '关键要点', x: 40, y: 100,
+        fontSize: 24, speechId: 'speech-1', speechAnchor: { quote: '讲稿' } },
+      ...original.actions,
+    ] };
+    const response = await PATCH(editRequest(4, { scenes: [updated, untouched] }), context);
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body.dependencyInvalidation).toMatchObject({ changeType: 'visual-content', affectedSceneIds: ['scene-1'] });
+    expect(body.dependencyInvalidation.invalidated).not.toContain('audio');
+    expect(body.narrationChanged).toBe(false);
+    expect(mocks.alignSpeech).not.toHaveBeenCalled();
+    expect(mocks.copyMedia).toHaveBeenCalledWith('classroom-1', 'classroom-1-edit-draft123');
   });
 
   it('rejects a different classroom even when the revision number matches', async () => {

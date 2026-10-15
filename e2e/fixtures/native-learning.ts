@@ -78,6 +78,10 @@ export function nativeLearningFixture() {
           failedExplanation = true;
           return { status: 503, body: { error: 'TUTOR_REQUEST_FAILED' } };
         }
+        if (body.action === 'tutor-explain') return ok({ explanation: {
+          id: 'native-shared-explanation', questionFingerprint: 'native-question-fingerprint', source: 'prepared',
+          text: '先比较相同的观察时长，再依据记录讨论差异。', boardNotes: [],
+        } });
         if (body.action === 'tutor-message') tutorMessages.push({ id: `native-message-${tutorMessages.length}`, role: 'student', content: String(body.message), createdAt: now });
         return ok({ attempt, thread: { id: 'native-thread', attemptId: attempt.id, questionId: question.id,
           messages: tutorMessages, boardNotes: [], createdAt: now, updatedAt: now } });

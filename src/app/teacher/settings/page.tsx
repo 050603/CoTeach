@@ -796,7 +796,7 @@ function KnowledgeTutorConfig() {
     <section className="overflow-hidden rounded-[12px] border border-stone-200 bg-white">
       <div className="border-b border-stone-200 bg-stone-50/70 px-5 py-4">
         <h3 className="font-bold text-stone-950">错题讲解模型与声音</h3>
-        <p className="mt-1 text-xs leading-5 text-stone-500">学生打开逐题讲解时，助教会用这里指定的模型生成板书，并用所选音色自动朗读。</p>
+        <p className="mt-1 text-xs leading-5 text-stone-500">普通题默认播放预先准备的统一讲解；这里的模型与音色用于准备讲解资源，以及回答和朗读学生的个性化追问。</p>
       </div>
       <div className="grid gap-5 p-5 md:grid-cols-2">
         <Field label="讲解模型" helper="仅显示已在 AI 大模型页完成配置的模型。" icon={Bot}>

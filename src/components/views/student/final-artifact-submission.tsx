@@ -2,9 +2,10 @@
 
 import { useState } from "react";
 import { uploadMultipartWithReceipt } from '@/lib/browser/upload-request';
-import { FileCheck2, LoaderCircle, Upload } from "lucide-react";
-import { Card, Pill } from "@/components/ui";
+import { LoaderCircle, Upload } from "lucide-react";
+import { Pill } from "@/components/ui";
 import type { Course } from "@/lib/session/types";
+import { CollaborationDialog } from "./collaboration-dialog";
 
 /** Shared additional-outcome submission entry for project work and showcase preparation. */
 export function FinalArtifactSubmission({
@@ -58,12 +59,20 @@ export function FinalArtifactSubmission({
   if (compact) return <div className="flex min-w-0 flex-wrap items-center gap-2">{uploadControl}{message ? <span aria-live="polite" className={`max-w-[22rem] text-xs ${message.tone === "ok" ? "text-emerald-700" : "text-rose-700"}`} role={message.tone === "error" ? "alert" : undefined}>{message.text}</span> : null}</div>;
 
   return (
-    <Card className="border-[var(--pbl-student-border)]" compact>
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-        <div className="flex items-start gap-3"><span className="grid size-10 shrink-0 place-items-center rounded-[var(--radius-sm)] bg-[var(--pbl-student-soft)] text-[var(--pbl-student)]"><FileCheck2 size={19} /></span><div><h2 className="font-bold text-[var(--pbl-text-strong)]">{variant === "showcase" ? "上传汇报材料" : "提交本地成果"}</h2><p className="mt-1 max-w-3xl text-sm leading-6 text-[var(--pbl-text-muted)]">{variant === "showcase" ? "上传准备在课堂展示的项目材料。轮到你时，教师会在教师端打开材料并发起投屏。" : "如果成果在本机制作，可在这里提交一个版本供教师收集。系统只记录文件信息，不解析或推断文件内容。"}</p><p className="mt-1 text-xs text-[var(--pbl-text-subtle)]">PDF 可直接预览和投屏；其他格式供教师下载查看。单个文件不超过 100 MiB。</p></div></div>
+    <CollaborationDialog
+      title={variant === "showcase" ? "上传汇报材料" : "提交其他成果"}
+      trigger={
+        <button className="inline-flex min-h-11 items-center justify-center gap-2 rounded-[var(--radius-sm)] border border-[var(--pbl-border-strong)] bg-[var(--pbl-surface)] px-3.5 text-[13px] font-semibold text-[var(--pbl-text)] transition hover:bg-[var(--pbl-surface-soft)] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--pbl-student)]" type="button">
+          {busy ? <LoaderCircle aria-hidden="true" className="animate-spin" size={14} /> : <Upload aria-hidden="true" size={14} />}
+          {variant === "showcase" ? "上传汇报材料" : "提交其他成果"}
+        </button>
+      }
+    >
+      <div className="flex flex-col items-start gap-4">
+        <div><p className="text-sm leading-6 text-[var(--pbl-text-muted)]">{variant === "showcase" ? "上传准备在课堂展示的项目材料。轮到你时，教师会在教师端打开材料并发起投屏。" : "上传在本机制作的演示稿、图片、视频等其他成果，作为文档之外的补充材料供教师查看或下载。"}</p><p className="mt-2 text-xs leading-6 text-[var(--pbl-text-muted)]">支持 PDF、Word、PPTX、表格、图片、音视频、压缩包、代码和文本文件，单个文件不超过 100 MiB。PDF 可直接预览和投屏；其他格式供教师下载查看。</p></div>
         {uploadControl}
       </div>
-      {message ? <div className="mt-3 flex items-center gap-2 text-sm"><Pill tone={message.tone === "ok" ? "green" : "red"}>{message.tone === "ok" ? "已保存" : "提交失败"}</Pill><span className={message.tone === "ok" ? "text-emerald-700" : "text-rose-700"}>{message.text}</span></div> : null}
-    </Card>
+      {message ? <div className="mt-3 flex items-center gap-2 text-sm" role={message.tone === "error" ? "alert" : "status"}><Pill tone={message.tone === "ok" ? "green" : "red"}>{message.tone === "ok" ? "已保存" : "提交失败"}</Pill><span className={message.tone === "ok" ? "text-emerald-700" : "text-rose-700"}>{message.text}</span></div> : null}
+    </CollaborationDialog>
   );
 }

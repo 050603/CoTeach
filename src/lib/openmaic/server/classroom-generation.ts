@@ -49,6 +49,7 @@ import {
   restoreTeachingSemanticElementIds,
 } from '@openmaic/lib/generation/teaching-narration';
 import { generateManuscriptVisualActions, MANUSCRIPT_VISUAL_ACTION_VERSION } from '../generation/manuscript-visual-actions';
+import { findWhiteboardPlanIssues } from '../generation/teaching-tool-plan';
 import { pagePresentationContent } from '../generation/adopted-page-content';
 import type { NarrationModuleOutput } from '@openmaic/lib/generation/action-binding-types';
 import type { AgentInfo } from '@openmaic/lib/generation/pipeline-types';
@@ -140,6 +141,7 @@ import {
 import type { FigureSequenceContract } from '@/lib/textbook/course-visual-binding';
 import type { CourseEvidenceSnapshot } from '@/lib/textbook/course-evidence-types';
 import { pageOriginalTeachingSources, type SourceGroundingKnowledgePoint } from '../generation/source-grounding';
+import { selectReviewSource } from '@/lib/course-quality-review/source-selection';
 import { buildFirstPassTeachingInput, type TeachingAuthoringKnowledgePoint } from '../generation/first-pass-authoring';
 import {
   SOURCE_CONTENT_RECOVERY_POLICY,
@@ -2016,7 +2018,11 @@ async function generateClassroomInternal(
             message: `Restored ${generatedSceneDrafts}/${outlines.length} completed scenes`,
             scenesGenerated: generatedSceneDrafts, totalScenes: outlines.length,
           });
-          return { outline: safeOutline, content: checkpoint.content as GeneratedSceneContent, scene: checkpoint, index };
+          const restoredOutline = checkpoint.teachingToolPlan ? { ...safeOutline, teachingToolPlan: checkpoint.teachingToolPlan } : safeOutline;
+          for (const plan of restoredOutline.teachingToolPlan ?? []) {
+            for (const message of findWhiteboardPlanIssues(plan, checkpoint.actions ?? [])) recordQualityDiagnostic(`${safeOutline.title}：${message}`);
+          }
+          return { outline: restoredOutline, content: checkpoint.content as GeneratedSceneContent, scene: checkpoint, index };
         } else {
           log.warn(`Ignoring malformed checkpoint "${safeOutline.title}"`);
         }
@@ -2380,7 +2386,16 @@ async function generateClassroomInternal(
         teachingSourceContext: requirements.teachingSourceContext,
         quizNarrationContext: prepared.quizNarrationContext,
       };
-      const visualActionPolicy = manuscriptVisualActions ? { visualActionPolicy: MANUSCRIPT_VISUAL_ACTION_VERSION } : {};
+      const originalVisualSources = manuscriptVisualActions ? pageOriginalTeachingSources(safeOutline, options) : undefined;
+      const fallbackVisualSource = originalVisualSources && !originalVisualSources.originalSources.length
+        && !originalVisualSources.originalQuotes.length && requirements.teachingSourceContext
+        ? selectReviewSource(requirements.teachingSourceContext, [safeOutline]) : undefined;
+      const visualSourceContext = originalVisualSources
+        ? JSON.stringify({ ...originalVisualSources, ...(fallbackVisualSource ? { additionalSourceContext: fallbackVisualSource } : {}) })
+        : undefined;
+      if (fallbackVisualSource?.partial) recordQualityDiagnostic(`${safeOutline.title}：白板采用相关来源片段，完整来源未绑定到本页`);
+      const visualActionPolicy = manuscriptVisualActions ? { visualActionPolicy: MANUSCRIPT_VISUAL_ACTION_VERSION,
+        visualSourceContext } : {};
       const actionInputFingerprint = fingerprintGenerationValue({
         ...visualActionPolicy,
         content,
@@ -2412,6 +2427,9 @@ async function generateClassroomInternal(
         ? (restoredActionsPayload as { actions: Action[] }).actions
         : null;
       const restoredActionsValid = actions !== null;
+      let adoptedToolPlan = actions && restoredActionsPayload && typeof restoredActionsPayload === 'object'
+        ? (restoredActionsPayload as { teachingToolPlan?: SceneOutline['teachingToolPlan'] }).teachingToolPlan
+        : undefined;
       if (!actions && safeOutline.type !== 'quiz' && safeOutline.teachingBrief?.manuscript && teachingNarration) {
         // Speech is already authored and teacher-editable. Even resource pages
         // execute that exact body; an action model must not rewrite it.
@@ -2419,9 +2437,10 @@ async function generateClassroomInternal(
           const compiled = manuscriptVisualActions
             ? await validateAuthoringResponse(safeOutline, 'actions', actionInputFingerprint,
                 () => generateManuscriptVisualActions({ outline: safeOutline, content, narration: teachingNarration,
-                  aiCall: contextualActionAiCall }))
+                  aiCall: contextualActionAiCall, teachingSourceContext: visualSourceContext }))
             : compileTeachingNarrationActions({ outline: safeOutline, content, narration: teachingNarration });
           actions = compiled.actions;
+          adoptedToolPlan = compiled.teachingToolPlan;
           for (const issue of compiled.issues) recordQualityDiagnostic(`${safeOutline.title}：${issue.message}`);
         } else {
           actions = teachingNarration.segments.map((segment) => ({ id: segment.id, type: 'speech' as const, text: segment.text }));
@@ -2489,11 +2508,12 @@ async function generateClassroomInternal(
 
       log.info(`Scene "${safeOutline.title}": ${actions.length} actions`);
       await reportPageStage(index, safeOutline.title, 'assembling');
+      const executionOutline = adoptedToolPlan ? { ...safeOutline, teachingToolPlan: adoptedToolPlan } : safeOutline;
       // Keep the canonical assembler so restored and fresh pages have the
       // exact same timing pauses, PBL metadata and outline identity.
       const pageStore = createInMemoryStore(stage);
       const pageApi = createStageAPI(pageStore);
-      const sceneId = createSceneWithActions(safeOutline, content, actions, pageApi);
+      const sceneId = createSceneWithActions(executionOutline, content, actions, pageApi);
       const assembledScene = sceneId
         ? pageStore.getState().scenes.find((candidate) => candidate.id === sceneId) ?? null
         : null;
@@ -2516,8 +2536,14 @@ async function generateClassroomInternal(
           scene.actions = calibrateGeneratedVisualCues({ outline: safeOutline, elements: scene.content.canvas.elements, actions: scene.actions ?? [] });
         }
       }
+      for (const plan of executionOutline.teachingToolPlan ?? []) {
+        for (const diagnostic of findWhiteboardPlanIssues(plan, scene.actions ?? [])) {
+          recordQualityDiagnostic(`${safeOutline.title}：${diagnostic}`);
+        }
+      }
       if (manuscriptVisualActions && (!restoredActionsValid || fingerprintGenerationValue(scene.actions) !== fingerprintGenerationValue(actions))) {
         await saveStage('actions', { actions: scene.actions,
+          ...(adoptedToolPlan ? { teachingToolPlan: adoptedToolPlan } : {}),
           ...(manuscriptVisualActions ? { visualActionRevision: MANUSCRIPT_VISUAL_ACTION_VERSION } : {}) }, actionInputFingerprint);
       }
       await options.onSceneCompleted?.(
@@ -2537,7 +2563,7 @@ async function generateClassroomInternal(
         scenesGenerated: generatedSceneDrafts,
         totalScenes: outlines.length,
       });
-      return { outline: safeOutline, content, scene, index };
+      return { outline: executionOutline, content, scene, index };
       } catch (error) {
         if (options.signal?.aborted) throw error;
         const message = error instanceof Error ? error.message : String(error);
@@ -3027,7 +3053,10 @@ async function generateClassroomInternal(
       generatedAt: new Date().toISOString(),
     },
     assetContext: {
-      outlines: withGeneratedQuizQuestionCounts(outlines, scenes),
+      outlines: withGeneratedQuizQuestionCounts(outlines.map((outline) => {
+        const scene = scenes.find((candidate) => candidate.outlineId === outline.id);
+        return scene?.teachingToolPlan ? { ...outline, teachingToolPlan: scene.teachingToolPlan } : outline;
+      }), scenes),
       ...(options.generationOutlineIds ? { narrationProgression: confirmedProgression,
         narrationSourceFingerprint: fingerprintGenerationValue({ sourceEvidence: options.sourceEvidence,
           sourceKnowledgePoints: options.sourceKnowledgePoints, sourceSequenceContracts: options.sourceSequenceContracts }) } : {}),

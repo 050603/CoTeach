@@ -381,7 +381,7 @@ describe('classroom first-pass orchestration and checkpoint integration', () => 
         const target = request.content.elements.find((item: { type: string; content?: string }) => item.type === 'text' && item.content?.includes('同源转载'));
         return JSON.stringify({ baseFingerprint: request.baseFingerprint, edits: [{ elementId: target.id, top: 300 }] });
       }
-      if (system.includes('MANUSCRIPT_VISUAL_ACTIONS_V1')) {
+      if (system.includes('MANUSCRIPT_VISUAL_ACTIONS_V3')) {
         const request = JSON.parse(prompt);
         return JSON.stringify({ pageId: request.pageId, cues: [] });
       }
@@ -404,10 +404,38 @@ describe('classroom first-pass orchestration and checkpoint integration', () => 
         .toEqual(['完整原始口播不因版式改变。']);
     }
     expect(patchCalls).toBe(1);
-    const contentRequests = mocks.ai.mock.calls.filter(([system]) => !system.includes('MANUSCRIPT_VISUAL_ACTIONS_V1')).length;
+    const contentRequests = mocks.ai.mock.calls.filter(([system]) => !system.includes('MANUSCRIPT_VISUAL_ACTIONS_V3')).length;
     await generateClassroom(input, options);
     expect(patchCalls).toBe(1);
-    expect(mocks.ai.mock.calls.filter(([system]) => !system.includes('MANUSCRIPT_VISUAL_ACTIONS_V1'))).toHaveLength(contentRequests);
+    expect(mocks.ai.mock.calls.filter(([system]) => !system.includes('MANUSCRIPT_VISUAL_ACTIONS_V3'))).toHaveLength(contentRequests);
+  });
+
+  it('persists progressive board contracts with the verbatim manuscript and restores without authoring', async () => {
+    const { page, sourceOptions } = sourceFixture();
+    page.teachingBrief!.manuscript = { sectionId: 'source-section', segmentIds: ['speech'] };
+    const text = '前期分析开始。学习者分析关注已有知识。转入教学过程实施。';
+    const manuscripts = [{ sectionId: 'source-section', segments: [{ id: 'speech', text }] }];
+    const stages = capacityStageStore();
+    mocks.ai.mockImplementation(async (system: string, prompt: string) => {
+      if (!system.includes('MANUSCRIPT_VISUAL_ACTIONS_V3')) return JSON.stringify(authoredContent);
+      const request = JSON.parse(prompt);
+      return JSON.stringify({ pageId: request.pageId, cues: [], whiteboards: [{ title: '前期分析', steps: [
+        { title: '学习者分析', content: '关注已有知识', speechId: 'speech', speechAnchor: { quote: '学习者分析' } },
+      ], exit: { speechId: 'speech', speechAnchor: { quote: '转入教学过程实施' } } }] });
+    });
+    const options: GenerateClassroomOptions = { preparedOutlines: [page], ...sourceOptions,
+      teachingManuscripts: manuscripts, ...stages.callbacks };
+    const result = await generateClassroom(input, options);
+    expect(result.scenes[0]!.actions?.filter((action) => action.type === 'speech').map((action) => ({ id: action.id, text: action.text })))
+      .toEqual([{ id: 'speech', text }]);
+    expect(result.scenes[0]!.teachingToolPlan?.[0].whiteboard?.steps[0].content).toBe('关注已有知识');
+    expect(result.assetContext.outlines[0]!.teachingToolPlan).toEqual(result.scenes[0]!.teachingToolPlan);
+    expect(stages.stages.get(`${page.id}:actions`)!.payload).toMatchObject({ teachingToolPlan: [expect.objectContaining({ tool: 'whiteboard' })] });
+    const calls = mocks.ai.mock.calls.length;
+    const restored = await generateClassroom(input, options);
+    expect(mocks.ai).toHaveBeenCalledTimes(calls);
+    expect(restored.scenes[0]!.teachingToolPlan).toEqual(result.scenes[0]!.teachingToolPlan);
+    expect(restored.assetContext.outlines[0]!.teachingToolPlan).toEqual(result.assetContext.outlines[0]!.teachingToolPlan);
   });
 
   it.each([false, true])('orchestrates visual actions beside the verbatim teacher manuscript and restores them (video=%s)', async (video) => {
@@ -419,7 +447,7 @@ describe('classroom first-pass orchestration and checkpoint integration', () => 
     })) }];
     const stages = capacityStageStore();
     mocks.ai.mockImplementation(async (system: string, prompt: string) => {
-      if (!system.includes('MANUSCRIPT_VISUAL_ACTIONS_V1')) return JSON.stringify(authoredContent);
+      if (!system.includes('MANUSCRIPT_VISUAL_ACTIONS_V3')) return JSON.stringify(authoredContent);
       const request = JSON.parse(prompt);
       expect(request.segments).toEqual(manuscripts[0]!.segments);
       const target = request.actualSlide.elements.find((element: { content?: string }) => element.content?.includes('独立来源'));
@@ -460,7 +488,7 @@ describe('classroom first-pass orchestration and checkpoint integration', () => 
     const teachingManuscripts = [{ sectionId: 'source-section', segments: [{ id: 'saved-speech', text: '核对实际出处，判断能否支持结论。' }] }];
     const stages = capacityStageStore();
     mocks.ai.mockImplementation(async (system: string, prompt: string) => {
-      if (!system.includes('MANUSCRIPT_VISUAL_ACTIONS_V1')) return JSON.stringify(authoredContent);
+      if (!system.includes('MANUSCRIPT_VISUAL_ACTIONS_V3')) return JSON.stringify(authoredContent);
       const request = JSON.parse(prompt);
       const target = request.actualSlide.elements.find((element: { content?: string }) => element.content?.includes('独立来源'));
       return JSON.stringify({ pageId: page.id, cues: [{ speechId: 'saved-speech', type: 'spotlight',
@@ -479,7 +507,7 @@ describe('classroom first-pass orchestration and checkpoint integration', () => 
     const resumed = await generateClassroom(input, { preparedOutlines: [page], ...sourceOptions, teachingManuscripts,
       ...stages.callbacks, loadSceneCheckpoint: async () => legacy, onSceneCompleted });
     expect(mocks.ai).toHaveBeenCalledOnce();
-    expect(mocks.ai.mock.calls[0]![0]).toContain('MANUSCRIPT_VISUAL_ACTIONS_V1');
+    expect(mocks.ai.mock.calls[0]![0]).toContain('MANUSCRIPT_VISUAL_ACTIONS_V3');
     expect(resumed.scenes[0]).toMatchObject({ id: legacy.id, content: savedCanvas, visualActionRevision: MANUSCRIPT_VISUAL_ACTION_VERSION });
     expect(resumed.scenes[0]!.actions).toContainEqual(expect.objectContaining({ type: 'speech', id: 'saved-speech',
       text: teachingManuscripts[0]!.segments[0]!.text, audioUrl: '/original.mp3', audioId: 'original-audio' }));
@@ -496,7 +524,7 @@ describe('classroom first-pass orchestration and checkpoint integration', () => 
     const stages = capacityStageStore();
     let failing = true;
     mocks.ai.mockImplementation(async (system: string) => {
-      if (!system.includes('MANUSCRIPT_VISUAL_ACTIONS_V1')) return JSON.stringify(authoredContent);
+      if (!system.includes('MANUSCRIPT_VISUAL_ACTIONS_V3')) return JSON.stringify(authoredContent);
       if (failing) throw new Error('action provider unavailable');
       return JSON.stringify({ pageId: page.id, cues: [] });
     });

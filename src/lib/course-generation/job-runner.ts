@@ -1,11 +1,13 @@
 import path from "node:path";
 import { bindTeachingManuscript, teachingManuscripts, type TeachingManuscript } from '@/lib/course-design/teaching-manuscript';
 import { randomUUID } from "node:crypto";
+import { generateAndSaveCourseMindMap } from '@/lib/course-mind-map/job';
+import type { CourseMindMapCheckpoint } from '@/lib/course-mind-map/generation';
 import { readFile } from "node:fs/promises";
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db/client";
 import type { CourseGenerationJob } from "@/lib/course-generation/job-storage";
-import { COURSE_FINALIZATION_STEP, loadGenerationCheckpoints, saveGenerationCheckpoint, saveSourceNarrationBaselineCheckpoint, resetGenerationCheckpoints, resetPreparedOutlinesCheckpoint, countGenerationPageCheckpoints } from "./checkpoint-storage";
+import { COURSE_FINALIZATION_STEP, COURSE_MIND_MAP_STEP, loadGenerationCheckpoints, saveGenerationCheckpoint, saveSourceNarrationBaselineCheckpoint, resetGenerationCheckpoints, resetPreparedOutlinesCheckpoint, countGenerationPageCheckpoints } from "./checkpoint-storage";
 import { contentGenerationJobs } from "@/lib/course-generation/job-storage";
 import { AUTHORING_RESPONSE_PREFIX, restoreAuthoringResponse, type AuthoringResponseCheckpoint } from './authoring-checkpoints';
 import { COURSE_FIRST_PASS_CONTRACT_VERSION } from './first-pass-policy';
@@ -2435,6 +2437,20 @@ async function runJobWithCourseGenerationContext(job: CourseGenerationJob): Prom
       assetsCompletedAt: new Date().toISOString(),
       teachingTimingAudit,
     } satisfies CourseFinalizationCheckpoint, { executionId });
+    await serializeWorkerWrite(() => persistWorkerPhase(job, {
+      step: 'generating_mind_map', progress: 99,
+      message: '正在组织课程概念层级并绑定讲解片段', estimatedRemainingSeconds: 120,
+    }));
+    const savedMindMap = (await loadGenerationCheckpoints(job.id)).courseMindMap;
+    const courseMindMap = await generateAndSaveCourseMindMap({
+      courseId, classroomId: split.studentClassroomId, modelString: generationInput.generationModelString,
+      signal: controller.signal,
+      checkpoint: savedMindMap && typeof savedMindMap === 'object'
+        ? savedMindMap as unknown as CourseMindMapCheckpoint : undefined,
+      assertExecution: () => assertCourseGenerationExecution(job),
+      saveCheckpoint: (state) => saveGenerationCheckpoint(job.id, COURSE_MIND_MAP_STEP, state, { executionId }),
+    });
+    courseMindMap.diagnostics.forEach((diagnostic) => recordQualityDiagnostic(`思维导图：${diagnostic}`));
     const coverStatus = await generateAndPersistCourseCover(
       job,
       courseId,

@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import type { QuizQuestion } from "@openmaic/lib/types/stage";
 import type { KnowledgeLectureAttempt } from "@/lib/session/types";
@@ -301,5 +301,39 @@ describe("QuizView single-attempt review", () => {
     await waitFor(() => expect(screen.getByText("Quiz Report")).toBeTruthy());
     expect(screen.getByText("训练集")).toBeTruthy();
     expect(screen.getByText("训练用于学习，测试用于独立评估。")).toBeTruthy();
+    expect(within(screen.getByRole("group", { name: "配对结果 训练集" })).getByText("匹配正确")).toBeTruthy();
+    expect(screen.queryByLabelText("待选匹配项")).toBeNull();
+    expect(screen.queryByRole("button", { name: /匹配到/ })).toBeNull();
+  });
+
+  it("distinguishes submitted matches from corrections and reveals unanswered references in read-only review", () => {
+    const sceneId = "matching-review-feedback";
+    const questions: QuizQuestion[] = [{
+      id: "matching-review", type: "matching", format: "matching", question: "匹配数据角色与用途", points: 4,
+      matchingPairs: [
+        { leftId: "L1", left: "训练集", rightId: "R1", right: "学习参数" },
+        { leftId: "L2", left: "测试集", rightId: "R2", right: "独立评估" },
+      ],
+      answer: ["L1:R1", "L2:R2"],
+    }];
+    localStorage.setItem(`quizAnswers:${sceneId}`, JSON.stringify({ "matching-review": ["L1:R2"] }));
+    localStorage.setItem(`quizResults:${sceneId}`, JSON.stringify([
+      { questionId: "matching-review", correct: false, status: "incorrect", earned: 0 },
+    ]));
+    render(<I18nProvider><QuizView questions={questions} sceneId={sceneId} /></I18nProvider>);
+
+    const wrongMatch = within(screen.getByRole("group", { name: "配对结果 训练集" }));
+    expect(wrongMatch.getByText("你的匹配 · 需调整")).toBeTruthy();
+    expect(wrongMatch.getByText("独立评估")).toBeTruthy();
+    expect(wrongMatch.getByText("正确匹配")).toBeTruthy();
+    expect(wrongMatch.getByText("学习参数")).toBeTruthy();
+    const unanswered = within(screen.getByRole("group", { name: "配对结果 测试集" }));
+    expect(unanswered.getByText("未作答")).toBeTruthy();
+    expect(unanswered.getByText("正确匹配")).toBeTruthy();
+    expect(unanswered.getByText("独立评估")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /匹配到|选择匹配项/ })).toBeNull();
+    expect(screen.queryByText("放置匹配项")).toBeNull();
+    localStorage.removeItem(`quizAnswers:${sceneId}`);
+    localStorage.removeItem(`quizResults:${sceneId}`);
   });
 });

@@ -65,6 +65,15 @@ export interface SpeechAnchor {
   occurrence?: number;
 }
 
+/** Whiteboard commands may run at an authored point inside narration.
+ * Without `speechId`, they retain the legacy sequential playback behavior. */
+export interface WhiteboardActionBase extends ActionBase {
+  speechId?: string;
+  speechAnchor?: SpeechAnchor;
+  /** Compiled media time inside `speechId`, in milliseconds. Defaults to 0. */
+  speechOffsetMs?: number;
+}
+
 /** One aligned text span. Character offsets are UTF-16 and `endChar` is exclusive. */
 export interface SpeechAlignmentSpan {
   /** Exact slice of the original narration, including punctuation or whitespace when aligned. */
@@ -171,12 +180,12 @@ export interface SpeechAction extends ActionBase {
 }
 
 /** Open whiteboard (wait for animation) */
-export interface WbOpenAction extends ActionBase {
+export interface WbOpenAction extends WhiteboardActionBase {
   type: 'wb_open';
 }
 
 /** Draw text on whiteboard (wait for render) */
-export interface WbDrawTextAction extends ActionBase {
+export interface WbDrawTextAction extends WhiteboardActionBase {
   type: 'wb_draw_text';
   elementId?: string; // Custom element ID for later reference (e.g. wb_delete)
   content: string; // HTML string or plain text
@@ -189,7 +198,7 @@ export interface WbDrawTextAction extends ActionBase {
 }
 
 /** Show an existing image on the whiteboard (wait for render). */
-export interface WbDrawImageAction extends ActionBase {
+export interface WbDrawImageAction extends WhiteboardActionBase {
   type: 'wb_draw_image';
   elementId?: string;
   /** Image asset reference, data URL, or concrete URL. */
@@ -201,7 +210,7 @@ export interface WbDrawImageAction extends ActionBase {
 }
 
 /** Draw shape on whiteboard (wait for render) */
-export interface WbDrawShapeAction extends ActionBase {
+export interface WbDrawShapeAction extends WhiteboardActionBase {
   type: 'wb_draw_shape';
   elementId?: string; // Custom element ID for later reference (e.g. wb_delete)
   shape: 'rectangle' | 'circle' | 'triangle';
@@ -213,7 +222,7 @@ export interface WbDrawShapeAction extends ActionBase {
 }
 
 /** Draw chart on whiteboard (wait for render) */
-export interface WbDrawChartAction extends ActionBase {
+export interface WbDrawChartAction extends WhiteboardActionBase {
   type: 'wb_draw_chart';
   elementId?: string; // Custom element ID for later reference (e.g. wb_delete)
   chartType: 'bar' | 'column' | 'line' | 'pie' | 'ring' | 'area' | 'radar' | 'scatter';
@@ -230,7 +239,7 @@ export interface WbDrawChartAction extends ActionBase {
 }
 
 /** Draw LaTeX formula on whiteboard (wait for render) */
-export interface WbDrawLatexAction extends ActionBase {
+export interface WbDrawLatexAction extends WhiteboardActionBase {
   type: 'wb_draw_latex';
   elementId?: string; // Custom element ID for later reference (e.g. wb_delete)
   latex: string;
@@ -242,7 +251,7 @@ export interface WbDrawLatexAction extends ActionBase {
 }
 
 /** Draw table on whiteboard (wait for render) */
-export interface WbDrawTableAction extends ActionBase {
+export interface WbDrawTableAction extends WhiteboardActionBase {
   type: 'wb_draw_table';
   elementId?: string; // Custom element ID for later reference (e.g. wb_delete)
   x: number;
@@ -255,7 +264,7 @@ export interface WbDrawTableAction extends ActionBase {
 }
 
 /** Draw line/arrow on whiteboard (wait for render) */
-export interface WbDrawLineAction extends ActionBase {
+export interface WbDrawLineAction extends WhiteboardActionBase {
   type: 'wb_draw_line';
   elementId?: string; // Custom element ID for later reference (e.g. wb_delete)
   startX: number; // Start X position (0-1000)
@@ -272,23 +281,23 @@ export interface WbDrawLineAction extends ActionBase {
 }
 
 /** Clear all whiteboard elements */
-export interface WbClearAction extends ActionBase {
+export interface WbClearAction extends WhiteboardActionBase {
   type: 'wb_clear';
 }
 
 /** Delete a specific whiteboard element by ID */
-export interface WbDeleteAction extends ActionBase {
+export interface WbDeleteAction extends WhiteboardActionBase {
   type: 'wb_delete';
   elementId: string;
 }
 
 /** Close whiteboard (wait for animation) */
-export interface WbCloseAction extends ActionBase {
+export interface WbCloseAction extends WhiteboardActionBase {
   type: 'wb_close';
 }
 
 /** Draw code block on whiteboard (wait for typing animation) */
-export interface WbDrawCodeAction extends ActionBase {
+export interface WbDrawCodeAction extends WhiteboardActionBase {
   type: 'wb_draw_code';
   elementId?: string;
   language: string;
@@ -301,7 +310,7 @@ export interface WbDrawCodeAction extends ActionBase {
 }
 
 /** Edit code block on whiteboard (line-level operations) */
-export interface WbEditCodeAction extends ActionBase {
+export interface WbEditCodeAction extends WhiteboardActionBase {
   type: 'wb_edit_code';
   elementId: string; // Target code block ID
   operation: 'insert_after' | 'insert_before' | 'delete_lines' | 'replace_lines';
@@ -356,11 +365,7 @@ export interface WidgetRevealAction extends ActionBase {
 
 // ==================== Union type ====================
 
-export type Action =
-  | SpotlightAction
-  | LaserAction
-  | PlayVideoAction
-  | SpeechAction
+export type WhiteboardAction =
   | WbOpenAction
   | WbDrawTextAction
   | WbDrawImageAction
@@ -373,7 +378,14 @@ export type Action =
   | WbDeleteAction
   | WbCloseAction
   | WbDrawCodeAction
-  | WbEditCodeAction
+  | WbEditCodeAction;
+
+export type Action =
+  | SpotlightAction
+  | LaserAction
+  | PlayVideoAction
+  | SpeechAction
+  | WhiteboardAction
   | DiscussionAction
   | WidgetHighlightAction
   | WidgetSetStateAction
@@ -381,6 +393,18 @@ export type Action =
   | WidgetRevealAction;
 
 export type ActionType = Action['type'];
+
+/** Every whiteboard command, including visibility and content mutations. */
+export const WHITEBOARD_ACTION_TYPES = [
+  'wb_open', 'wb_draw_text', 'wb_draw_image', 'wb_draw_shape', 'wb_draw_chart',
+  'wb_draw_latex', 'wb_draw_table', 'wb_draw_line', 'wb_clear', 'wb_delete',
+  'wb_close', 'wb_draw_code', 'wb_edit_code',
+] as const satisfies readonly WhiteboardAction['type'][];
+
+/** Narrow an action to its whiteboard contract. */
+export function isWhiteboardAction(action: Action): action is WhiteboardAction {
+  return (WHITEBOARD_ACTION_TYPES as readonly string[]).includes(action.type);
+}
 
 /** Action types that fire immediately without blocking */
 export const FIRE_AND_FORGET_ACTIONS: ActionType[] = ['spotlight', 'laser'];

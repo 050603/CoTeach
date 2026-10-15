@@ -152,7 +152,7 @@ function normalizedClassroomAudioFormat(format: string | undefined): string {
   return canonical;
 }
 
-function prepareGeneratedClassroomAudio(
+export function prepareGeneratedClassroomAudio(
   audio: Uint8Array,
   format: string | undefined,
 ): { audio: Uint8Array; format: string; durationSec?: number; storageId: string } {

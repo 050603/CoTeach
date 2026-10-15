@@ -4,10 +4,14 @@ import { completeDesignAnswer, designPromptParts } from "./experiment-design-ans
 export const ExperimentPhaseSchema = z.enum(["pretest", "posttest"]);
 export type ExperimentPhase = z.infer<typeof ExperimentPhaseSchema>;
 
+/** Shared and phase-specific questions together must fit one complete form. */
+export const EXPERIMENT_QUESTION_LIMIT = 100;
+
 export const ExperimentQuestionGroupSchema = z.object({
   id: z.string().trim().min(1).max(80),
   title: z.string().trim().min(1).max(120),
   instruction: z.string().trim().max(1000).optional(),
+  referenceNote: z.string().trim().max(1000).optional(),
 }).strict();
 export type ExperimentQuestionGroup = z.infer<typeof ExperimentQuestionGroupSchema>;
 
@@ -58,9 +62,9 @@ export const ExperimentQuestionSchema = z.object({
 
 export const ExperimentConfigSchema = z.object({
   enabled: z.boolean(),
-  pretest: z.array(ExperimentQuestionSchema).max(30),
-  posttest: z.array(ExperimentQuestionSchema).max(30),
-  sharedQuestions: z.array(ExperimentQuestionSchema).max(30).default([]),
+  pretest: z.array(ExperimentQuestionSchema).max(EXPERIMENT_QUESTION_LIMIT),
+  posttest: z.array(ExperimentQuestionSchema).max(EXPERIMENT_QUESTION_LIMIT),
+  sharedQuestions: z.array(ExperimentQuestionSchema).max(EXPERIMENT_QUESTION_LIMIT).default([]),
   scenarioPair: z.object({ a: ExperimentQuestionSchema, b: ExperimentQuestionSchema }).strict().optional(),
   pretestOrder: z.array(z.string()).optional(),
   posttestOrder: z.array(z.string()).optional(),
@@ -79,6 +83,9 @@ export const ExperimentConfigSchema = z.object({
     context.addIssue({ code: "custom", message: "A/B 情境题须为两道不同的简答题", path: ["scenarioPair"] });
   }
   for (const phase of ["pretest", "posttest"] as const) {
+    if (config.sharedQuestions.length + config[phase].length + (config.scenarioPair ? 1 : 0) > EXPERIMENT_QUESTION_LIMIT) {
+      context.addIssue({ code: "custom", message: `${phase === "pretest" ? "前测" : "后测"}共用题和专属题合计最多 ${EXPERIMENT_QUESTION_LIMIT} 题`, path: [phase] });
+    }
     const ids = [...config.sharedQuestions, ...config[phase], ...(config.scenarioPair ? [config.scenarioPair.a, config.scenarioPair.b] : [])].map((question) => question.id);
     if (new Set(ids).size !== ids.length) context.addIssue({ code: "custom", message: `${phase}题目编号不能重复`, path: [phase] });
   }
@@ -86,8 +93,8 @@ export const ExperimentConfigSchema = z.object({
   for (const question of [...config.sharedQuestions, ...config.pretest, ...config.posttest]) {
     if (!question.group) continue;
     const previous = groups.get(question.group.id);
-    if (previous && (previous.title !== question.group.title || (previous.instruction ?? "") !== (question.group.instruction ?? ""))) {
-      context.addIssue({ code: "custom", message: "同一题组的标题和作答说明必须一致", path: ["pretest"] });
+    if (previous && (previous.title !== question.group.title || (previous.instruction ?? "") !== (question.group.instruction ?? "") || (previous.referenceNote ?? "") !== (question.group.referenceNote ?? ""))) {
+      context.addIssue({ code: "custom", message: "同一题组的标题、作答说明和指代说明必须一致", path: ["pretest"] });
     }
     groups.set(question.group.id, question.group);
   }
@@ -97,6 +104,11 @@ export type ExperimentConfig = z.infer<typeof ExperimentConfigSchema>;
 export type ExperimentQuestion = ExperimentConfig["pretest"][number];
 export type ExperimentAnswer = string | string[];
 export type ExperimentVariant = "none" | "A_PRE_B_POST" | "B_PRE_A_POST";
+
+export function experimentQuestionBankLimit(config: ExperimentConfig, bank: "sharedQuestions" | ExperimentPhase) {
+  return EXPERIMENT_QUESTION_LIMIT - (config.scenarioPair ? 1 : 0)
+    - (bank === "sharedQuestions" ? Math.max(config.pretest.length, config.posttest.length) : config.sharedQuestions.length);
+}
 
 /** Keep each titled group together while retaining the order of its first question. */
 export function groupExperimentQuestions<T extends { group?: ExperimentQuestionGroup }>(questions: T[]) {

@@ -1226,6 +1226,7 @@ function GenerationCheckpointPreview({
           courseId={course.id}
           key={preview.classroomId}
           knowledgeGraph={course.content.knowledgeGraph}
+          courseMindMap={course.content.courseMindMap}
           knowledgePoints={course.content.knowledgePoints}
           mode="teacher-preview"
           previewRefreshKey={lifecycleKey}

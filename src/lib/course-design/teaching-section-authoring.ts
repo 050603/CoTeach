@@ -10,12 +10,14 @@ import { PPT_PAGE_PLANNING_CONTRACT, PPT_PAGE_PLANNING_GUIDANCE, PPT_PAGE_PLANNI
 import { PPT_PAGE_PLANNING_CONTRACT as LEGACY_PAGE_CONTRACT, PPT_PAGE_PLANNING_GUIDANCE as LEGACY_PAGE_GUIDANCE } from './legacy-ppt-page-planning-contract';
 import type { SourceSequenceUse } from '@/lib/textbook/source-sequence-use';
 import type { CourseEvidenceItem } from '@/lib/textbook/course-evidence-types';
+import { loadSnippet } from '@/lib/openmaic/prompts';
 
 export const LEGACY_SPOKEN_SECTION_POLICY = 'source-spoken-section-v1';
 export const PREVIOUS_NATIVE_SPOKEN_SECTION_POLICY = 'source-spoken-section-v2-native-pages-4615';
-export const SPOKEN_SECTION_POLICY = 'source-spoken-section-v3-native-pages-4615';
+export const PREVIOUS_SOURCE_SPOKEN_SECTION_POLICY = 'source-spoken-section-v3-native-pages-4615';
+export const SPOKEN_SECTION_POLICY = 'source-spoken-section-v4-natural-oral-narration';
 export type SpokenSectionPolicy = typeof SPOKEN_SECTION_POLICY | typeof LEGACY_SPOKEN_SECTION_POLICY
-  | typeof PREVIOUS_NATIVE_SPOKEN_SECTION_POLICY;
+  | typeof PREVIOUS_NATIVE_SPOKEN_SECTION_POLICY | typeof PREVIOUS_SOURCE_SPOKEN_SECTION_POLICY;
 type RecordValue = Record<string, unknown>;
 const object = (value: unknown): RecordValue => {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('小节创作需要 JSON 对象');
@@ -25,12 +27,13 @@ const text = (value: unknown) => typeof value === 'string' ? value.trim() : '';
 const list = (value: unknown): string[] => Array.isArray(value) ? value.map(text).filter(Boolean) : [];
 const kinds = new Set(['term', 'concept', 'relation', 'mechanism', 'example', 'condition', 'misconception']);
 
-/** Saved requests retain their exact prompt/compiler; new tasks opt into native pages. */
+/** Saved requests retain their exact prompt/compiler; new tasks use the oral first-draft policy. */
 export function savedSpokenSectionPolicy(rows: readonly { state: unknown }[]): SpokenSectionPolicy {
   const policies = new Set<SpokenSectionPolicy>(rows.flatMap(({ state }): SpokenSectionPolicy[] => {
     if (!state || typeof state !== 'object' || Array.isArray(state)) return [];
     const value = state as RecordValue;
     if (value.authoringPolicy === SPOKEN_SECTION_POLICY) return [SPOKEN_SECTION_POLICY];
+    if (value.authoringPolicy === PREVIOUS_SOURCE_SPOKEN_SECTION_POLICY) return [PREVIOUS_SOURCE_SPOKEN_SECTION_POLICY];
     if (value.authoringPolicy === PREVIOUS_NATIVE_SPOKEN_SECTION_POLICY) return [PREVIOUS_NATIVE_SPOKEN_SECTION_POLICY];
     if (value.authoringPolicy === LEGACY_SPOKEN_SECTION_POLICY) return [LEGACY_SPOKEN_SECTION_POLICY];
     if (value.authoringPolicy !== undefined && value.authoringPolicy !== null) {
@@ -384,7 +387,8 @@ export function buildSpokenSectionRequest(input: TeachingBlueprintInput, index: 
   const plan = input.sectionPlans?.[index];
   if (!plan) throw new Error('小节口播缺少已确认的小节范围');
   const sectionId = `teaching-section-${index + 1}`;
-  const sourceBlocks = spokenSectionSources(input, plan, authoringPolicy === SPOKEN_SECTION_POLICY);
+  const sourceBlocks = spokenSectionSources(input, plan, authoringPolicy === SPOKEN_SECTION_POLICY
+    || authoringPolicy === PREVIOUS_SOURCE_SPOKEN_SECTION_POLICY);
   const budget = sectionBudget(input, index);
   const pointIds = new Set(plan.knowledgePointIds);
   const native = authoringPolicy !== LEGACY_SPOKEN_SECTION_POLICY;
@@ -420,7 +424,9 @@ export function buildSpokenSectionRequest(input: TeachingBlueprintInput, index: 
     textbookFigures: input.textbookFigures?.filter((figure) => figure.knowledgePointIds.some((id) => pointIds.has(id))),
     sourceSequences: input.sourceSequences?.filter((sequence) => sequence.knowledgePointIds.some((id) => pointIds.has(id))),
   });
-  const system = native ? SYSTEM : LEGACY_SYSTEM;
+  const system = authoringPolicy === SPOKEN_SECTION_POLICY
+    ? `${SYSTEM}\n\n${loadSnippet('adaptive-narration-policy')}`
+    : native ? SYSTEM : LEGACY_SYSTEM;
   return { sectionId, system, prompt, sourceBlocks, authoringPolicy,
     fingerprint: fingerprintGenerationValue({ policy: authoringPolicy, model: input.generationModelFingerprint,
       system, prompt }) };

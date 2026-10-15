@@ -24,6 +24,7 @@ import {
 import { PrimaryButton } from "@/components/ui";
 import { FinalArtifactSubmission } from "@/components/views/student/final-artifact-submission";
 import { ExternalArtifactSubmission } from "@/components/views/student/external-artifact-submission";
+import { CollaborationProjectDetails } from "./collaboration-project-details";
 import {
   AiMemberWorkspace,
   type AiMemberWorkspaceMessage,
@@ -1945,6 +1946,14 @@ export function DocumentAiCollaboration({
         currentStage={{ index: course.currentStageIndex, total: course.stages.length, label: stage?.label ?? "项目实践" }}
         currentTask={stage?.description}
         headerSlot={stage ? <StudentClassroomHeaderStatus course={course} /> : undefined}
+        saveStatus={{
+          state: session.saveState === "error" ? "error"
+            : saveStatus === "saved" && session.saveState === "saving" ? "saving" : saveStatus,
+          onRetry: () => {
+            if (saveStatus === "error" || saveStatus === "unsaved") void persistDocument(documentHtml, "manual");
+            else void session.retrySave();
+          },
+        }}
         hideCourseSwitcher
         leadRole="学生"
         role="student"
@@ -1952,10 +1961,13 @@ export function DocumentAiCollaboration({
       />
       <header className={cn(collaborationStyles.workspaceHeader, "sticky top-16 z-[60] min-h-16 border-b border-[var(--pbl-border)] bg-[color-mix(in_srgb,var(--pbl-surface)_96%,transparent)] backdrop-blur-sm")}>
         <div className="flex min-h-16 w-full flex-wrap items-center justify-between gap-3 px-2 py-2 sm:px-3 lg:px-4">
-          <div className="min-w-0 flex-[1_1_12rem]">
-            <p className="text-[10px] font-medium leading-none text-stone-500">{isExternalArtifact ? "本地成果协作" : "选题方向"}</p>
-            <h1 className="mt-1 truncate text-base font-bold leading-tight text-stone-950 sm:text-lg">{projectTitle}</h1>
-          </div>
+          <CollaborationProjectDetails
+            course={course}
+            stageKey={stageKey}
+            projectTitle={projectTitle}
+            projectGoal={group?.goal}
+            label={isExternalArtifact ? "本地成果协作" : "选题方向"}
+          />
           <div className={cn(collaborationStyles.headerActions, "flex items-center gap-2 sm:gap-3")}>
             {localDraftError && <span role="alert" className="text-xs text-rose-700">{localDraftError}<button type="button" className="ml-2 underline" onClick={() => {
               const drafts = readDocumentDrafts(loadedScopeRef.current);
@@ -1964,7 +1976,11 @@ export function DocumentAiCollaboration({
             }}>下载本机草稿</button></span>}
             {interactionSyncError && <span role="alert" className="text-xs text-rose-700">{interactionSyncError}</span>}
             {proactiveReviewSyncError && <span role="alert" className="text-xs text-rose-700">{proactiveReviewSyncError}</span>}
-            <span className="hidden sm:inline-flex"><SaveState status={session.saveState === "error" ? "error" : saveStatus} /></span>
+            {isExternalArtifact ? (
+              <ExternalArtifactSubmission course={course} studentId={studentId} />
+            ) : stageKey === "make" && inferStageCollectionMode(course.stages) === "new" ? (
+              <FinalArtifactSubmission course={course} />
+            ) : null}
             <PrimaryButton
               disabled={saveStatus === "saving" || submitting}
               onClick={() => void persistDocument(documentHtml, "manual")}
@@ -1983,16 +1999,6 @@ export function DocumentAiCollaboration({
               >
                 {submitting ? <LoaderCircle className="animate-spin" size={14} /> : <Send size={14} />}
                 {submitting ? "生成 Word…" : submittedVersion ? `提交第 ${submittedVersion.sequence + (saveStatus === "unsaved" || saveStatus === "error" ? 1 : 0)} 版` : "提交最终版"}
-              </PrimaryButton>
-            ) : null}
-            {isExternalArtifact ? (
-              <PrimaryButton
-                disabled={saveStatus === "saving" || session.saveState === "saving" || Boolean(pendingSuggestion) || Boolean(pendingDelivery)}
-                onClick={() => window.dispatchEvent(new Event("openpbl:open-external-upload"))}
-                size="sm"
-                tone="blue"
-              >
-                <Send size={14} />提交成果
               </PrimaryButton>
             ) : null}
           </div>
@@ -2068,16 +2074,6 @@ export function DocumentAiCollaboration({
             </details>
           ) : null}
         </section>
-
-        {isExternalArtifact ? (
-          <div className="mt-4">
-            <ExternalArtifactSubmission course={course} studentId={studentId} />
-          </div>
-        ) : stageKey === "make" && inferStageCollectionMode(course.stages) === "new" ? (
-          <div className="mt-4">
-      <FinalArtifactSubmission course={course} />
-          </div>
-        ) : null}
 
         {memberOpen ? (
           <AiMemberWorkspace
@@ -2167,18 +2163,6 @@ export function DocumentAiCollaboration({
         ) : null}
       </div>
     </main>
-  );
-}
-
-function SaveState({ status }: { status: "saved" | "unsaved" | "saving" | "error" }) {
-  const copy = status === "saving" ? "保存中" : status === "unsaved" ? "待同步" : status === "error" ? "同步失败，请检查保存状态" : "服务器已保存";
-  return (
-    <span className={cn(
-      "hidden items-center gap-1.5 text-xs sm:inline-flex",
-      status === "error" ? "text-rose-700" : status === "unsaved" ? "text-amber-700" : "text-stone-500",
-    )}>
-      {status === "saving" ? <LoaderCircle className="animate-spin" size={13} /> : status === "error" ? <RefreshCcw size={13} /> : <Check size={13} />}{copy}
-    </span>
   );
 }
 

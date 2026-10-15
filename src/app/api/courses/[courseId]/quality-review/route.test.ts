@@ -1,7 +1,7 @@
 // @vitest-environment node
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const mocks = vi.hoisted(() => ({ authorize: vi.fn(), enqueue: vi.fn(), load: vi.fn(), confirm: vi.fn(), save: vi.fn(), startRender: vi.fn(), freshQuality: vi.fn(), freshRender: vi.fn(), structureIssues: vi.fn() }));
+const mocks = vi.hoisted(() => ({ authorize: vi.fn(), enqueue: vi.fn(), load: vi.fn(), confirm: vi.fn(), save: vi.fn(), startRender: vi.fn(), freshQuality: vi.fn(), freshRender: vi.fn(), structureIssues: vi.fn(), authenticReview: vi.fn(), audioPublication: vi.fn() }));
 vi.mock('@/lib/platform/template-access', () => ({ authorizeTemplateRequest: mocks.authorize }));
 vi.mock('@/lib/course-quality-review/job-runner', () => ({ enqueueCourseQualityReview: mocks.enqueue }));
 vi.mock('@/lib/course-quality-review/semantic-review', () => ({ collectCourseStructureIssues: mocks.structureIssues }));
@@ -15,7 +15,9 @@ vi.mock('@/lib/course-quality-review/review-service', () => ({
   confirmCourseTeacherReview: mocks.confirm,
   saveCourseRenderPage: mocks.save,
   startCourseRenderReview: mocks.startRender,
+  isAuthenticTeacherReview: mocks.authenticReview,
 }));
+vi.mock('@/lib/course-quality-review/audio-publication', () => ({ hasAuthenticCourseAudioPublication: mocks.audioPublication }));
 import { GET, POST } from './route';
 const context = { params: Promise.resolve({ courseId: 'course' }) };
 const url = 'http://localhost/api/courses/course/quality-review';
@@ -25,6 +27,8 @@ beforeEach(() => {
   mocks.freshQuality.mockReturnValue(undefined);
   mocks.freshRender.mockReturnValue(undefined);
   mocks.authorize.mockResolvedValue('teacher');
+  mocks.authenticReview.mockReturnValue(false);
+  mocks.audioPublication.mockReturnValue(false);
   mocks.load.mockResolvedValue({ course: { content: {} }, classroom: { id: 'classroom', scenes: [] }, signature: 'a'.repeat(64) });
 });
 describe('optional teacher checks', () => {
@@ -52,6 +56,24 @@ describe('optional teacher checks', () => {
     const body = await (await GET(new Request(url), context)).json();
     expect(body.reviewScope).toEqual({ kind: 'test-lesson', checkedSectionId: 'unit-a', checkedSectionTitle: '方法基础',
       checkedOutlineIds: ['parent-a', 'parent-b'], uncheckedOutlineCount: 6, unreviewedSectionCount: 2 });
+  });
+  it('retains authenticated source review evidence and explicitly identifies the new audio as an operational update', async () => {
+    const teacherReview = { signature: 'old-source-signature', seal: 'old-authentic-seal', classroomId: 'original-classroom' };
+    const qualityReview = { signature: 'old-source-signature', status: 'completed', issues: [] };
+    const renderReview = { signature: 'old-source-signature', pages: [{ sceneId: 'slide', status: 'completed', issues: [] }] };
+    const audioPublication = { publishedAt: '2026-10-14T00:00:00Z', sourceVersionId: 'v3' };
+    mocks.load.mockResolvedValue({ course: { id: 'course', content: { teacherReview, qualityReview, renderReview,
+      teachingRevisionState: { audioPublication } } }, classroom: { id: 'new-classroom', scenes: [] }, signature: 'a'.repeat(64) });
+    mocks.authenticReview.mockReturnValue(true); mocks.audioPublication.mockReturnValue(true);
+    const body = await (await GET(new Request(url), context)).json();
+    expect(body.teacherReview).toEqual(teacherReview);
+    expect(body.quality.signature).toBe(qualityReview.signature);
+    expect(body.renderReview.signature).toBe(renderReview.signature);
+    expect(body.audioPublication).toEqual({ ...audioPublication, inheritsTeacherContentReview: true, audioTeacherReviewed: false });
+    expect(mocks.enqueue).not.toHaveBeenCalled(); expect(mocks.confirm).not.toHaveBeenCalled();
+    mocks.audioPublication.mockReturnValue(false);
+    const stale = await (await GET(new Request(url), context)).json();
+    expect(stale.teacherReview).toBeNull(); expect(stale.audioPublication).toBeNull(); expect(stale.quality).toBeNull();
   });
   it('reports unsolved knowledge coverage as a diagnostic without starting or blocking on another review', async () => {
     mocks.structureIssues.mockReturnValue([{ id: 'hard', origin: 'structure', severity: 'error', blocking: true, title: '必需知识缺少讲授页面', evidence: '知识点 A', suggestion: '补齐讲授页' }]);

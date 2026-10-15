@@ -6,6 +6,7 @@ import type { Course, KnowledgePoint, OpenMaicSceneOutlineSnapshot, TeachingOutl
 import { allocateLectureBudget, isKnowledgeLectureBudgetInRange } from "./knowledge-lecture-budget";
 import type { CourseStagePlan } from "@/lib/resource-package/types";
 import { hasPendingCourseDesignUpdates } from "@/lib/course-design/workspace";
+import { hasCourseAudioPublicationIdentity } from "@/lib/course-quality-review/teacher-review";
 
 export const NEW_SYSTEM_AI_TIMING_POLICY_VERSION = "shared-knowledge-cluster-budget-v3-learning-boundary";
 
@@ -317,8 +318,11 @@ export function getNewSystemCourseReadiness(
       id: "teacher-review",
       label: "教师终审",
       ok: Boolean(course.content.teacherReview?.signature
-        && course.content.teacherReview.classroomId === (course.aiLearningClassroomId || course.content._openmaicClassroomId)),
-      message: "请在预览发布页面确认当前版本可以授课。",
+        && (course.content.teacherReview.classroomId === (course.aiLearningClassroomId || course.content._openmaicClassroomId)
+          || hasCourseAudioPublicationIdentity(course))),
+      message: hasCourseAudioPublicationIdentity(course)
+        ? "已沿用原内容终审，音频已更新并重新同步页面动作。"
+        : "请在预览发布页面确认当前版本可以授课。",
     }] : []),
     {
       id: "basics",

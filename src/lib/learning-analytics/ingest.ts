@@ -14,7 +14,7 @@ const text = z.string().min(1).max(500);
 const seconds = z.number().finite().nonnegative().optional();
 const eventSchema = z.object({
   id: text, idempotencyKey: text, courseId: text, studentId: text, stageKey: text,
-  sceneId: text.optional(), type: z.enum(["scene-enter", "scene-leave", "scene-complete", "heartbeat", "scene-replay", "interaction-result", "artifact-change", "stage-enter", "stage-goal-complete", "resource-open", "resource-progress", "resource-complete"]),
+  sceneId: text.optional(), type: z.enum(["scene-enter", "scene-leave", "scene-complete", "heartbeat", "scene-replay", "knowledge_explanation_view", "interaction-result", "artifact-change", "stage-enter", "stage-goal-complete", "resource-open", "resource-progress", "resource-complete"]),
   occurredAt: z.string().datetime(), durationMs: z.number().int().min(0).max(2_147_483_647).optional(),
   expectedDurationSec: seconds, ttsDurationSec: seconds, plannedStudentActivitySec: seconds,
   visible: z.boolean().optional(), progressMarker: z.string().optional(),

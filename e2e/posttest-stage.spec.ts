@@ -2,13 +2,15 @@ import { expect, test, type Page } from "@playwright/test";
 import { SignJWT } from "jose";
 import { readFileSync } from "node:fs";
 import { DEFAULT_STAGES, type Course } from "../src/lib/session/types";
+import { composeExperimentForms, publicExperimentQuestions, type ExperimentConfig, type ExperimentQuestion } from "../src/lib/platform/experiment";
+import { COTEACH_COMMUNITY_REFERENCE, COTEACH_SYSTEM_REFERENCE, COTEACH_TEACHER_REFERENCE, createCoTeachAssessmentTemplate } from "../src/lib/platform/experiment-templates";
 
 test.use({ serviceWorkers: "block" });
 
 const courseId = "e2e-posttest-layout";
 const studentId = "e2e-posttest-student";
 const fixedTime = "2026-09-25T00:00:00.000Z";
-const questions = [
+const questions: ExperimentQuestion[] = [
   { id: "q1", type: "single-choice", prompt: "哪种方法更适合观察校园能耗？", options: ["甲：记录数据", "乙：凭印象判断"], group: { id: "observation", title: "观察与证据", instruction: "根据课堂中的节能情境作答。" } },
   { id: "q2", type: "multiple-choice", prompt: "哪些记录可以帮助比较？", options: ["用电量", "使用时段", "墙面颜色"], group: { id: "observation", title: "观察与证据", instruction: "根据课堂中的节能情境作答。" } },
   { id: "q3", type: "true-false", prompt: "比较前需要统一记录口径。" },
@@ -30,7 +32,7 @@ function course(): Course {
   } as Course;
 }
 
-async function mockClassroom(page: Page, role: "student" | "teacher", assessmentPhase?: "pretest" | "posttest", assessmentQuestions = questions) {
+async function mockClassroom(page: Page, role: "student" | "teacher", assessmentPhase?: "pretest" | "posttest", assessmentQuestions: ExperimentQuestion[] = questions) {
   const baseURL = process.env.OPENPBL_RESOURCE_E2E_BASE_URL || "http://localhost:3000";
   const secret = process.env.OPENPBL_E2E_JWT_SECRET_FILE
     ? readFileSync(process.env.OPENPBL_E2E_JWT_SECRET_FILE, "utf8").trim()
@@ -93,6 +95,103 @@ async function mockClassroom(page: Page, role: "student" | "teacher", assessment
     return json({ message: `Missing fixture: ${path}` }, 404);
   });
   return baseURL;
+}
+
+const templateViewports = [
+  { width: 390, height: 844 },
+  { width: 844, height: 390 },
+  { width: 820, height: 1180 },
+  { width: 1180, height: 820 },
+  { width: 1366, height: 768 },
+  { width: 768, height: 576 },
+];
+
+for (const viewport of templateViewports) {
+  test(`teacher applies and saves the CoTeach template at ${viewport.width}x${viewport.height}`, async ({ page }, info) => {
+    await page.setViewportSize(viewport);
+    const baseURL = await mockClassroom(page, "teacher");
+    let config: { customSetting: string; experiment?: ExperimentConfig } = { customSetting: "preserved" };
+    let savedVersion: number | null = null;
+    await page.route("**/api/platform/offerings", (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify({ offerings: [{ id: "offering", name: "模板验收教学班", chapters: [{ id: "chapter", title: "教学理论", activities: [{ id: "activity", title: "模板验收课堂", type: "Classroom", version: 1, config }] }] }] }) }));
+    await page.route("**/api/platform/activities/activity/manage", (route) => {
+      const input = route.request().postDataJSON();
+      config = input.config;
+      savedVersion = input.version;
+      return route.fulfill({ contentType: "application/json", body: JSON.stringify({ activity: { id: "activity", version: 2 } }) });
+    });
+    await page.goto(`${baseURL}/teacher/classes/offering/activities/activity/experiment`);
+    const template = page.getByRole("region", { name: "前后测模板", exact: true });
+    const description = await template.getByText("前测 9 道知识题；后测 9 道知识题、34 道 CoI 和 10 道系统使用体验题。", { exact: true }).boundingBox();
+    expect(description && description.width > 200).toBe(true);
+    await page.getByRole("button", { name: "一键应用前后测模板" }).click();
+    await expect(page.getByRole("tab", { name: "共用题 9" })).toBeVisible();
+    await expect(page.getByRole("tab", { name: "后测专属 44" })).toBeVisible();
+    await page.getByRole("tab", { name: "学生视角预览" }).click();
+    await page.getByRole("tab", { name: "后测", exact: true }).click();
+    const preview = page.getByLabel("后测题目预览");
+    await expect(preview.locator("fieldset")).toHaveCount(53);
+    for (const note of [COTEACH_TEACHER_REFERENCE, COTEACH_COMMUNITY_REFERENCE, COTEACH_SYSTEM_REFERENCE]) {
+      await expect(preview.getByText(note, { exact: true })).toBeVisible();
+    }
+    await preview.getByText(COTEACH_COMMUNITY_REFERENCE, { exact: true }).scrollIntoViewIfNeeded();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);
+    const screenshot = info.outputPath(`template-preview-${viewport.width}x${viewport.height}.png`);
+    await page.screenshot({ path: screenshot });
+    await info.attach("template-community-reference", { path: screenshot, contentType: "image/png" });
+    await page.getByRole("button", { name: "保存实验配置" }).first().click();
+    await expect(page.getByText("实验配置已保存到本课堂", { exact: true })).toBeVisible();
+    expect(savedVersion).toBe(1);
+    expect(config.customSetting).toBe("preserved");
+    expect(config.experiment?.sharedQuestions).toHaveLength(9);
+    expect(config.experiment?.posttest).toHaveLength(44);
+    expect(config.experiment?.posttest[13].group?.referenceNote).toBe(COTEACH_COMMUNITY_REFERENCE);
+  });
+
+  test(`student sees the CoTeach reference on each social page at ${viewport.width}x${viewport.height}`, async ({ page }, info) => {
+    test.setTimeout(60_000);
+    const form = publicExperimentQuestions(composeExperimentForms(createCoTeachAssessmentTemplate(), "none", () => 0).posttest);
+    await page.setViewportSize(viewport);
+    const baseURL = await mockClassroom(page, "student", "posttest", form);
+    await page.goto(`${baseURL}/student/activities/activity/assessments/${courseId}/posttest`);
+    await expect(page.getByText(/^K01　/)).toBeVisible();
+    if (viewport.width < 1024) await page.getByRole("button", { name: /答题目录/ }).click();
+    await page.getByRole("button", { name: "课程学习体验问卷（CoI）· 社会性存在（第14—22题）" }).first().click();
+    for (const number of [14, 18, 22]) {
+      await expect(page.getByText(new RegExp(`^CoI${number}　`))).toBeVisible();
+      const note = page.getByText(COTEACH_COMMUNITY_REFERENCE, { exact: true });
+      await expect(note).toBeVisible();
+      await expect(page.getByText("指代说明 · 请先阅读", { exact: true })).toBeVisible();
+      if (number < 22) await page.getByRole("button", { name: "下一步", exact: true }).click();
+    }
+    const noteBox = page.getByText(COTEACH_COMMUNITY_REFERENCE, { exact: true }).locator("..").locator("..");
+    await noteBox.evaluate((element) => element.scrollIntoView({ block: "start", behavior: "instant" }));
+    const [noteBounds, footerBounds] = await Promise.all([
+      noteBox.boundingBox(),
+      page.getByRole("contentinfo", { name: "后测操作栏", exact: true }).boundingBox(),
+    ]);
+    expect(noteBounds && footerBounds && noteBounds.y >= -1 && noteBounds.y + noteBounds.height <= footerBounds.y).toBe(true);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);
+    const screenshot = info.outputPath(`template-student-${viewport.width}x${viewport.height}.png`);
+    await page.screenshot({ path: screenshot });
+    await info.attach("student-community-reference", { path: screenshot, contentType: "image/png" });
+    if (viewport.width === 1366) {
+      await page.getByRole("button", { name: "知识测验（共9题）", exact: true }).first().click();
+      for (let index = 0; index < form.length; index++) {
+        const unknown = page.getByRole("radio", { name: "不知道", exact: true });
+        const choices = await unknown.count() ? unknown : page.getByRole("radio", { name: "4 分", exact: true });
+        for (const choice of await choices.all()) await choice.locator("..").click();
+        const next = page.getByRole("button", { name: "下一步", exact: true });
+        if (!await next.count()) break;
+        await next.click();
+      }
+      await page.getByRole("button", { name: "检查并提交", exact: true }).click();
+      await expect(page.getByText("所有题目已完成", { exact: true })).toBeVisible();
+      const request = page.waitForRequest((candidate) => new URL(candidate.url()).pathname.endsWith("/experiment") && candidate.method() === "POST");
+      await page.getByRole("button", { name: "确认提交后测", exact: true }).click();
+      expect(Object.keys((await request).postDataJSON().answers)).toHaveLength(53);
+      await expect(page.getByText("后测已提交，答案已保存到本次课堂记录。", { exact: true })).toBeVisible();
+    }
+  });
 }
 
 for (const { phase, viewport, short } of [

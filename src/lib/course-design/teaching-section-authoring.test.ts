@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { buildSpokenSectionRequest, compileSpokenSection, generateSpokenTeachingBlueprint, spokenBlueprintIssues,
-  LEGACY_SPOKEN_SECTION_POLICY, PREVIOUS_NATIVE_SPOKEN_SECTION_POLICY, SPOKEN_SECTION_POLICY, savedSpokenSectionPolicy } from './teaching-section-authoring';
+  LEGACY_SPOKEN_SECTION_POLICY, PREVIOUS_NATIVE_SPOKEN_SECTION_POLICY, PREVIOUS_SOURCE_SPOKEN_SECTION_POLICY,
+  SPOKEN_SECTION_POLICY, savedSpokenSectionPolicy } from './teaching-section-authoring';
 import { adaptTeachingBlueprintResourceCapabilities, applyReviewedOutlinesToTeachingBlueprint, generateTeachingBlueprint, revalidateStoredTeachingBlueprint, teachingBlueprintToOutlines,
   validateTeachingBlueprintBudget, type TeachingBlueprintInput } from './teaching-blueprint';
 import { PPT_PAGE_PLANNING_CONTRACT, PPT_PAGE_PLANNING_VERSION } from './ppt-page-planning-contract';
@@ -49,6 +50,70 @@ function fishCaseInput(): TeachingBlueprintInput {
 }
 
 describe('source-first spoken sections', () => {
+  it('sends the shared natural oral instructions in the first author request without changing the adopted page and source inputs', () => {
+    const source = input();
+    const savedRequest = buildSpokenSectionRequest(source, 0, [], PREVIOUS_SOURCE_SPOKEN_SECTION_POLICY);
+    const firstRequest = buildSpokenSectionRequest(source, 0);
+    expect(firstRequest.authoringPolicy).toBe(SPOKEN_SECTION_POLICY);
+    expect(firstRequest.system).toContain("write the teacher's complete utterance to be read verbatim by TTS");
+    expect(firstRequest.system).toContain('Write for hearing once');
+    expect(firstRequest.system).toContain('Do not replace the colon with a comma or a semicolon-separated mini-outline');
+    expect(firstRequest.system).toContain('“最后收束：”“原文举例：”');
+    expect(firstRequest.system).toContain('Before returning the first draft in this same authoring response');
+    expect(firstRequest.system).toContain('Do not output this self-check, commission another review call');
+    expect(firstRequest.prompt).toBe(savedRequest.prompt);
+    expect(firstRequest.sourceBlocks).toEqual(savedRequest.sourceBlocks);
+    expect(firstRequest.fingerprint).not.toBe(savedRequest.fingerprint);
+    expect(savedRequest.system).not.toContain('Adaptive teaching and narration');
+  });
+
+  // Fixed receipts captured from the archived implementation guard restoration
+  // against an accidental prompt, source selection or contract upgrade.
+  it.each([
+    [LEGACY_SPOKEN_SECTION_POLICY, 'afb20915533c99d118e54abbae73972f1603fdcbc6cdb517250ccbd34a691413'],
+    [PREVIOUS_NATIVE_SPOKEN_SECTION_POLICY, '125bcec3ac68f312049eb21f9b04d2cd707c800682ba80953ead953e8383501d'],
+    [PREVIOUS_SOURCE_SPOKEN_SECTION_POLICY, '405d55a8b597e288bf4d7f9ff90f63d16f1b439eea695731710c36b394fbfc46'],
+  ] as const)('preserves the original request receipt when replaying %s', (policy, fingerprint) => {
+    const saved = { authoringPolicy: policy, rawResponse: policy === LEGACY_SPOKEN_SECTION_POLICY ? legacyResponse(0) : response(0),
+      inputFingerprint: fingerprint, attemptsStarted: 1 };
+    const before = structuredClone(saved);
+    const restoredPolicy = savedSpokenSectionPolicy([{ state: saved }]);
+    const request = buildSpokenSectionRequest(input(), 0, [], restoredPolicy);
+    expect(restoredPolicy).toBe(policy);
+    expect(request.fingerprint).toBe(saved.inputFingerprint);
+    expect(request.system).not.toContain('Adaptive teaching and narration');
+    const compiled = compileSpokenSection(saved.rawResponse, input(), 0, request);
+    expect(compiled.units[0]!.explanationNodes!.map((node) => node.content))
+      .toEqual(JSON.parse(saved.rawResponse).segments.map((segment: { text: string }) => segment.text));
+    expect(saved).toEqual(before);
+  });
+
+  it('persists each first response exactly as compiled with one author call per section and no style repair or diagnostic layer', async () => {
+    const source = input();
+    const rawResponses = [0, 1].map((index) => {
+      const raw = JSON.parse(response(index));
+      // Restoring a purchased response must not silently replace its text,
+      // even if it predates the improved first-draft wording instructions.
+      raw.segments[0].text = index === 0 ? '训练集：用于学习模型参数。原文举例：一个分类任务。' : '最后收束：检验数据不参与参数学习。';
+      return JSON.stringify(raw);
+    });
+    const author = vi.fn(async (_request, index: number) => rawResponses[index]!);
+    const persist = vi.fn(async () => undefined);
+    const blueprint = await generateSpokenTeachingBlueprint(source, 'oral-first-draft', author, persist);
+    expect(author).toHaveBeenCalledTimes(2);
+    expect(persist).toHaveBeenCalledTimes(2);
+    for (const [index, section] of blueprint.sections.entries()) {
+      const request = author.mock.calls[index]![0];
+      const compiled = compileSpokenSection(rawResponses[index]!, source, index, request);
+      expect(section).toEqual(compiled);
+      expect(persist.mock.calls[index]).toEqual([compiled, request, index, rawResponses[index]]);
+      expect(section.units[0]!.explanationNodes!.map((node) => node.content))
+        .toEqual(JSON.parse(rawResponses[index]!).segments.map((segment: { text: string }) => segment.text));
+    }
+    expect(JSON.parse(author.mock.calls[1]![0].prompt).previousSpokenEnding)
+      .toEqual(JSON.parse(rawResponses[0]!).segments.map((segment: { text: string }) => segment.text));
+  });
+
   it('retains the authored page meaning and weights through compilation and teacher confirmation without a display projection', async () => {
     const source = input();
     const authored = JSON.parse(response(0));
@@ -117,7 +182,9 @@ describe('source-first spoken sections', () => {
     expect(legacy.sections[0]!.pages[0]!.presentationItems![0]!.text).toBe('旧显示要点');
     expect(modern.sections[0]!.pptPlanningVersion).toBe(PPT_PAGE_PLANNING_VERSION);
     expect(modern.sections[0]!.pages[0]).not.toHaveProperty('presentationItems');
-    for (const blueprint of [legacy, modern]) {
+    const archivedNative = await Promise.all(([PREVIOUS_NATIVE_SPOKEN_SECTION_POLICY, PREVIOUS_SOURCE_SPOKEN_SECTION_POLICY] as const)
+      .map((policy) => generateSpokenTeachingBlueprint(input(), policy, async (_request, index) => response(index), undefined, policy)));
+    for (const blueprint of [legacy, ...archivedNative, modern]) {
       const before = structuredClone(blueprint);
       const aiCall = vi.fn();
       const restored = await generateTeachingBlueprint(input(), aiCall, { repairFrom: {
@@ -235,6 +302,9 @@ describe('source-first spoken sections', () => {
       rawResponse: response(0) } }])).toBe(PREVIOUS_NATIVE_SPOKEN_SECTION_POLICY);
     const current = buildSpokenSectionRequest(source, 0);
     expect(current.prompt).toContain('环境也是认知系统的一部分');
+    const previousSource = buildSpokenSectionRequest(source, 0, [], PREVIOUS_SOURCE_SPOKEN_SECTION_POLICY);
+    expect(previousSource.prompt).toBe(current.prompt);
+    expect(previousSource.sourceBlocks).toEqual(current.sourceBlocks);
     const raw = JSON.parse(response(0));
     raw.segments[0].sourceRefs = ['e1:adopted-original'];
     expect(compileSpokenSection(JSON.stringify(raw), source, 0, current).units[0]!.explanationNodes![0]!.sourceBindings)
@@ -724,7 +794,7 @@ describe('source-first spoken sections', () => {
     expect(blueprint.sections[0]!.units[0]!.explanationNodes![0]!.content).toBe(fishCaseSource);
   });
 
-  it.each([PREVIOUS_NATIVE_SPOKEN_SECTION_POLICY, SPOKEN_SECTION_POLICY] as const)(
+  it.each([PREVIOUS_NATIVE_SPOKEN_SECTION_POLICY, PREVIOUS_SOURCE_SPOKEN_SECTION_POLICY, SPOKEN_SECTION_POLICY] as const)(
     'replays a complete textbook observation without kind under its saved contract (%s)', async (policy) => {
       const source = input();
       source.resourceCapabilities = { imageGenerationEnabled: false, videoGenerationEnabled: false };

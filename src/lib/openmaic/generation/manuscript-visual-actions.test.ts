@@ -2,8 +2,11 @@ import { describe, expect, it, vi } from 'vitest';
 import type { PPTElement } from '@openmaic/dsl';
 import type { GeneratedSlideContent, SceneOutline } from '../types/generation';
 import type { NarrationModuleOutput } from './action-binding-types';
+import type { WbDrawTextAction } from '../types/action';
 import { compileManuscriptVisualActions, generateManuscriptVisualActions } from './manuscript-visual-actions';
 import { calibrateGeneratedVisualCues } from './semantic-visual-cues';
+import { auditWhiteboardLayout } from '../whiteboard/layout';
+import { normalizeWhiteboardActionLayout } from './whiteboard-layout';
 
 const outline: SceneOutline = { id: 'page', type: 'slide', title: '核对流程', description: '解释核对与比较', keyPoints: [], order: 0 };
 const content: GeneratedSlideContent = { elements: [
@@ -130,5 +133,241 @@ describe('visual orchestration on an immutable manuscript', () => {
     const failure = new Error('provider unavailable');
     await expect(generateManuscriptVisualActions({ outline, content, narration: narration('讲稿。'),
       aiCall: vi.fn().mockRejectedValue(failure) })).rejects.toBe(failure);
+  });
+});
+
+describe('progressive whiteboard orchestration on the saved manuscript', () => {
+  const step = (content: string, quote: string, title?: string) => ({ content,
+    ...(title ? { title } : {}), speechId: 'saved-id', speechAnchor: { quote, occurrence: 0 } });
+  const exit = (quote: string) => ({ speechId: 'saved-id', speechAnchor: { quote, occurrence: 0 } });
+  const board = (steps: ReturnType<typeof step>[], extra = {}) => ({ title: '前期分析', steps,
+    exit: exit('返回流程'), ...extra });
+  const run = (text: string, whiteboards: unknown, configuredOutline = outline, cues: unknown[] = []) =>
+    compileManuscriptVisualActions({ outline: configuredOutline, content, narration: narration(text),
+      output: { pageId: outline.id, cues, whiteboards } });
+
+  it('shows one anchored point at a time and moves emphasis while preserving all speech', () => {
+    const text = '先看学习者，关注兴趣和已有知识。再看内容，选择适合活动的概念。随后分析目标。返回流程。';
+    const saved = narration(text);
+    const result = compileManuscriptVisualActions({ outline, content, narration: saved,
+      output: { pageId: outline.id, cues: [], whiteboards: [board([
+        step('兴趣／已有知识／身体学习能力', '先看学习者', '学习者分析'),
+        step('适合具身活动的概念与技能', '再看内容', '教学内容分析'),
+        step('可操作目标与设计评价标准', '随后分析目标', '教学目标分析'),
+      ])] } });
+    expect(result.issues).toEqual([]);
+    expect(result.actions.filter((action) => action.type === 'speech')).toEqual([{ id: 'saved-id', type: 'speech', text }]);
+    expect(saved).toEqual(narration(text));
+    const whiteboard = result.actions.filter((action) => action.type.startsWith('wb_'));
+    expect(whiteboard.slice(0, 4).map((action) => action.type)).toEqual(['wb_open', 'wb_clear', 'wb_draw_text', 'wb_draw_text']);
+    expect(whiteboard.slice(0, 5)).toEqual(whiteboard.slice(0, 5).map((action) => expect.objectContaining({
+      ...action, speechId: 'saved-id', speechAnchor: { quote: '先看学习者', occurrence: 0 },
+    })));
+    const body = whiteboard.filter((action): action is WbDrawTextAction => action.type === 'wb_draw_text' && action.fontSize === 24);
+    expect(body.map((action) => action.color)).toEqual(['#1d4ed8', '#1e293b', '#1d4ed8', '#1e293b', '#1d4ed8']);
+    expect(body[1]).toMatchObject({ elementId: body[0].elementId, speechAnchor: { quote: '再看内容', occurrence: 0 } });
+    expect(whiteboard.at(-1)).toMatchObject({ type: 'wb_close', speechAnchor: { quote: '返回流程', occurrence: 0 } });
+    expect(result.teachingToolPlan?.[0].whiteboard?.steps).toHaveLength(3);
+    expect(auditWhiteboardLayout(result.actions)).toEqual([]);
+  });
+
+  it('does not repeat a subsection label and uses stable host IDs across compilation', () => {
+    const text = '身体结合体验。环境需要场所。环境需要合作。交互设置任务。返回流程。';
+    const groups = [board([step('关键概念与身体体验结合', '身体', '身体'),
+      step('物理环境：活动场所与材料', '环境需要场所', '环境'),
+      step('社会环境：合作与支持', '环境需要合作', '环境'),
+      step('任务：有意义的问题与活动', '交互', '交互')])];
+    const first = run(text, groups);
+    const second = run(text, groups);
+    expect(first.actions).toEqual(second.actions);
+    expect(first.actions.every((action) => !action.id.startsWith('planned-note-'))).toBe(true);
+    const environmentLabels = first.actions.filter((action) => action.type === 'wb_draw_text' && action.content === '<p>环境</p>');
+    // A continuation board may repeat the current subsection heading.
+    const pages = first.actions.filter((action) => action.type === 'wb_clear').length;
+    expect(environmentLabels.length).toBeLessThanOrEqual(pages);
+    expect(auditWhiteboardLayout(first.actions)).toEqual([]);
+  });
+
+  it('clears full boards at the next spoken anchor without shrinking or dropping notes', () => {
+    const text = Array.from({ length: 12 }, (_, index) => `讲要点${index + 1}。`).join('') + '返回流程。';
+    const steps = Array.from({ length: 12 }, (_, index) => step(`第${index + 1}项：必须保留的事实与必要条件`, `要点${index + 1}。`, '完整要点'));
+    const result = run(text, [board(steps)]);
+    expect(result.issues).toEqual([]);
+    expect(result.actions.filter((action) => action.type === 'wb_clear').length).toBeGreaterThan(1);
+    for (const planned of steps) expect(result.actions).toContainEqual(expect.objectContaining({ type: 'wb_draw_text',
+      content: `<p>${planned.content}</p>`, speechAnchor: planned.speechAnchor, fontSize: 24 }));
+    expect(result.actions.filter((action) => action.type === 'wb_draw_text').every((action) => action.fontSize! >= 24)).toBe(true);
+    expect(auditWhiteboardLayout(result.actions)).toEqual([]);
+    expect(auditWhiteboardLayout(normalizeWhiteboardActionLayout(result.actions))).toEqual([]);
+    expect(result.teachingToolPlan?.[0].whiteboard?.steps).toHaveLength(12);
+  });
+
+  it('starts a fitting subsection on a new board instead of clearing at its last note', () => {
+    const text = '兴趣。已有知识。身体学习。内容。目标。标准。返回流程。';
+    const steps = [step('人工智能领域的兴趣', '兴趣', '学习者分析'),
+      step('已有知识', '已有知识'), step('通过身体动作学习的能力', '身体学习'),
+      step('适合具身活动的概念与技能', '内容', '教学内容分析'),
+      step('结合学习者与内容，形成可操作目标', '目标', '教学目标分析'),
+      step('为活动设计和评价设定标准', '标准')];
+    const result = run(text, [board(steps)]);
+    const clears = result.actions.filter((action) => action.type === 'wb_clear');
+    expect(clears.map((action) => action.speechAnchor?.quote)).toEqual(['兴趣', '目标']);
+    expect(result.issues).toEqual([]);
+    for (const planned of steps) expect(result.actions).toContainEqual(expect.objectContaining({ type: 'wb_draw_text',
+      content: `<p>${planned.content}</p>`, speechAnchor: planned.speechAnchor, fontSize: 24 }));
+    expect(result.teachingToolPlan?.[0].whiteboard?.steps).toEqual(steps);
+    expect(auditWhiteboardLayout(normalizeWhiteboardActionLayout(result.actions))).toEqual([]);
+  });
+
+  it('reserves enough room for all four interaction notes before revealing the first one', () => {
+    const text = '身体。案例。环境。目标。任务。策略。共同体。返回流程。';
+    const steps = [step('关键概念与身体体验结合', '身体', '身体'),
+      step('分类游戏：通过身体参与分类，体验机器学习算法工作原理并理解模式识别', '案例'),
+      step('物理环境／社会环境／规范环境', '环境', '环境'),
+      step('目标：具体、可达成', '目标', '交互'), step('任务：围绕内容，激发兴趣', '任务'),
+      step('策略：综合方法、工具和身体动作', '策略'), step('共同体：按兴趣、能力和需求分组', '共同体')];
+    const result = run(text, [board(steps, { title: '核心要素设计' })]);
+    expect(result.actions.filter((action) => action.type === 'wb_clear').map((action) => action.speechAnchor?.quote))
+      .toEqual(['身体', '目标']);
+    const interactionStart = result.actions.findIndex((action) => action.type === 'wb_draw_text' && action.content === '<p>交互</p>');
+    expect(result.actions.slice(interactionStart).filter((action) => action.type === 'wb_clear')).toEqual([]);
+    expect(result.issues).toEqual([]);
+    for (const planned of steps) expect(result.actions).toContainEqual(expect.objectContaining({ type: 'wb_draw_text',
+      content: `<p>${planned.content}</p>`, speechAnchor: planned.speechAnchor, fontSize: 24 }));
+    expect(result.teachingToolPlan?.[0].whiteboard?.steps).toEqual(steps);
+    expect(auditWhiteboardLayout(normalizeWhiteboardActionLayout(result.actions))).toEqual([]);
+  });
+
+  it('returns to PPT before its process cue at the same spoken anchor', () => {
+    const text = '先分析学习者。再分析内容。返回流程，采集后核验。接着判断。';
+    const result = run(text, [board([step('兴趣和已有知识', '先分析'), step('活动适用内容', '再分析')])], outline, [
+      { speechId: 'saved-id', type: 'laser', target: { elementId: 'node-0' }, speechAnchor: { quote: '返回流程', occurrence: 0 } },
+    ]);
+    expect(result.issues).toEqual([]);
+    const closeIndex = result.actions.findIndex((action) => action.type === 'wb_close');
+    expect(result.actions[closeIndex + 1]).toMatchObject({ type: 'laser', elementId: 'node-0' });
+  });
+
+  it('keeps explicit repeated-phrase occurrences and steps across saved speech segments', () => {
+    const saved: NarrationModuleOutput = { pageId: outline.id, segments: [
+      { id: 'a', pageId: outline.id, semanticIds: [], text: '先看环境。环境分为三类。' },
+      { id: 'b', pageId: outline.id, semanticIds: [], text: '现在讨论规范，最后返回PPT。' },
+    ] };
+    const result = compileManuscriptVisualActions({ outline, content, narration: saved, output: { pageId: outline.id, cues: [],
+      whiteboards: [{ title: '环境', steps: [
+        { content: '物理／社会／规范', speechId: 'a', speechAnchor: { quote: '环境', occurrence: 1 } },
+        { content: '规范：共同规则与支持', speechId: 'b', speechAnchor: { quote: '现在讨论规范' } },
+      ], exit: { speechId: 'b', speechAnchor: { quote: '最后返回PPT' } } }] } });
+    expect(result.issues).toEqual([]);
+    expect(result.actions.find((action) => action.type === 'wb_open')).toMatchObject({ speechId: 'a', speechAnchor: { quote: '环境', occurrence: 1 } });
+    expect(result.actions.filter((action) => action.type === 'speech').map((action) => ({ id: action.id, text: action.text })))
+      .toEqual(saved.segments.map(({ id, text }) => ({ id, text })));
+    expect(result.actions.find((action) => action.type === 'wb_close')).toMatchObject({ speechId: 'b' });
+  });
+
+  it('records invalid anchors and excessive capacity while retaining valid groups and complete required facts', () => {
+    const text = '先分析学习者。再分析内容。返回流程。';
+    const tooLong = '完整事实与必要条件'.repeat(100);
+    const result = run(text, [board([step('兴趣和已有知识', '先分析'), step('必须核对的遗漏项', '不存在的讲词'),
+      step(tooLong, '再分析')])]);
+    expect(result.issues.length).toBeGreaterThanOrEqual(2);
+    expect(result.issues.every((issue) => issue.severity === 'warning')).toBe(true);
+    expect(result.actions).toContainEqual(expect.objectContaining({ type: 'wb_draw_text', content: '<p>兴趣和已有知识</p>' }));
+    expect(result.actions.at(-1)).toEqual({ id: 'saved-id', type: 'speech', text });
+    expect(result.teachingToolPlan?.[0].content).toContain(tooLong);
+    expect(result.teachingToolPlan?.[0].whiteboard?.steps).toContainEqual(expect.objectContaining({ content: tooLong }));
+    expect(auditWhiteboardLayout(result.actions)).toEqual([]);
+  });
+
+  it.each([
+    { title: '', steps: [step('要点', '先分析')], exit: exit('返回流程') },
+    { title: '分析', steps: [step('要点', '先分析')], exit: exit('不存在的结束') },
+    { title: '分析', steps: [step('要点', '返回流程')], exit: exit('先分析') },
+  ])('keeps speech playable when an optional board has invalid content or timing: %j', (invalid) => {
+    const text = '先分析学习者。返回流程。';
+    const result = run(text, [invalid]);
+    expect(result.actions).toEqual([{ id: 'saved-id', type: 'speech', text }]);
+    expect(result.issues.length).toBeGreaterThan(0);
+    expect(result.issues.every((issue) => issue.severity === 'warning')).toBe(true);
+  });
+
+  it('diagnoses an omitted required group even when another whiteboard group is present', () => {
+    const configured: SceneOutline = { ...outline, teachingToolPlan: [
+      { id: 'learner-plan', tool: 'whiteboard', trigger: '先分析', purpose: '分析学习者', content: ['兴趣和已有知识'], required: true },
+      { id: 'evaluation-plan', tool: 'whiteboard', trigger: '最后评价', purpose: '完整评价维度', content: ['形成性与总结性评价'], required: true },
+      { id: 'ppt-flow', tool: 'laser-pointer', trigger: '返回流程', purpose: '指示实际顺序', content: ['采集→核验→判断'] },
+    ] };
+    const result = run('先分析学习者。返回流程。最后评价。', [board([step('兴趣和已有知识', '先分析')], { planId: 'learner-plan' })], configured);
+    expect(result.issues).toHaveLength(1);
+    expect(result.issues[0].message).toContain('完整评价维度');
+    expect(result.teachingToolPlan).toContainEqual(configured.teachingToolPlan![1]);
+    expect(result.teachingToolPlan).toContainEqual(configured.teachingToolPlan![2]);
+    expect(result.teachingToolPlan?.find((plan) => plan.id === 'learner-plan')?.whiteboard?.steps).toHaveLength(1);
+  });
+
+  it('keeps an accepted step contract when a later response omits one of its points', () => {
+    const expected = board([step('兴趣和已有知识', '先分析'), step('评价标准', '再分析')]);
+    const configured: SceneOutline = { ...outline, teachingToolPlan: [{ id: 'accepted-plan', tool: 'whiteboard',
+      trigger: '先分析', purpose: '完整分析', content: ['兴趣和已有知识', '评价标准'], whiteboard: expected, required: true }] };
+    const result = run('先分析学习者。再分析目标。返回流程。', [board([step('兴趣和已有知识', '先分析')], { planId: 'accepted-plan' })], configured);
+    expect(result.teachingToolPlan?.[0].whiteboard?.steps).toEqual(expected.steps);
+    expect(result.issues).toContainEqual(expect.objectContaining({ severity: 'warning', message: expect.stringContaining('评价标准') }));
+    expect(result.actions.at(-1)).toMatchObject({ type: 'speech', text: '先分析学习者。再分析目标。返回流程。' });
+  });
+
+  it('diagnoses a missing original semantic item when creating its first step contract', () => {
+    const configured: SceneOutline = { ...outline, teachingToolPlan: [{ id: 'first-plan', tool: 'whiteboard',
+      trigger: '先分析', purpose: '完整分析', content: ['兴趣和已有知识', '评价标准'], required: true }] };
+    const result = run('先分析学习者。再分析目标。返回流程。',
+      [board([step('兴趣和已有知识', '先分析')], { planId: 'first-plan' })], configured);
+    expect(result.teachingToolPlan?.[0].content).toEqual(['兴趣和已有知识', '评价标准']);
+    expect(result.issues).toContainEqual(expect.objectContaining({ severity: 'warning', message: expect.stringContaining('原计划要点“评价标准”') }));
+    expect(result.actions.at(-1)).toMatchObject({ type: 'speech', text: '先分析学习者。再分析目标。返回流程。' });
+    const complete = run('先分析学习者。再分析目标。返回流程。',
+      [board([step('兴趣和已有知识', '先分析'), step('评价标准', '再分析')], { planId: 'first-plan' })], configured);
+    expect(complete.issues).toEqual([]);
+  });
+
+  it('does not accept moving a saved repeated anchor to its earlier occurrence', () => {
+    const first = { ...step('兴趣和已有知识', '开始分析'), speechAnchor: { quote: '开始分析', occurrence: 0 } };
+    const second = { ...step('评价标准', '开始分析'), speechAnchor: { quote: '开始分析', occurrence: 1 } };
+    const expected = board([first, second]);
+    const configured: SceneOutline = { ...outline, teachingToolPlan: [{ id: 'accepted-repeat', tool: 'whiteboard',
+      trigger: '开始分析', purpose: '两项分析', content: ['兴趣和已有知识', '评价标准'], whiteboard: expected, required: true }] };
+    const result = run('开始分析学习者。开始分析目标。返回流程。',
+      [board([first, { ...second, speechAnchor: first.speechAnchor }], { planId: 'accepted-repeat' })], configured);
+    expect(result.issues).toContainEqual(expect.objectContaining({ severity: 'warning', message: expect.stringContaining('评价标准') }));
+    const correct = run('开始分析学习者。开始分析目标。返回流程。',
+      [board([first, second], { planId: 'accepted-repeat' })], configured);
+    expect(correct.issues).toEqual([]);
+  });
+
+  it('omits a PPT cue hidden by a board and preserves later PPT teaching', () => {
+    const text = '先分析学习者。再分析内容。返回流程。';
+    const result = run(text, [board([step('兴趣和已有知识', '先分析')])], outline,
+      [focus('先分析', 1), focus('返回流程', 2)]);
+    expect(result.actions.filter((action) => action.type === 'spotlight')).toHaveLength(1);
+    expect(result.actions.find((action) => action.type === 'spotlight')).toMatchObject({ selector: { rowIndex: 2 } });
+    expect(result.issues).toHaveLength(1);
+    expect(result.issues[0].message).toContain('不可见');
+  });
+
+  it('passes adopted sources, the actual PPT and all saved speech to authoring without forcing boards', async () => {
+    const originalSources = '权威资料：学习者分析包括兴趣、已有知识与身体学习能力。';
+    const aiCall = vi.fn(async (system, prompt) => {
+      expect(system).toContain('specific visual gap');
+      expect(system).toContain('at least 24px');
+      expect(system).toContain('Never decide from narration length');
+      const input = JSON.parse(prompt);
+      expect(input.sourceEvidence.adoptedOriginalSources).toBe(originalSources);
+      expect(input.actualSlide.elements).toHaveLength(content.elements.length);
+      expect(input.segments).toEqual([{ id: 'saved-id', text: '画面已经充分展示。' }]);
+      return JSON.stringify({ pageId: outline.id, cues: [], whiteboards: [], segments: [{ id: 'rewrite', text: '禁止改写' }] });
+    });
+    const result = await generateManuscriptVisualActions({ outline, content, narration: narration('画面已经充分展示。'),
+      teachingSourceContext: originalSources, aiCall });
+    expect(result.issues).toEqual([]);
+    expect(result.actions).toEqual([{ id: 'saved-id', type: 'speech', text: '画面已经充分展示。' }]);
+    expect(result.teachingToolPlan).toBeUndefined();
   });
 });

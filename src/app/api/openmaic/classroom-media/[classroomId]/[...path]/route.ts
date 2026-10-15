@@ -28,6 +28,22 @@ function toArrayBuffer(bytes: Uint8Array): ArrayBuffer {
   return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
 }
 
+function parseByteRange(header: string, totalSize: number): { start: number; end: number } | null {
+  if (totalSize === 0) return null;
+  const match = /^bytes=(\d*)-(\d*)$/i.exec(header.trim());
+  if (!match || (!match[1] && !match[2])) return null;
+  if (!match[1]) {
+    const suffix = Number(match[2]);
+    if (!Number.isSafeInteger(suffix) || suffix <= 0) return null;
+    return { start: Math.max(0, totalSize - suffix), end: totalSize - 1 };
+  }
+  const start = Number(match[1]);
+  const end = match[2] ? Number(match[2]) : totalSize - 1;
+  if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end)
+    || start >= totalSize || end < start) return null;
+  return { start, end: Math.min(end, totalSize - 1) };
+}
+
 export async function GET(
   _request: NextRequest,
   context: { params: Promise<{ classroomId: string; path: string[] }> },
@@ -51,15 +67,32 @@ export async function GET(
     const ext = path.extname(filePath).toLowerCase();
     const contentType = MIME_TYPES[ext] || 'application/octet-stream';
     const bytes = ext === '.wav' ? normalizePlayableWav(raw) : raw;
+    // Byte positions refer to the playable representation. WAV normalization
+    // can replace its header and unwrap an extra container, changing its size.
+    const rangeHeader = _request.headers.get('range');
+    const range = rangeHeader === null ? null : parseByteRange(rangeHeader, bytes.byteLength);
+    const headers = {
+      // Authorization is evaluated for every request. Do not let a shared
+      // cache replay a student's classroom media to another account after
+      // a membership is removed or the activity is locked.
+      'Cache-Control': 'private, no-store',
+      'Content-Type': contentType,
+      'Accept-Ranges': 'bytes',
+    };
+    if (rangeHeader !== null && !range) {
+      return new Response(null, {
+        status: 416,
+        headers: { ...headers, 'Content-Range': `bytes */${bytes.byteLength}`, 'Content-Length': '0' },
+      });
+    }
+    const body = range ? bytes.subarray(range.start, range.end + 1) : bytes;
 
-    return new Response(toArrayBuffer(bytes), {
+    return new Response(toArrayBuffer(body), {
+      status: range ? 206 : 200,
       headers: {
-        // Authorization is evaluated for every request. Do not let a shared
-        // cache replay a student's classroom media to another account after
-        // a membership is removed or the activity is locked.
-        'Cache-Control': 'private, no-store',
-        'Content-Length': String(bytes.byteLength),
-        'Content-Type': contentType,
+        ...headers,
+        'Content-Length': String(body.byteLength),
+        ...(range ? { 'Content-Range': `bytes ${range.start}-${range.end}/${bytes.byteLength}` } : {}),
       },
     });
   } catch (error) {

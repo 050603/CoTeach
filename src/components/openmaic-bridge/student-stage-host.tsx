@@ -18,6 +18,7 @@ import { browserRandomUUID } from '@/lib/browser/random-uuid';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { flushSync } from 'react-dom';
 import type { GenerationPreviewStatus } from '@/lib/course-generation/preview-status';
+import type { CourseMindMap } from '@/lib/course-mind-map/types';
 import { PlaybackPreparationContext } from '@openmaic/lib/contexts/playback-preparation-context';
 import { Loader2, RefreshCw } from 'lucide-react';
 import { Stage } from '@openmaic/components/stage';
@@ -40,6 +41,8 @@ import type {
   LearningEventType,
 } from '@/lib/session/types';
 import { TeachingKnowledgeGraphProvider } from '@/components/openmaic-bridge/knowledge-graph-context';
+import { LectureChatProvider } from '@/components/openmaic-bridge/lecture-chat-context';
+import { PLAYBACK_MODAL_BLOCK_EVENT, type PlaybackModalBlockDetail } from '@openmaic/lib/playback/activity-events';
 import {
   InstructorIdentityProvider,
   type InstructorIdentity,
@@ -170,6 +173,7 @@ interface StudentStageHostProps {
   prefetchClassroomIds?: string[];
   knowledgeGraph?: KnowledgeGraph;
   knowledgePoints?: KnowledgePoint[];
+  courseMindMap?: CourseMindMap;
   /** Overrides the presenter identity for standalone companion-made lessons. */
   instructorIdentity?: InstructorIdentity;
   /** Keeps standalone micro lessons in a loading state until narration audio is durable. */
@@ -370,6 +374,7 @@ export function StudentStageHost({
   prefetchClassroomIds = [],
   knowledgeGraph,
   knowledgePoints = [],
+  courseMindMap,
   instructorIdentity,
   requirePreparedAudio = false,
   sidebarCollapsed,
@@ -382,6 +387,7 @@ export function StudentStageHost({
   const [activeMediaClassroomId, setActiveMediaClassroomId] = useState(classroomId);
   const [autoplaySceneId, setAutoplaySceneId] = useState<string>();
   const adaptiveReturnTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lectureChatBlockedRef = useRef(false);
   const [previewStatus, setPreviewStatus] = useState<GenerationPreviewStatus>();
   const [previewSceneId, setPreviewSceneId] = useState<string>();
   const [previewSyncError, setPreviewSyncError] = useState<string>();
@@ -996,6 +1002,7 @@ export function StudentStageHost({
           if (adaptiveReturnTimerRef.current !== null) clearTimeout(adaptiveReturnTimerRef.current);
           adaptiveReturnTimerRef.current = setTimeout(() => {
             adaptiveReturnTimerRef.current = null;
+            if (lectureChatBlockedRef.current) return;
             if (useStageStore.getState().currentSceneId !== scene.id) return;
             setAutoplaySceneId(nextScene.id);
             useStageStore.getState().setCurrentSceneId(nextScene.id);
@@ -1008,6 +1015,20 @@ export function StudentStageHost({
 
   useEffect(() => () => {
     if (adaptiveReturnTimerRef.current !== null) clearTimeout(adaptiveReturnTimerRef.current);
+  }, []);
+
+  useEffect(() => {
+    const onBlock = (event: Event) => {
+      const detail = (event as CustomEvent<PlaybackModalBlockDetail>).detail;
+      if (detail?.source !== 'lecture-chat') return;
+      lectureChatBlockedRef.current = detail.blocked;
+      if (detail.blocked && adaptiveReturnTimerRef.current !== null) {
+        clearTimeout(adaptiveReturnTimerRef.current);
+        adaptiveReturnTimerRef.current = null;
+      }
+    };
+    window.addEventListener(PLAYBACK_MODAL_BLOCK_EVENT, onBlock);
+    return () => window.removeEventListener(PLAYBACK_MODAL_BLOCK_EVENT, onBlock);
   }, []);
 
   // 订阅 useStageStore 的 currentSceneId 变化
@@ -1195,7 +1216,8 @@ export function StudentStageHost({
               </div>
             ) : (
               <InstructorIdentityProvider value={instructorIdentity}>
-                <TeachingKnowledgeGraphProvider graph={knowledgeGraph} points={knowledgePoints}>
+                <TeachingKnowledgeGraphProvider graph={knowledgeGraph} points={knowledgePoints} mindMap={courseMindMap}>
+                  <LectureChatProvider scope={mode === 'student' && !standalone && courseId && studentId ? { courseId, classroomId, studentId } : null}>
                   <PlaybackPreparationContext.Provider value={previewStatus ? preparePreviewPlayback : undefined}>
                   <Stage
                     active={active}
@@ -1207,6 +1229,7 @@ export function StudentStageHost({
                     onSidebarCollapsedChange={onSidebarCollapsedChange}
                   />
                   </PlaybackPreparationContext.Provider>
+                  </LectureChatProvider>
                 </TeachingKnowledgeGraphProvider>
               </InstructorIdentityProvider>
             )}

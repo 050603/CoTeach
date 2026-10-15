@@ -48,6 +48,14 @@ function createStore(): StageStore {
 afterEach(() => useCanvasStore.getState().setWhiteboardOpen(false));
 
 describe('shared whiteboard projection', () => {
+  it('renders unsized rich notes at the measured font size and preserves explicitly sized rich text', () => {
+    const note = whiteboardActionToElement({ id: 'note', type: 'wb_draw_text', content: '<p>关键要点</p>', x: 40, y: 100, fontSize: 24 });
+    expect(note).toMatchObject({ type: 'text', content: '<div style="font-size: 24px;"><p>关键要点</p></div>' });
+    const rich = '<p style="font-size: 30px"><strong>原标题</strong></p>';
+    expect(whiteboardActionToElement({ id: 'title', type: 'wb_draw_text', content: rich, x: 40, y: 40, fontSize: 24 }))
+      .toMatchObject({ type: 'text', content: rich });
+  });
+
   it('keeps native circle/triangle contours and places attachment points on their visible edges', () => {
     const elements = projectWhiteboardActions([triangle, circle, connector]);
     expect(elements[0]).toMatchObject({ type: 'shape', groupId: 'step-group', path: 'M 500 0 L 1000 1000 L 0 1000 Z' });

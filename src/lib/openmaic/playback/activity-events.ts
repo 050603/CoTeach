@@ -12,6 +12,8 @@ export const PLAYBACK_MODAL_BLOCK_EVENT = 'openmaic:playback-modal-block';
 export interface PlaybackModalBlockDetail {
   blocked: boolean;
   source: string;
+  /** Restore only a lecture that this overlay interrupted; other overlays stay manual. */
+  restorePlayback?: boolean;
 }
 
 const completedActivities = new Set<string>();

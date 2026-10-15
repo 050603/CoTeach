@@ -3,7 +3,7 @@ import { useContext } from "react";
 import { PlaybackPreparationContext } from "@openmaic/lib/contexts/playback-preparation-context";
 import { act, cleanup, render, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { dispatchPlaybackActivityComplete, dispatchPlaybackActivityReset } from "@openmaic/lib/playback/activity-events";
+import { dispatchPlaybackActivityComplete, dispatchPlaybackActivityReset, dispatchPlaybackModalBlock } from "@openmaic/lib/playback/activity-events";
 
 const stageMock = vi.hoisted(() => {
   const state = {
@@ -438,7 +438,7 @@ describe("StudentStageHost reporting modes", () => {
     expect(renderedStage.props?.autoplaySceneId).toBe("adaptive:run-1:resource-1");
   });
 
-  it("autoplays an anchored adaptive segment and then resumes the original successor", async () => {
+  it.each([false, true])("returns from an adaptive segment unless lecture chat has paused it (%s)", async (asking) => {
     vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
       if (url.includes("resource-classroom")) {
@@ -509,9 +509,17 @@ describe("StudentStageHost reporting modes", () => {
       });
     });
 
+    if (asking) act(() => dispatchPlaybackModalBlock({ blocked: true, source: 'lecture-chat' }));
     await act(async () => { await vi.advanceTimersByTimeAsync(1_999); });
     expect(stageMock.state.currentSceneId).toBe("adaptive:run-after-quiz:resource-1");
     await act(async () => { await vi.advanceTimersByTimeAsync(1); });
+    if (asking) {
+      expect(stageMock.state.currentSceneId).toBe("adaptive:run-after-quiz:resource-1");
+      act(() => dispatchPlaybackModalBlock({ blocked: false, source: 'lecture-chat' }));
+      await act(async () => { await vi.advanceTimersByTimeAsync(2_000); });
+      expect(stageMock.state.currentSceneId).toBe("adaptive:run-after-quiz:resource-1");
+      return;
+    }
     expect(stageMock.state.currentSceneId).toBe("scene-2");
     expect(renderedStage.props?.autoplaySceneId).toBe("scene-2");
   });

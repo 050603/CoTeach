@@ -72,6 +72,7 @@ export function AiLearningTeacherPreview({ course, presentation = "workspace", w
           classroomId={course.aiLearningClassroomId}
           courseId={course.id}
           knowledgeGraph={course.content.knowledgeGraph}
+          courseMindMap={course.content.courseMindMap}
           knowledgePoints={course.content.knowledgePoints}
           mode="teacher-preview"
           onSidebarCollapsedChange={teaching ? (collapsed) => setTeachingDirectoryOpen(!collapsed) : setSidebarCollapsed}

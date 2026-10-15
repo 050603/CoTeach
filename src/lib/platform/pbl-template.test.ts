@@ -3,6 +3,17 @@ import { createPblTemplateCourse, decodePblTemplate, encodePblTemplate } from ".
 import { emptyResourcePackageDraft } from "@/lib/resource-package/types";
 
 describe("PBL authoring snapshot", () => {
+  it("round-trips the derived concept map without promoting its concepts to lesson targets", () => {
+    const course = createPblTemplateCourse("concept-map");
+    course.content.courseMindMap = { schemaVersion: 1, sourceFingerprint: "source", bindingFingerprint: "audio",
+      rootId: "root", nodes: [{ id: "root", label: "教学方法", knowledgePointIds: [] },
+        { id: "method", parentId: "root", label: "抛锚式教学法", knowledgePointIds: ["kp-11"] }],
+      relations: [], bindings: [{ sceneId: "page", defaultNodeId: "method", cues: [] }], diagnostics: [] };
+    const restored = decodePblTemplate(encodePblTemplate(course));
+    expect(restored?.content.courseMindMap).toEqual(course.content.courseMindMap);
+    expect(restored?.content.knowledgePoints).toEqual([]);
+    expect(decodePblTemplate(encodePblTemplate(createPblTemplateCourse("legacy")))?.content.courseMindMap).toBeUndefined();
+  });
   it("round-trips resource package provenance and a separate full-course minute plan", () => {
     const course = createPblTemplateCourse("package-template", { hours: 2.25 });
     course.content.resourcePackage = { schemaVersion: 1, id: "package", revision: 2,

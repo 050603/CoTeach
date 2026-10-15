@@ -9,7 +9,8 @@ import { ExperimentQuestionBuilder, prepareExperiment, validateExperiment } from
 import { ExperimentPreview } from "@/components/platform/experiment-preview";
 import { teacherPlatformFetch } from "@/lib/platform/client";
 import { EXPERIMENT_BULK_EXAMPLE, exportExperimentConfigJson, importExperimentConfigJson, parseExperimentQuestionRows } from "@/lib/platform/experiment-bulk";
-import { ExperimentConfigSchema, groupExperimentQuestions, type ExperimentConfig, type ExperimentQuestion } from "@/lib/platform/experiment";
+import { EXPERIMENT_QUESTION_LIMIT, ExperimentConfigSchema, experimentQuestionBankLimit, groupExperimentQuestions, type ExperimentConfig, type ExperimentQuestion } from "@/lib/platform/experiment";
+import { COTEACH_ASSESSMENT_TEMPLATE, createCoTeachAssessmentTemplate } from "@/lib/platform/experiment-templates";
 import { clientUUID } from "@/lib/uuid";
 
 type ClassroomActivity = { id: string; title: string; type: string; version: number; config?: Record<string, unknown> & { experiment?: ExperimentConfig } };
@@ -52,6 +53,7 @@ export default function TeacherClassroomExperimentPage() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+  const [beforeTemplate, setBeforeTemplate] = useState<ExperimentConfig | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -97,8 +99,8 @@ export default function TeacherClassroomExperimentPage() {
   }
 
   function appendQuestions(questions: ExperimentQuestion[], message: string) {
-    if (draft[bank].length + questions.length > 30) {
-      setError(`${bankLabels[bank]}最多设置 30 道题目，请减少导入数量`);
+    if (draft[bank].length + questions.length > experimentQuestionBankLimit(draft, bank)) {
+      setError(`每次前测或后测合计最多 ${EXPERIMENT_QUESTION_LIMIT} 题，请减少导入数量`);
       return;
     }
     setDraft((current) => ({ ...current, enabled: true, [bank]: [...current[bank], ...questions] }));
@@ -111,7 +113,20 @@ export default function TeacherClassroomExperimentPage() {
     const result = parseExperimentQuestionRows(bulkText);
     if (!result.ok) { setError(result.errors.join("；")); return; }
     appendQuestions(result.questions, `已添加 ${result.questions.length} 道${bankLabels[bank]}题目，请检查后保存`);
-    if (draft[bank].length + result.questions.length <= 30) setBulkText("");
+    if (draft[bank].length + result.questions.length <= experimentQuestionBankLimit(draft, bank)) setBulkText("");
+  }
+
+  function applyTemplate() {
+    setBeforeTemplate((previous) => previous ?? draft);
+    applyConfig(createCoTeachAssessmentTemplate(), "已应用 CoTeach 前后测模板，请预览或编辑后保存到本课堂");
+  }
+
+  function undoTemplate() {
+    if (!beforeTemplate) return;
+    setDraft(beforeTemplate);
+    setBeforeTemplate(null);
+    setError("");
+    setNotice("已恢复应用模板前的草稿，请保存后应用到本课堂");
   }
 
   function copyEntireSource() {
@@ -170,6 +185,7 @@ export default function TeacherClassroomExperimentPage() {
       const data = await response.json();
       if (!response.ok) throw new Error(data.message ?? "无法保存实验配置");
       await load();
+      setBeforeTemplate(null);
       setNotice("实验配置已保存到本课堂");
     } catch (reason) { setError(reason instanceof Error ? reason.message : "无法保存实验配置"); }
     finally { setBusy(false); }
@@ -195,6 +211,13 @@ export default function TeacherClassroomExperimentPage() {
           <div className="rounded-xl border border-[var(--pbl-border)] bg-[var(--pbl-surface)] p-4"><small className="text-[var(--pbl-text-muted)]">前测题数</small><strong className="mt-1 block text-lg">{totalPre}</strong></div>
           <div className="rounded-xl border border-[var(--pbl-border)] bg-[var(--pbl-surface)] p-4"><small className="text-[var(--pbl-text-muted)]">后测题数</small><strong className="mt-1 block text-lg">{totalPost}</strong></div>
         </div>
+        <section aria-label="前后测模板" className="rounded-xl border border-[var(--pbl-teacher)] bg-[var(--pbl-teacher-soft)] p-4 md:p-6">
+          <div className="flex flex-wrap items-start justify-between gap-4">
+            <div className="min-w-0 w-full md:flex-1"><p className="text-xs font-semibold text-[var(--pbl-teacher)]">前后测模板</p><h2 className="mt-1 text-lg font-semibold">{COTEACH_ASSESSMENT_TEMPLATE.title}</h2><p className="mt-2 text-sm leading-6">{COTEACH_ASSESSMENT_TEMPLATE.description}</p><p className="mt-1 text-sm leading-6 text-[var(--pbl-text-muted)]">{COTEACH_ASSESSMENT_TEMPLATE.settings}</p><p className="mt-1 text-sm leading-6 text-[var(--pbl-text-muted)]">{COTEACH_ASSESSMENT_TEMPLATE.answerKeyNote}</p></div>
+            <div className="flex flex-wrap gap-2"><button type="button" className={primary} disabled={busy} onClick={applyTemplate}><ClipboardCopy size={16} />一键应用前后测模板</button>{beforeTemplate ? <button type="button" className={secondary} disabled={busy} onClick={undoTemplate}>撤销应用模板</button> : null}</div>
+          </div>
+          <p className="mt-3 text-xs leading-5 text-[var(--pbl-text-muted)]">应用后会替换当前前后测草稿，并保留醒目的教师、课程参与者和系统指代说明。保存后生效，可继续编辑或撤销应用。</p>
+        </section>
         <div className="flex flex-wrap gap-2" role="tablist" aria-label="实验配置步骤">
           {([["edit", "编辑题目", ListPlus], ["reuse", "批量添加与复用", ClipboardCopy], ["preview", "学生视角预览", Eye]] as const).map(([key, label, Icon]) => <button key={key} type="button" role="tab" aria-selected={tab === key} className={`${secondary} ${tab === key ? "border-[var(--pbl-teacher)] bg-[var(--pbl-teacher-soft)] text-[var(--pbl-teacher)]" : ""}`} onClick={() => { setTab(key); setError(""); }}><Icon size={16} />{label}</button>)}
         </div>

@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { Prisma } from "@prisma/client";
 import type { AuthClaims } from "@/lib/auth/session";
 const mocks = vi.hoisted(() => {
   const db = {
@@ -17,7 +18,7 @@ vi.mock("@/lib/db/client", () => ({ prisma: mocks.db }));
 vi.mock("@/lib/db/transaction-retry", () => ({ runMutationTransaction: (operation: (tx: unknown) => unknown) => operation(mocks.db) }));
 vi.mock("./access", () => ({ getPlatformUser: mocks.user }));
 vi.mock("@/lib/llm/client", () => ({ callLLM: mocks.llm }));
-import { aiCommandSchema, mutateAiCollaboration, readAiCollaboration } from "./ai-collaboration";
+import { aiCommandSchema, mutateAiCollaboration, readAiCollaboration, type AiCommand } from "./ai-collaboration";
 const claims = { sub: "student", role: "student" } as AuthClaims;
 const conversation = { id: "conversation", userId: "student", participationId: "participation", offeringId: "offering", status: "OPEN" };
 const participation = () => ({
@@ -65,6 +66,77 @@ describe("V2 AI collaboration", () => {
     const result = await readAiCollaboration(claims, "participation");
     expect(result.conversations[0].messages.map(message => message.id)).toEqual(["visible"]);
   });
+  it.each(["student", "teacher"] as const)("keeps private lecture questions out of generic %s reads without losing legacy conversations", async role => {
+    mocks.user.mockResolvedValue({ id: role, role });
+    mocks.db.aiConversation.findMany.mockResolvedValue([
+      { ...conversation, id: "lecture", metadata: { feature: "lecture-chat" }, messages: [{ content: "随课私密问题" }], tasks: [{ input: { message: "随课私密问题" } }] },
+      { ...conversation, id: "missing-metadata", messages: [] },
+      { ...conversation, id: "null-metadata", metadata: null, messages: [] },
+      { ...conversation, id: "empty-metadata", metadata: {}, messages: [] },
+      { ...conversation, id: "legacy-companion", metadata: { legacyStageKey: "make" }, messages: [] },
+    ]);
+    const result = await readAiCollaboration({ sub: role, role } as AuthClaims, "participation");
+    expect(result.conversations.map(row => row.id)).toEqual(["missing-metadata", "null-metadata", "empty-metadata", "legacy-companion"]);
+    expect(JSON.stringify(result)).not.toContain("随课私密问题");
+  });
+  it("filters private lecture threads before the page limit while preserving all null and missing feature variants", async () => {
+    const rows = [
+      ...Array.from({ length: 55 }, (_, index) => ({ ...conversation, id: `lecture-${index}`, metadata: { feature: "lecture-chat" }, messages: [] })),
+      { ...conversation, id: "sql-null", metadata: null, messages: [] },
+      { ...conversation, id: "json-null", metadata: null, messages: [] },
+      { ...conversation, id: "missing-metadata", metadata: undefined, messages: [] },
+      { ...conversation, id: "missing-feature", metadata: {}, messages: [] },
+      { ...conversation, id: "json-null-feature", metadata: { feature: null }, messages: [] },
+      { ...conversation, id: "ordinary-feature", metadata: { feature: "project-support" }, messages: [] },
+    ];
+    mocks.db.aiConversation.findMany.mockImplementation(async ({ where, take }: {
+      where: Prisma.AiConversationWhereInput;
+      take: number;
+    }) => rows.filter(row => !where.OR || where.OR.some(condition => {
+      const filter = condition.metadata as { path?: string[]; equals?: unknown; not?: unknown };
+      const metadata = row.metadata;
+      const value = filter.path ? (metadata && "feature" in metadata ? metadata.feature : undefined) : metadata;
+      if (filter.equals === Prisma.AnyNull) return value == null;
+      if (filter.not === "lecture-chat") return value != null && value !== "lecture-chat";
+      return false;
+    })).slice(0, take));
+    const result = await readAiCollaboration(claims, "participation");
+    expect(result.conversations.map(row => row.id)).toEqual([
+      "sql-null", "json-null", "missing-metadata", "missing-feature", "json-null-feature", "ordinary-feature",
+    ]);
+    expect(mocks.db.aiConversation.findMany.mock.calls[0][0].take).toBe(50);
+  });
+  const conversationCommands: AiCommand[] = [send,
+    { op: "close_conversation", conversationId: "conversation", idempotencyKey: "close" },
+    { op: "request_action", conversationId: "conversation", content: "执行提议", idempotencyKey: "request" },
+    { op: "decide_action", conversationId: "conversation", confirmationId: "confirmation", decision: "APPROVED", idempotencyKey: "decision" },
+  ];
+  it.each(conversationCommands)("rejects lecture conversation IDs in generic $op before any message, task or provider side effect", async command => {
+    mocks.db.aiConversation.findFirst.mockResolvedValue({ ...conversation, metadata: { feature: "lecture-chat" } });
+    await expect(mutateAiCollaboration(claims, "participation", command)).rejects.toMatchObject({ code: "NOT_FOUND", status: 404 });
+    expect(mocks.db.aiMessage.create).not.toHaveBeenCalled();
+    expect(mocks.db.aiMessage.findMany).not.toHaveBeenCalled();
+    expect(mocks.db.aiTask.create).not.toHaveBeenCalled();
+    expect(mocks.db.aiConversation.update).not.toHaveBeenCalled();
+    expect(mocks.db.aiActionConfirmation.update).not.toHaveBeenCalled();
+    expect(mocks.db.aiInteractionEvent.create).not.toHaveBeenCalled();
+    expect(mocks.llm).not.toHaveBeenCalled();
+  });
+  it("does not use a cached generic receipt to bypass the lecture feature boundary", async () => {
+    await mutateAiCollaboration(claims, "participation", send);
+    const receipt = mocks.db.aiInteractionEvent.create.mock.calls[0][0].data;
+    mocks.db.aiInteractionEvent.findUnique.mockResolvedValue(receipt);
+    mocks.db.aiConversation.findFirst.mockResolvedValue({ ...conversation, metadata: { feature: "lecture-chat" } });
+    mocks.llm.mockClear(); mocks.db.aiMessage.create.mockClear();
+    await expect(mutateAiCollaboration(claims, "participation", send)).rejects.toMatchObject({ code: "NOT_FOUND", status: 404 });
+    expect(mocks.llm).not.toHaveBeenCalled(); expect(mocks.db.aiMessage.create).not.toHaveBeenCalled();
+  });
+  it.each([undefined, null, {}, { feature: null }, { feature: "project-support" }])("continues generic conversations with legacy or unrelated metadata %j", async metadata => {
+    mocks.db.aiConversation.findFirst.mockResolvedValue({ ...conversation, metadata });
+    await mutateAiCollaboration(claims, "participation", send);
+    expect(mocks.llm).toHaveBeenCalledOnce();
+    expect(mocks.db.aiMessage.create).toHaveBeenCalledTimes(2);
+  });
   it("rejects closed classrooms before persisting a message", async () => {
     const row = participation(); row.instance.status = "ENDED";
     mocks.db.classroomParticipation.findUnique.mockResolvedValue(row);
@@ -93,6 +165,15 @@ describe("V2 AI collaboration", () => {
     expect(mocks.llm).not.toHaveBeenCalled(); expect(mocks.db.aiMessage.create).not.toHaveBeenCalled();
     await expect(mutateAiCollaboration(claims, "participation", { ...send, content: "different" })).rejects.toMatchObject({ code: "IDEMPOTENCY_CONFLICT" });
   });
+  it("retains accepted generic retries after their conversation has closed", async () => {
+    await mutateAiCollaboration(claims, "participation", send);
+    const receipt = mocks.db.aiInteractionEvent.create.mock.calls[0][0].data;
+    mocks.db.aiInteractionEvent.findUnique.mockResolvedValue(receipt);
+    mocks.db.aiConversation.findFirst.mockResolvedValue({ ...conversation, status: "CLOSED", metadata: null });
+    mocks.llm.mockClear(); mocks.db.aiMessage.create.mockClear();
+    await expect(mutateAiCollaboration(claims, "participation", send)).resolves.toMatchObject({ taskId: "task" });
+    expect(mocks.llm).not.toHaveBeenCalled(); expect(mocks.db.aiMessage.create).not.toHaveBeenCalled();
+  });
   it("blocks interleaved messages while another generation runs", async () => {
     mocks.db.aiTask.findFirst.mockResolvedValue({ id: "running" });
     await expect(mutateAiCollaboration(claims, "participation", send)).rejects.toMatchObject({ code: "AI_BUSY" });
@@ -109,6 +190,13 @@ describe("V2 AI collaboration", () => {
     mocks.db.aiTask.updateMany.mockResolvedValue({ count: 0 });
     await mutateAiCollaboration(claims, "participation", send);
     expect(mocks.db.aiMessage.create).toHaveBeenCalledTimes(1);
+  });
+  it("does not finish a generic task against a lecture feature conversation", async () => {
+    mocks.db.aiTask.findUnique.mockResolvedValue({ id: "task", createdById: "student", offeringId: "offering",
+      conversation: { ...conversation, metadata: { feature: "lecture-chat" } } });
+    await mutateAiCollaboration(claims, "participation", send);
+    expect(mocks.db.aiMessage.create).toHaveBeenCalledTimes(1);
+    expect(mocks.db.aiTask.updateMany).not.toHaveBeenCalled();
   });
   it("rejects expired confirmations without changing task state", async () => {
     mocks.db.aiActionConfirmation.findFirst.mockResolvedValue({ status: "PENDING", expiresAt: new Date(0), taskId: "task" });

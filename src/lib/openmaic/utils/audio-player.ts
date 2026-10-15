@@ -52,6 +52,11 @@ export class AudioPlayer {
   private playbackRate: number = 1;
   private warmupNextPlayback: boolean = true;
   private warmupAudio: HTMLAudioElement | null = null;
+  private playbackVersion = 0;
+  private playbackPaused = false;
+  private pendingAudio: HTMLAudioElement | null = null;
+  private pendingPlaybackVersion: number | null = null;
+  private wakePendingStart: (() => void) | null = null;
 
   /**
    * Play audio (from URL or IndexedDB pre-generated cache)
@@ -64,91 +69,85 @@ export class AudioPlayer {
     audioUrl?: string,
     startRatio: number = 0,
   ): Promise<boolean> {
+    const playbackVersion = ++this.playbackVersion;
+    this.playbackPaused = false;
+    this.pendingPlaybackVersion = playbackVersion;
     try {
+      this.clearCurrentAudio();
       // 1. Try audioUrl first (server-generated TTS)
       if (audioUrl) {
-        this.stop();
-        this.audio = new Audio();
-        this.audio.src = audioUrl;
-        if (this.muted) this.audio.volume = 0;
-        else this.audio.volume = this.volume;
-        this.audio.defaultPlaybackRate = this.playbackRate;
-        this.audio.playbackRate = this.playbackRate;
-        await this.seekToRatioWhenReady(this.audio, startRatio);
-        const audio = this.audio;
+        const audio = new Audio();
+        this.audio = audio;
+        audio.src = audioUrl;
+        if (this.muted) audio.volume = 0;
+        else audio.volume = this.volume;
+        audio.defaultPlaybackRate = this.playbackRate;
+        audio.playbackRate = this.playbackRate;
         audio.addEventListener('ended', () => {
           if (this.warmupAudio === audio || this.audio !== audio) return;
           this.onEndedCallback?.();
         });
         try {
-          if (!await this.warmupIfNeeded(audio, startRatio)) return false;
-          await audio.play();
-          return true;
+          return await this.startPlayback(audio, startRatio);
         } catch (playError) {
-          if (this.audio !== audio) return false;
-          this.stop();
+          if (this.playbackVersion !== playbackVersion || this.audio !== audio) return false;
+          this.clearCurrentAudio();
           const response = await fetch(audioUrl);
           if (!response.ok) throw playError;
           const sourceBlob = await response.blob();
           const normalizedBlob = await normalizeAudioBlob(sourceBlob, audioUrl.split('.').pop());
+          if (this.playbackVersion !== playbackVersion) return false;
           const blobUrl = URL.createObjectURL(normalizedBlob);
           this.objectUrl = blobUrl;
-          this.audio = new Audio();
-          this.audio.src = blobUrl;
-          if (this.muted) this.audio.volume = 0;
-          else this.audio.volume = this.volume;
-          this.audio.defaultPlaybackRate = this.playbackRate;
-          this.audio.playbackRate = this.playbackRate;
-          await this.seekToRatioWhenReady(this.audio, startRatio);
-          const fallbackAudio = this.audio;
+          const fallbackAudio = new Audio();
+          this.audio = fallbackAudio;
+          fallbackAudio.src = blobUrl;
+          if (this.muted) fallbackAudio.volume = 0;
+          else fallbackAudio.volume = this.volume;
+          fallbackAudio.defaultPlaybackRate = this.playbackRate;
+          fallbackAudio.playbackRate = this.playbackRate;
           fallbackAudio.addEventListener('ended', () => {
             if (this.warmupAudio === fallbackAudio || this.audio !== fallbackAudio) return;
             this.revokeObjectUrl();
             this.onEndedCallback?.();
           });
           try {
-            if (!await this.warmupIfNeeded(fallbackAudio, startRatio)) return false;
-            await fallbackAudio.play();
+            return await this.startPlayback(fallbackAudio, startRatio);
           } catch (retryError) {
-            if (this.audio !== fallbackAudio) return false;
-            this.stop();
+            if (this.playbackVersion !== playbackVersion || this.audio !== fallbackAudio) return false;
+            this.clearCurrentAudio();
             log.error(
               `Retry failed for audioUrl=${audioUrl}; ${await describeAudioBlob(normalizedBlob)}`,
               retryError,
             );
             throw retryError;
           }
-          return true;
         }
       }
 
       // 2. Fall back to IndexedDB (client-generated TTS)
       const audioRecord = await db.audioFiles.get(audioId);
+      if (this.playbackVersion !== playbackVersion) return false;
 
       if (!audioRecord) {
         // Pre-generated audio does not exist (generation failed), skip silently
         return false;
       }
 
-      // Stop current playback
-      this.stop();
-
-      // Create audio element
-      this.audio = new Audio();
-
       // Set audio source
       const playableBlob = await normalizeAudioBlob(audioRecord.blob, audioRecord.format);
+      if (this.playbackVersion !== playbackVersion) return false;
       const blobUrl = URL.createObjectURL(playableBlob);
       this.objectUrl = blobUrl;
-      this.audio.src = blobUrl;
-      if (this.muted) this.audio.volume = 0;
-      else this.audio.volume = this.volume;
+      const audio = new Audio();
+      this.audio = audio;
+      audio.src = blobUrl;
+      if (this.muted) audio.volume = 0;
+      else audio.volume = this.volume;
 
       // Apply playback rate
-      this.audio.defaultPlaybackRate = this.playbackRate;
-      this.audio.playbackRate = this.playbackRate;
-      await this.seekToRatioWhenReady(this.audio, startRatio);
-      const audio = this.audio;
+      audio.defaultPlaybackRate = this.playbackRate;
+      audio.playbackRate = this.playbackRate;
 
       // Set ended callback
       audio.addEventListener('ended', () => {
@@ -160,11 +159,10 @@ export class AudioPlayer {
       // load) the 'ended' listener never fires, so revoke the blob URL here to
       // avoid leaking it for the lifetime of the document.
       try {
-        if (!await this.warmupIfNeeded(audio, startRatio)) return false;
-        await audio.play();
+        return await this.startPlayback(audio, startRatio);
       } catch (playError) {
-        if (this.audio !== audio) return false;
-        this.stop();
+        if (this.playbackVersion !== playbackVersion || this.audio !== audio) return false;
+        this.clearCurrentAudio();
         log.error(
           `IndexedDB audio failed for audioId=${audioId}; format=${audioRecord.format}; ${await describeAudioBlob(
             playableBlob,
@@ -173,11 +171,12 @@ export class AudioPlayer {
         );
         throw playError;
       }
-      // Re-apply after play() — some browsers reset during load
-      return true;
     } catch (error) {
+      if (this.playbackVersion !== playbackVersion) return false;
       log.error('Failed to play audio:', error);
       throw error;
+    } finally {
+      if (this.pendingPlaybackVersion === playbackVersion) this.pendingPlaybackVersion = null;
     }
   }
 
@@ -185,29 +184,30 @@ export class AudioPlayer {
    * Pause playback
    */
   public pause(): void {
+    this.playbackPaused = true;
     if (!this.audio) return;
     if (!this.audio.paused) this.audio.pause();
-    // Rewinding the pre-roll is asynchronous and happens while the element is
-    // already paused. A user pause during that small window must still cancel
-    // the pending audible restart.
-    if (this.warmupAudio === this.audio) {
-      this.audio.currentTime = 0;
-      this.audio.volume = this.muted ? 0 : this.volume;
-      this.warmupAudio = null;
-      this.warmupNextPlayback = false;
-    }
+    // Keep the preroll pending until its rewind completes. Clearing it here
+    // lets a quick Resume start audibly from the still-seeking quiet prefix.
   }
 
   /**
    * Stop playback
    */
   public stop(): void {
+    this.playbackVersion++;
+    this.pendingPlaybackVersion = null;
+    this.clearCurrentAudio();
+  }
+
+  private clearCurrentAudio(): void {
     if (this.audio) {
       this.audio.pause();
       this.audio.currentTime = 0;
       if (this.warmupAudio === this.audio) this.warmupAudio = null;
       this.audio = null;
     }
+    this.releasePendingStart();
     this.revokeObjectUrl();
     // Note: onEndedCallback intentionally NOT cleared here because play()
     // calls stop() internally — clearing would break the callback chain.
@@ -218,6 +218,9 @@ export class AudioPlayer {
    * Resume playback
    */
   public resume(): void {
+    this.playbackPaused = false;
+    this.releasePendingStart();
+    if (this.pendingAudio === this.audio) return;
     if (this.audio?.paused && !this.audio.ended) {
       this.audio.playbackRate = this.playbackRate;
       this.audio.play().catch((error) => {
@@ -238,7 +241,8 @@ export class AudioPlayer {
    * Used to decide whether to resume playback or skip to the next line
    */
   public hasActiveAudio(): boolean {
-    return this.audio !== null && !this.audio.ended;
+    return this.pendingPlaybackVersion === this.playbackVersion
+      || this.audio !== null && !this.audio.ended;
   }
 
   /**
@@ -276,9 +280,7 @@ export class AudioPlayer {
    */
   public setMuted(muted: boolean): void {
     this.muted = muted;
-    if (this.audio) {
-      this.audio.volume = muted ? 0 : this.volume;
-    }
+    this.applyVolume();
   }
 
   /**
@@ -286,9 +288,16 @@ export class AudioPlayer {
    */
   public setVolume(volume: number): void {
     this.volume = Math.max(0, Math.min(1, volume));
-    if (this.audio && !this.muted) {
-      this.audio.volume = this.volume;
-    }
+    this.applyVolume();
+  }
+
+  private applyVolume(): void {
+    if (!this.audio) return;
+    this.audio.volume = this.muted
+      ? 0
+      : this.warmupAudio === this.audio
+        ? Math.min(this.volume, PLAYBACK_WARMUP_VOLUME)
+        : this.volume;
   }
 
   /**
@@ -315,6 +324,34 @@ export class AudioPlayer {
     this.objectUrl = null;
   }
 
+  private async startPlayback(audio: HTMLAudioElement, startRatio: number): Promise<boolean> {
+    this.pendingAudio = audio;
+    try {
+      await this.seekToRatioWhenReady(audio, startRatio);
+      while (this.audio === audio && this.playbackPaused) await this.waitForResume();
+      if (this.audio !== audio) return false;
+      const prepared = await this.warmupIfNeeded(audio, startRatio);
+      while (this.audio === audio && this.playbackPaused) await this.waitForResume();
+      if (!prepared || this.audio !== audio) return false;
+      await audio.play();
+      return this.audio === audio;
+    } finally {
+      if (this.pendingAudio === audio) this.pendingAudio = null;
+    }
+  }
+
+  private releasePendingStart(): void {
+    const wake = this.wakePendingStart;
+    this.wakePendingStart = null;
+    wake?.();
+  }
+
+  private waitForResume(): Promise<void> {
+    // Keep the original startup (including its retry/error handling) pending.
+    // A direct play() on Resume could bypass a warmup that has not run yet.
+    return new Promise<void>((resolve) => { this.wakePendingStart = resolve; });
+  }
+
   private async warmupIfNeeded(
     audio: HTMLAudioElement,
     startRatio: number,
@@ -324,8 +361,8 @@ export class AudioPlayer {
       return this.audio === audio;
     }
 
-    audio.volume = Math.min(this.volume, PLAYBACK_WARMUP_VOLUME);
     this.warmupAudio = audio;
+    this.applyVolume();
     await audio.play();
     await new Promise<void>((resolve) => window.setTimeout(resolve, PLAYBACK_WARMUP_MS));
     if (this.audio !== audio || this.warmupAudio !== audio) return false;
@@ -333,9 +370,9 @@ export class AudioPlayer {
     audio.pause();
     await this.rewindAfterWarmup(audio);
     if (this.audio !== audio || this.warmupAudio !== audio) return false;
-    audio.volume = this.muted ? 0 : this.volume;
     this.warmupAudio = null;
     this.warmupNextPlayback = false;
+    this.applyVolume();
     return true;
   }
 
@@ -346,13 +383,10 @@ export class AudioPlayer {
    * actually returned to the beginning.
    */
   private async rewindAfterWarmup(audio: HTMLAudioElement): Promise<void> {
-    audio.currentTime = 0;
-    if (!audio.seeking) return;
-
-    await new Promise<void>((resolve) => {
+    await new Promise<void>((resolve, reject) => {
       const timeout = window.setTimeout(() => {
         cleanup();
-        resolve();
+        reject(new Error('Timed out while rewinding audio after playback warmup'));
       }, PLAYBACK_REWIND_TIMEOUT_MS);
       const cleanup = () => {
         window.clearTimeout(timeout);
@@ -361,56 +395,90 @@ export class AudioPlayer {
       };
       const onSeeked = () => {
         cleanup();
-        resolve();
+        if (!audio.seeking && Math.abs(audio.currentTime) <= PLAYBACK_REWIND_EPSILON_SECONDS) {
+          resolve();
+        } else {
+          reject(new Error('Audio did not return to the beginning after playback warmup'));
+        }
       };
       const onError = () => {
         cleanup();
-        resolve();
+        reject(new Error('Audio failed while rewinding after playback warmup'));
       };
       audio.addEventListener('seeked', onSeeked, { once: true });
       audio.addEventListener('error', onError, { once: true });
+      try {
+        audio.currentTime = 0;
+        if (!audio.seeking) onSeeked();
+      } catch (error) {
+        cleanup();
+        reject(error);
+      }
     });
-
-    // Some media implementations report a completed seek slightly above zero.
-    // Re-assert the exact beginning before the audible play without starting a
-    // second wait for harmless floating-point drift.
-    if (audio.currentTime > PLAYBACK_REWIND_EPSILON_SECONDS) {
-      audio.currentTime = 0;
-    }
   }
 
   /** Seek after metadata is available so subtitle clicks start at that sentence. */
   private async seekToRatioWhenReady(audio: HTMLAudioElement, ratio: number): Promise<void> {
     const normalizedRatio = Math.max(0, Math.min(0.999, ratio));
     if (normalizedRatio <= 0) return;
-    if (Number.isFinite(audio.duration) && audio.duration > 0) {
-      audio.currentTime = audio.duration * normalizedRatio;
-      return;
+    if (!Number.isFinite(audio.duration) || audio.duration <= 0) {
+      await new Promise<void>((resolve, reject) => {
+        const timeout = window.setTimeout(() => {
+          cleanup();
+          reject(new Error('Timed out while loading audio metadata for subtitle seek'));
+        }, 8_000);
+        const cleanup = () => {
+          window.clearTimeout(timeout);
+          audio.removeEventListener('loadedmetadata', onMetadata);
+          audio.removeEventListener('error', onError);
+        };
+        const onMetadata = () => {
+          cleanup();
+          if (Number.isFinite(audio.duration) && audio.duration > 0) resolve();
+          else reject(new Error('Audio duration is unavailable for subtitle seek'));
+        };
+        const onError = () => {
+          cleanup();
+          reject(new Error('Audio metadata could not be loaded for subtitle seek'));
+        };
+        audio.addEventListener('loadedmetadata', onMetadata, { once: true });
+        audio.addEventListener('error', onError, { once: true });
+        audio.load();
+      });
     }
+    if (this.audio !== audio) return;
+
+    const targetTime = audio.duration * normalizedRatio;
     await new Promise<void>((resolve, reject) => {
       const timeout = window.setTimeout(() => {
         cleanup();
-        reject(new Error('Timed out while loading audio metadata for subtitle seek'));
+        reject(new Error('Timed out while seeking to subtitle position'));
       }, 8_000);
       const cleanup = () => {
         window.clearTimeout(timeout);
-        audio.removeEventListener('loadedmetadata', onMetadata);
+        audio.removeEventListener('seeked', onSeeked);
         audio.removeEventListener('error', onError);
       };
-      const onMetadata = () => {
+      const onSeeked = () => {
         cleanup();
-        if (Number.isFinite(audio.duration) && audio.duration > 0) {
-          audio.currentTime = audio.duration * normalizedRatio;
-        }
-        resolve();
+        // A server without byte-range support can report seeked while still at
+        // zero. Retry through the downloaded blob rather than starting there.
+        if (Math.abs(audio.currentTime - targetTime) <= 0.05) resolve();
+        else reject(new Error('Audio could not seek to subtitle position'));
       };
       const onError = () => {
         cleanup();
-        reject(new Error('Audio metadata could not be loaded for subtitle seek'));
+        reject(new Error('Audio could not be loaded for subtitle seek'));
       };
-      audio.addEventListener('loadedmetadata', onMetadata, { once: true });
-      audio.addEventListener('error', onError, { once: true });
-      audio.load();
+      audio.addEventListener('seeked', onSeeked);
+      audio.addEventListener('error', onError);
+      try {
+        audio.currentTime = targetTime;
+        if (!audio.seeking && Math.abs(audio.currentTime - targetTime) <= 0.05) onSeeked();
+      } catch (error) {
+        cleanup();
+        reject(error);
+      }
     });
   }
 }

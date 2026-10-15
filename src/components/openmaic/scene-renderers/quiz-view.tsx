@@ -31,6 +31,7 @@ import {
 } from '@openmaic/lib/quiz/persistence';
 import { dispatchPlaybackActivityComplete } from '@openmaic/lib/playback/activity-events';
 import { gradeShortAnswerQuestion } from './quiz-grade-client';
+import matchingStyles from './matching-question.module.css';
 import { useLockedKnowledgeLectureAttempt } from '@/components/openmaic-bridge/knowledge-lecture-quiz-lock';
 
 // ─── Types ──────────────────────────────────────────────────────────────────
@@ -393,7 +394,7 @@ function MatchingQuestion({
   const review = Boolean(result);
 
   const assign = (leftId: string, rightId: string) => {
-    if (disabled) return;
+    if (disabled || review) return;
     const next = selected.filter((relation) => {
       const separator = relation.indexOf(':');
       const currentLeft = relation.slice(0, separator);
@@ -405,31 +406,73 @@ function MatchingQuestion({
   };
 
   const unassign = (rightId: string) => {
-    if (disabled) return;
+    if (disabled || review) return;
     onChange(selected.filter((relation) => relation.slice(relation.indexOf(':') + 1) !== rightId));
     setSelectedRightId(undefined);
   };
 
+  const availablePairs = shuffledRight.filter((pair) => ![...relationMap.values()].includes(pair.rightId));
+
   return (
     <QuestionCard question={question} index={index} result={result} onExplain={onExplain}>
-      {!review && (
-        <p className="mb-3 text-xs leading-5 text-[var(--pbl-text-muted)]">
-          拖动右侧卡片到对应项，也可以依次点击右侧卡片和左侧目标。
-        </p>
-      )}
-      <div className="grid gap-3 md:grid-cols-[1.35fr_1fr]">
-        <div className="space-y-2">
-          {pairs.map((pair) => {
+      <div className={matchingStyles.workspace}>
+        {!review && (
+          <>
+            <p className={matchingStyles.instructions}>
+              先选择待选项，再点击对应题目；也可以拖动卡片完成配对。
+            </p>
+            <div
+              aria-label="待选匹配项"
+              className={matchingStyles.pool}
+              onDragOver={(event) => {
+                if (!disabled) event.preventDefault();
+              }}
+              onDrop={(event) => {
+                event.preventDefault();
+                const rightId = event.dataTransfer.getData(MATCH_DRAG_MIME);
+                if (rightId) unassign(rightId);
+              }}
+            >
+              <div className={matchingStyles.poolHeading}>
+                <span>待选项 · {availablePairs.length}</span>
+                <span className={matchingStyles.poolHint}>已匹配 {relationMap.size} / {pairs.length}</span>
+              </div>
+              <div className={matchingStyles.options}>
+                {availablePairs.map((pair) => (
+                  <button
+                    key={pair.rightId}
+                    type="button"
+                    disabled={disabled}
+                    draggable={!disabled}
+                    aria-pressed={selectedRightId === pair.rightId}
+                    aria-label={`选择匹配项 ${pair.right}`}
+                    onClick={() => setSelectedRightId(pair.rightId)}
+                    onDragStart={(event) => startMatchingDrag(event, pair.rightId)}
+                    className={matchingStyles.option}
+                  >
+                    <GripVertical className={matchingStyles.grip} aria-hidden="true" />
+                    <span>{pair.right}</span>
+                  </button>
+                ))}
+              </div>
+              {availablePairs.length === 0 && (
+                <p className={matchingStyles.emptyPool}>所有卡片已放置。需要调整时，可将卡片拖回此处。</p>
+              )}
+            </div>
+          </>
+        )}
+        <div className={matchingStyles.rows}>
+          {pairs.map((pair, pairIndex) => {
             const rightId = relationMap.get(pair.leftId);
             const relation = rightId ? `${pair.leftId}:${rightId}` : '';
             const isCorrect = review && correct.has(relation);
-            const isWrong = review && Boolean(rightId) && !isCorrect;
             return (
               <div
                 key={pair.leftId}
-                role="button"
-                tabIndex={disabled ? -1 : 0}
-                aria-label={`匹配到 ${pair.left}`}
+                role={review ? 'group' : 'button'}
+                tabIndex={review || disabled ? undefined : 0}
+                aria-disabled={!review && disabled ? true : undefined}
+                aria-label={review ? `配对结果 ${pair.left}` : `匹配到 ${pair.left}`}
                 onClick={() => selectedRightId && assign(pair.leftId, selectedRightId)}
                 onKeyDown={(event) => {
                   if ((event.key === 'Enter' || event.key === ' ') && selectedRightId) {
@@ -438,7 +481,7 @@ function MatchingQuestion({
                   }
                 }}
                 onDragOver={(event) => {
-                  if (!disabled) event.preventDefault();
+                  if (!disabled && !review) event.preventDefault();
                 }}
                 onDrop={(event) => {
                   event.preventDefault();
@@ -446,80 +489,53 @@ function MatchingQuestion({
                   if (draggedRightId) assign(pair.leftId, draggedRightId);
                 }}
                 className={cn(
-                  'grid min-h-11 w-full grid-cols-1 items-center gap-2 rounded-[10px] border px-3 py-2 text-left text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--pbl-student)] focus-visible:ring-inset sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)] sm:gap-3',
-                  !review && 'border-[var(--pbl-border)] bg-[var(--pbl-surface)] hover:border-[var(--pbl-student-border)]',
-                  !review && selectedRightId && 'border-dashed border-[var(--pbl-student)] bg-[var(--pbl-student-soft)]',
-                  isCorrect && 'border-[var(--pbl-success-border)] bg-[var(--pbl-success-soft)]',
-                  isWrong && 'border-[var(--pbl-danger-border)] bg-[var(--pbl-danger-soft)]',
+                  matchingStyles.row,
+                  !review && matchingStyles.target,
+                  !review && selectedRightId && matchingStyles.ready,
                 )}
               >
-                <span className="font-medium text-[var(--pbl-text-strong)]">{pair.left}</span>
-                {rightId && !review ? (
+                <div className={matchingStyles.label}>
+                  <span className={matchingStyles.number} aria-hidden="true">{String(pairIndex + 1).padStart(2, '0')}</span>
+                  <span>{pair.left}</span>
+                </div>
+                {review ? (
+                  <div className={matchingStyles.feedback}>
+                    <div>
+                      <p className={cn(matchingStyles.feedbackHeading, isCorrect ? matchingStyles.correct : matchingStyles.incorrect)}>
+                        {isCorrect
+                          ? <CheckCircle2 className={matchingStyles.feedbackIcon} aria-hidden="true" />
+                          : <XCircle className={matchingStyles.feedbackIcon} aria-hidden="true" />}
+                        {isCorrect ? '匹配正确' : rightId ? '你的匹配 · 需调整' : '未作答'}
+                      </p>
+                      {rightId && <p className={matchingStyles.answerText}>{rightById.get(rightId)}</p>}
+                    </div>
+                    {!isCorrect && (
+                      <div className={matchingStyles.correction}>
+                        <p className={cn(matchingStyles.feedbackHeading, matchingStyles.correct)}>正确匹配</p>
+                        <p className={matchingStyles.answerText}>{pair.right}</p>
+                      </div>
+                    )}
+                  </div>
+                ) : rightId ? (
                   <div
                     draggable={!disabled}
                     aria-label={`移动匹配项 ${rightById.get(rightId)}`}
                     onClick={(event) => event.stopPropagation()}
                     onDragStart={(event) => startMatchingDrag(event, rightId)}
-                    className="flex min-h-11 cursor-grab select-none items-center gap-2 rounded-[8px] border border-[var(--pbl-student-border)] bg-[var(--pbl-surface)] px-3 py-2 text-[var(--pbl-student)] active:cursor-grabbing"
+                    className={matchingStyles.assigned}
                   >
-                    <GripVertical className="size-4 shrink-0" aria-hidden="true" />
-                    <span className="min-w-0 flex-1">{rightById.get(rightId)}</span>
+                    <GripVertical className={matchingStyles.grip} aria-hidden="true" />
+                    <span>{rightById.get(rightId)}</span>
                   </div>
                 ) : (
-                  <span className={cn(
-                    'min-h-11 rounded-[8px] border border-dashed border-[var(--pbl-border-strong)] px-3 py-2 text-[var(--pbl-text-muted)]',
-                    rightId && 'border-solid border-[var(--pbl-border)] bg-[var(--pbl-surface)]',
-                  )}>
-                    <span className="block">{rightId ? rightById.get(rightId) : '放置匹配项'}</span>
-                    {isCorrect && <span className="mt-1 block text-xs font-semibold text-[var(--pbl-success)]">匹配正确</span>}
-                    {isWrong && <span className="mt-1 block text-xs font-semibold text-[var(--pbl-danger)]">正确匹配：{pair.right}</span>}
-                  </span>
+                  <div className={matchingStyles.placeholder}>
+                    {selectedRightId ? '点击此处完成配对' : '拖入匹配项，或先选择上方卡片'}
+                  </div>
                 )}
               </div>
             );
           })}
         </div>
-        {!review && (
-          <div
-            aria-label="待选匹配项"
-            onDragOver={(event) => {
-              if (!disabled) event.preventDefault();
-            }}
-            onDrop={(event) => {
-              event.preventDefault();
-              const draggedRightId = event.dataTransfer.getData(MATCH_DRAG_MIME);
-              if (draggedRightId) unassign(draggedRightId);
-            }}
-            className="min-h-24 space-y-2 rounded-[10px] border border-dashed border-[var(--pbl-student-border)] bg-[var(--pbl-student-soft)] p-2"
-          >
-            <p className="px-1 text-[11px] font-semibold text-[var(--pbl-student)]">待选项</p>
-            {shuffledRight.filter((pair) => ![...relationMap.values()].includes(pair.rightId)).map((pair) => {
-              return (
-                <button
-                  key={pair.rightId}
-                  type="button"
-                  draggable={!disabled}
-                  aria-pressed={selectedRightId === pair.rightId}
-                  aria-label={`选择匹配项 ${pair.right}`}
-                  onClick={() => !disabled && setSelectedRightId(pair.rightId)}
-                  onDragStart={(event) => startMatchingDrag(event, pair.rightId)}
-                  className={cn(
-                    'flex min-h-11 w-full cursor-grab select-none items-center gap-2 rounded-[8px] border px-3 py-2 text-left text-sm transition-colors active:cursor-grabbing focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--pbl-student)] focus-visible:ring-inset',
-                    selectedRightId === pair.rightId
-                      ? 'border-[var(--pbl-student)] bg-[var(--pbl-surface)] text-[var(--pbl-student)]'
-                      : 'border-[var(--pbl-border)] bg-[var(--pbl-surface)] text-[var(--pbl-text)] hover:border-[var(--pbl-student)]',
-                  )}
-                >
-                  <GripVertical className="size-4 shrink-0 text-[var(--pbl-text-subtle)]" aria-hidden="true" />
-                  <span className="break-words">{pair.right}</span>
-                </button>
-              );
-            })}
-            {relationMap.size === pairs.length && (
-              <p className="px-2 py-3 text-center text-xs text-[var(--pbl-text-muted)]">所有卡片已放置</p>
-            )}
-          </div>
-        )}
       </div>
     </QuestionCard>
   );

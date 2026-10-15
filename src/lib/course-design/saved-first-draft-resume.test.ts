@@ -51,7 +51,8 @@ import { fingerprintGenerationValue } from "@/lib/course-generation/page-checkpo
 import { assertSavedCourseDesignReplayInput, hasAcceptedSavedCourseDesignOutline,
   resumeSavedCourseDesignFirstDraft } from "./saved-first-draft-resume";
 import { generateSpokenTeachingBlueprint, LEGACY_SPOKEN_SECTION_POLICY as SPOKEN_SECTION_POLICY,
-  SPOKEN_SECTION_POLICY as NATIVE_SPOKEN_SECTION_POLICY } from "./teaching-section-authoring";
+  PREVIOUS_NATIVE_SPOKEN_SECTION_POLICY, PREVIOUS_SOURCE_SPOKEN_SECTION_POLICY,
+  SPOKEN_SECTION_POLICY as NATIVE_SPOKEN_SECTION_POLICY, type SpokenSectionPolicy } from "./teaching-section-authoring";
 import { isUnrequestedSpokenSectionContinuation } from './saved-spoken-section-policy';
 
 function sample() {
@@ -368,7 +369,8 @@ describe("saved complete blueprint local resume", () => {
 });
 
 describe("saved complete spoken sections local resume", () => {
-  async function spokenDraft(includeProcessEvidence = false, nativeObservation = false) {
+  async function spokenDraft(includeProcessEvidence = false, nativeObservation = false,
+    nativePolicy: SpokenSectionPolicy = NATIVE_SPOKEN_SECTION_POLICY) {
     state.course.content.knowledgePoints = [
       { id: 'k1', name: '训练', description: '', level: 'core', evidenceItemIds: ['e1', ...(includeProcessEvidence ? ['e2'] : [])] },
       { id: 'k2', name: '检验', description: '', level: 'core' },
@@ -412,12 +414,12 @@ describe("saved complete spoken sections local resume", () => {
               : { presentationItems: [{ text: '显示重点', nodeIds: ['s1'], role: 'key-point' }] }), resourceNeeds: [] }] });
         const identity = { schemaVersion: 1, inputFingerprint: sectionRequest.fingerprint,
           modelFingerprint: 'spoken-model-fingerprint',
-          ...(nativeObservation ? { authoringPolicy: NATIVE_SPOKEN_SECTION_POLICY } : {}) };
+          ...(nativeObservation ? { authoringPolicy: nativePolicy } : {}) };
         spokenSections.push({ step: `design-authoring:${step}`, state: { ...identity,
           status: 'response-complete', complete: true, rawResponse } },
         { step: `course-design-attempt:${step}`, state: { ...identity, attemptsStarted: 1 } });
         return rawResponse;
-      }, undefined, nativeObservation ? NATIVE_SPOKEN_SECTION_POLICY : SPOKEN_SECTION_POLICY);
+      }, undefined, nativeObservation ? nativePolicy : SPOKEN_SECTION_POLICY);
     // A projection never replaces the actual saved paragraph response.
     spokenSections.push({ step: 'course-design:spoken-section:1', state: { status: 'validated', text: '旧投影' } });
     const saved = { ...state.saved, teachingBlueprint: null, teachingBlueprintAttempt: null, spokenSections };
@@ -427,8 +429,9 @@ describe("saved complete spoken sections local resume", () => {
     return { saved, rawTexts, spokenSections };
   }
 
-  it('resumes a saved native textbook observation locally without repurchasing speech or changing its request receipts', async () => {
-    const { saved, rawTexts } = await spokenDraft(false, true);
+  it.each([PREVIOUS_NATIVE_SPOKEN_SECTION_POLICY, PREVIOUS_SOURCE_SPOKEN_SECTION_POLICY, NATIVE_SPOKEN_SECTION_POLICY] as const)(
+    'resumes a saved native textbook observation locally without repurchasing speech or changing its request receipts (%s)', async (policy) => {
+    const { saved, rawTexts } = await spokenDraft(false, true, policy);
     const original = structuredClone(saved);
     const queued = await resumeSavedCourseDesignFirstDraft('course-1', 'teacher-1');
     expect(queued).toMatchObject({ status: 'queued', request: { authoringRequestId: state.request.authoringRequestId,
@@ -438,7 +441,7 @@ describe("saved complete spoken sections local resume", () => {
     expect(mocks.restore).not.toHaveBeenCalled();
     expect(mocks.save).toHaveBeenCalledOnce();
     const receipt = mocks.save.mock.calls[0][2];
-    expect(receipt).toMatchObject({ authoringPolicy: NATIVE_SPOKEN_SECTION_POLICY, providerCalls: 0, authorCalls: 0,
+    expect(receipt).toMatchObject({ authoringPolicy: policy, providerCalls: 0, authorCalls: 0,
       blueprint: { sections: [{ units: [{ explanationNodes: [{ content: rawTexts[0] }] }] },
         { units: [{ explanationNodes: [{ content: rawTexts[1] }] }], pages: [{ caseObservation: {
           kind: 'source-image', resourceIds: ['textbook_fig_7463e7e21d4c'], imageWouldHelp: true,

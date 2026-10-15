@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { z } from "zod";
-import type { Prisma } from "@prisma/client";
+import { Prisma } from "@prisma/client";
 import type { AuthClaims } from "@/lib/auth/session";
 import { prisma } from "@/lib/db/client";
 import { runMutationTransaction } from "@/lib/db/transaction-retry";
@@ -20,6 +20,12 @@ export const aiCommandSchema = z.discriminatedUnion("op", [
   z.object({ op: z.literal("resolve_support"), idempotencyKey: key, supportId: key }),
 ]);
 export type AiCommand = z.infer<typeof aiCommandSchema>;
+
+function isLectureConversation(conversation: { metadata: unknown }): boolean {
+  const metadata = conversation.metadata;
+  return Boolean(metadata && typeof metadata === "object" && !Array.isArray(metadata)
+    && "feature" in metadata && metadata.feature === "lecture-chat");
+}
 
 export async function requireAiParticipation(claims: AuthClaims, participationId: string, db: PlatformDb = prisma, write = false) {
   const user = await getPlatformUser(claims, db);
@@ -42,13 +48,22 @@ export async function requireAiParticipation(claims: AuthClaims, participationId
 export async function readAiCollaboration(claims: AuthClaims, participationId: string) {
   const context = await requireAiParticipation(claims, participationId);
   const [conversations, supportRecords] = await Promise.all([
-    prisma.aiConversation.findMany({ where: { participationId, userId: context.participation.enrollment.userId, offeringId: context.offering.id }, orderBy: [{ createdAt: "desc" }, { id: "desc" }], take: 50, include: {
+    prisma.aiConversation.findMany({ where: {
+      participationId, userId: context.participation.enrollment.userId, offeringId: context.offering.id,
+      OR: [
+        { metadata: { equals: Prisma.AnyNull } },
+        { metadata: { path: ["feature"], equals: Prisma.AnyNull } },
+        { metadata: { path: ["feature"], not: "lecture-chat" } },
+      ],
+    }, orderBy: [{ createdAt: "desc" }, { id: "desc" }], take: 50, include: {
       messages: { orderBy: [{ createdAt: "desc" }, { id: "desc" }], take: 100 },
       tasks: { orderBy: { createdAt: "desc" }, take: 50, include: { confirmation: true } },
     } }),
     prisma.aiSupportRecord.findMany({ where: { participationId }, orderBy: { createdAt: "desc" }, take: 100 }),
   ]);
-  return { conversations: conversations.map(c => ({ ...c, messages: c.messages.reverse().filter(message => { const metadata = message.metadata as Record<string, unknown> | null; return context.user.role === "teacher" || (metadata?.visibility !== "teacher-only" && !metadata?.hiddenFromStudentAt); }) })), supportRecords, limits: { conversations: 50, messagesPerConversation: 100, tasksPerConversation: 50, supportRecords: 100 } };
+  // Keep the row check as a final boundary. The query excludes private threads
+  // before applying its limit and retains SQL/JSON null and missing features.
+  return { conversations: conversations.filter(c => !isLectureConversation(c)).map(c => ({ ...c, messages: c.messages.reverse().filter(message => { const metadata = message.metadata as Record<string, unknown> | null; return context.user.role === "teacher" || (metadata?.visibility !== "teacher-only" && !metadata?.hiddenFromStudentAt); }) })), supportRecords, limits: { conversations: 50, messagesPerConversation: 100, tasksPerConversation: 50, supportRecords: 100 } };
 }
 
 function receiptKey(userId: string, participationId: string, requestKey: string) {
@@ -64,18 +79,18 @@ export async function mutateAiCollaboration(claims: AuthClaims, participationId:
     if (input.op === "resolve_support" && user.role !== "teacher") throw new PlatformError("FORBIDDEN", "仅任课教师可处理求助", 403);
     const idempotencyKey = receiptKey(user.id, participationId, input.idempotencyKey);
     const fingerprint = createHash("sha256").update(JSON.stringify(input)).digest("hex");
+    let conversation: Awaited<ReturnType<typeof tx.aiConversation.findUnique>> = null;
+    if ("conversationId" in input) {
+      conversation = await tx.aiConversation.findFirst({ where: { id: input.conversationId, participationId, userId: user.id, offeringId: offering.id } });
+      if (!conversation || isLectureConversation(conversation)) throw new PlatformError("NOT_FOUND", "会话不存在", 404);
+    }
     const previous = await tx.aiInteractionEvent.findUnique({ where: { idempotencyKey } });
     if (previous) {
       const payload = previous.payload as Record<string, unknown> | null;
       if (payload?.fingerprint !== fingerprint) throw new PlatformError("IDEMPOTENCY_CONFLICT", "重试标识已用于其他操作", 409);
       return { taskId: previous.taskId, conversationId: previous.conversationId, run: false };
     }
-    let conversation: Awaited<ReturnType<typeof tx.aiConversation.findUnique>> = null;
-    if ("conversationId" in input) {
-      conversation = await tx.aiConversation.findFirst({ where: { id: input.conversationId, participationId, userId: user.id, offeringId: offering.id } });
-      if (!conversation) throw new PlatformError("NOT_FOUND", "会话不存在", 404);
-      if (conversation.status !== "OPEN") throw new PlatformError("CONVERSATION_CLOSED", "会话已结束", 409);
-    }
+    if (conversation && conversation.status !== "OPEN") throw new PlatformError("CONVERSATION_CLOSED", "会话已结束", 409);
     let taskId: string | null = null;
     let supportId: string | null = null;
     if (input.op === "create_conversation") {
@@ -135,7 +150,7 @@ export async function mutateAiCollaboration(claims: AuthClaims, participationId:
 async function finishAiTask(taskId: string, answer: string | null, error: string | null) {
   await runMutationTransaction(async tx => {
     const task = await tx.aiTask.findUnique({ where: { id: taskId }, include: { conversation: true } });
-    if (!task?.conversation?.participationId) return;
+    if (!task?.conversation?.participationId || isLectureConversation(task.conversation)) return;
     await tx.$queryRaw`SELECT id FROM "ClassroomParticipation" WHERE id = ${task.conversation.participationId} FOR UPDATE`;
     const updated = await tx.aiTask.updateMany({ where: { id: taskId, status: "RUNNING" }, data: { status: error ? "FAILED" : "COMPLETED", error, output: answer ? { content: answer } : undefined, completedAt: new Date() } });
     if (!updated.count) return;

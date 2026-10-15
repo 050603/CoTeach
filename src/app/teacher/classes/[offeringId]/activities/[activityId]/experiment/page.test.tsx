@@ -1,7 +1,8 @@
 import "@testing-library/jest-dom/vitest";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import Page from "./page";
+import { COTEACH_COMMUNITY_REFERENCE, COTEACH_SYSTEM_REFERENCE, COTEACH_TEACHER_REFERENCE } from "@/lib/platform/experiment-templates";
 
 vi.mock("next/navigation", () => ({ useParams: () => ({ offeringId: "course-1", activityId: "classroom-1" }), usePathname: () => "/teacher/classes/course-1/activities/classroom-1/experiment" }));
 
@@ -36,6 +37,42 @@ function savedExperiment() {
 }
 
 describe("独立实验模式配置页", () => {
+  it("applies, previews and saves the complete template while preserving other lesson settings", async () => {
+    render(<Page />);
+    fireEvent.click(await screen.findByRole("button", { name: "一键应用前后测模板" }));
+    expect(screen.getByRole("tab", { name: "共用题 9" })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "后测专属 44" })).toBeInTheDocument();
+    expect(fetcher.mock.calls.some(([, options]) => options?.method === "PATCH")).toBe(false);
+    fireEvent.click(screen.getByRole("tab", { name: "学生视角预览" }));
+    expect(within(screen.getByLabelText("前测题目预览")).getAllByRole("group")).toHaveLength(9);
+    fireEvent.click(screen.getByRole("tab", { name: "后测" }));
+    const preview = screen.getByLabelText("后测题目预览");
+    expect(within(preview).getAllByRole("group")).toHaveLength(53);
+    for (const explanation of [COTEACH_TEACHER_REFERENCE, COTEACH_COMMUNITY_REFERENCE, COTEACH_SYSTEM_REFERENCE]) {
+      expect(within(preview).getByText(explanation)).toBeVisible();
+    }
+    fireEvent.click(screen.getAllByRole("button", { name: "保存实验配置" })[0]);
+    await waitFor(() => expect(fetcher).toHaveBeenCalledWith("/api/platform/activities/classroom-1/manage", expect.objectContaining({ method: "PATCH" })));
+    const saved = savedExperiment();
+    expect(saved.config).toMatchObject({ content: "课堂说明", customSetting: { sample: "preserve" } });
+    expect(saved.config.experiment.sharedQuestions).toHaveLength(9);
+    expect(saved.config.experiment.posttest).toHaveLength(44);
+    expect(saved.config.experiment.posttest[13].group.referenceNote).toBe(COTEACH_COMMUNITY_REFERENCE);
+  });
+
+  it("restores the previous draft even after applying the template twice", async () => {
+    render(<Page />);
+    fireEvent.click(await screen.findByRole("switch", { name: "开启实验模式" }));
+    fireEvent.click(screen.getByRole("button", { name: "添加共用题目" }));
+    fireEvent.change(screen.getByLabelText("共用第 1 题题干"), { target: { value: "已有题目" } });
+    fireEvent.click(screen.getByRole("button", { name: "一键应用前后测模板" }));
+    fireEvent.click(screen.getByRole("button", { name: "一键应用前后测模板" }));
+    fireEvent.click(screen.getByRole("button", { name: "撤销应用模板" }));
+    expect(screen.getByLabelText("共用第 1 题题干")).toHaveValue("已有题目");
+    expect(screen.getByRole("tab", { name: "后测专属 0" })).toBeInTheDocument();
+    expect(fetcher.mock.calls.some(([, options]) => options?.method === "PATCH")).toBe(false);
+  });
+
   it("saves an opinion choice question without an answer key and preserves lesson settings", async () => {
     render(<Page />);
     fireEvent.click(await screen.findByRole("switch", { name: "开启实验模式" }));
@@ -119,17 +156,19 @@ describe("独立实验模式配置页", () => {
     fireEvent.click(screen.getByRole("button", { name: "添加量表题组" }));
     fireEvent.change(screen.getByLabelText("共用题组 1 标题"), { target: { value: "任务信心" } });
     fireEvent.change(screen.getByLabelText("共用题组 1 作答说明"), { target: { value: "请根据当前感受，选择最符合的一项。" } });
+    fireEvent.change(screen.getByLabelText("共用题组 1 指代说明"), { target: { value: "这里的教师包括真人教师与 AI。" } });
     fireEvent.change(screen.getByLabelText("共用第 1 题题干"), { target: { value: "我能完成任务" } });
     fireEvent.change(screen.getByLabelText("共用第 2 题题干"), { target: { value: "我能解决问题" } });
     fireEvent.click(screen.getByRole("tab", { name: "学生视角预览" }));
     expect(screen.getByRole("region", { name: "任务信心" })).toHaveTextContent("请根据当前感受，选择最符合的一项。");
+    expect(screen.getByText("这里的教师包括真人教师与 AI。")).toBeVisible();
     fireEvent.click(screen.getByRole("tab", { name: "后测" }));
     expect(screen.getByRole("region", { name: "任务信心" })).toHaveTextContent("我能解决问题");
     fireEvent.click(screen.getAllByRole("button", { name: "保存实验配置" })[0]);
     await waitFor(() => expect(fetcher).toHaveBeenCalledWith("/api/platform/activities/classroom-1/manage", expect.objectContaining({ method: "PATCH" })));
     const questions = savedExperiment().config.experiment.sharedQuestions;
     expect(questions).toHaveLength(2);
-    expect(questions[0].group).toMatchObject({ title: "任务信心", instruction: "请根据当前感受，选择最符合的一项。" });
+    expect(questions[0].group).toMatchObject({ title: "任务信心", instruction: "请根据当前感受，选择最符合的一项。", referenceNote: "这里的教师包括真人教师与 AI。" });
     expect(questions[1].group).toEqual(questions[0].group);
   });
 

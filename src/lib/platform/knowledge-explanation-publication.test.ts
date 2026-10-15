@@ -3,8 +3,9 @@ import type { AuthClaims } from '@/lib/auth/session';
 const mocks = vi.hoisted(() => {
   const tx = { $queryRaw: vi.fn(), $executeRaw: vi.fn(),
     classroomTemplate: { create: vi.fn(), findFirst: vi.fn(), update: vi.fn() },
-    classroomTemplateVersion: { create: vi.fn(), findUniqueOrThrow: vi.fn() },
-    classroomInstance: { findUnique: vi.fn(), update: vi.fn() },
+    classroomTemplateVersion: { create: vi.fn(), findUniqueOrThrow: vi.fn(), findUnique: vi.fn() },
+    classroomInstance: { findUnique: vi.fn(), update: vi.fn(), findFirst: vi.fn(), aggregate: vi.fn(), create: vi.fn() },
+    activity: { findUnique: vi.fn() },
     classroomParticipation: { updateMany: vi.fn() }, courseTeacher: { findFirst: vi.fn() }, domainEvent: { create: vi.fn() } };
   return { tx, transaction: vi.fn(), teacher: vi.fn(), review: vi.fn() };
 });
@@ -12,7 +13,7 @@ vi.mock('@/lib/db/client', () => ({ prisma: {} }));
 vi.mock('@/lib/db/transaction-retry', () => ({ runMutationTransaction: mocks.transaction }));
 vi.mock('./access', () => ({ requireTeacherUser: mocks.teacher, normalizeUsername: (value: string) => value }));
 vi.mock('@/lib/course-quality-review/review-service', () => ({ assertCourseTeacherReview: mocks.review, CourseReviewError: class extends Error {} }));
-import { createPrivateTemplate, createTemplateVersion, startClassroomInstance, finishClassroomInstance } from './repository';
+import { createPrivateTemplate, createTemplateVersion, createClassroomInstance, startClassroomInstance, finishClassroomInstance } from './repository';
 const claims = { sub: 'teacher', role: 'teacher' } as AuthClaims;
 const snapshot = { schemaVersion: 2, kind: 'pbl-course', design: { name: 'Course', stages: [], aiLearningClassroomId: 'classroom-content', content: {
   knowledgePoints: [{ id: 'kp', name: 'Concept' }], knowledgeLectureSections: [{ id: 'section', quizOutlineId: 'quiz', knowledgePointIds: ['kp'] }],
@@ -44,12 +45,37 @@ describe('V2 publication and classroom start enqueue explanations atomically', (
     expect([...queued.values()][0]).toMatchObject({ courseId: 'template', input: { classroomId: 'classroom-content', sections: [{ quizOutlineId: 'quiz' }] } });
     expect(mocks.tx.classroomTemplate.create.mock.invocationCallOrder[0]).toBeLessThan(mocks.tx.$executeRaw.mock.invocationCallOrder[0]);
   });
-  it('enqueues each published immutable revision and keeps its template owner and version lock', async () => {
+  it('deduplicates identical published resources across immutable versions and retains the version lock', async () => {
     await createPrivateTemplate(claims, { title: 'Course', snapshot });
     const created = await createTemplateVersion(claims, 'template', { snapshot });
-    expect(created.version).toBe(2); expect(queued.size).toBe(2);
+    expect(created.version).toBe(2); expect(queued.size).toBe(1);
     expect([...queued.values()].every(row => row.courseId === 'template')).toBe(true);
     expect(mocks.tx.$queryRaw.mock.calls[0][0].join('')).toContain('FOR UPDATE');
+  });
+  it('enqueues a fresh resource receipt when the authored classroom revision changes', async () => {
+    await createPrivateTemplate(claims, { title: 'Course', snapshot });
+    await createTemplateVersion(claims, 'template', { snapshot: { ...snapshot, design: { ...snapshot.design,
+      content: { ...snapshot.design.content, teacherReviewVersion: { classroomRevision: 2 } },
+    } } });
+    expect(queued.size).toBe(2);
+  });
+  it('passes a copied template identity to review authorization while retaining the original confirmation identity', async () => {
+    const copied = { ...snapshot, design: { ...snapshot.design, content: { ...snapshot.design.content,
+      teacherReview: { courseId: 'source-course', signature: 'source-signature' },
+    } } };
+    await createTemplateVersion(claims, 'copied-template', { snapshot: copied });
+    expect(mocks.review).toHaveBeenLastCalledWith(expect.objectContaining({ id: 'copied-template',
+      content: expect.objectContaining({ teacherReview: { courseId: 'source-course', signature: 'source-signature' } }),
+    }), 'teacher');
+    mocks.tx.activity.findUnique.mockResolvedValue({ id: 'activity', chapter: { offeringId: 'offering' } });
+    mocks.tx.classroomTemplateVersion.findUnique.mockResolvedValue({ templateId: 'copied-template', status: 'PUBLISHED',
+      snapshot: copied, template: { ownerId: 'teacher', status: 'ACTIVE' } });
+    mocks.tx.classroomInstance.findFirst.mockResolvedValue(null);
+    mocks.tx.classroomInstance.aggregate.mockResolvedValue({ _max: { runNo: 0 } });
+    await createClassroomInstance(claims, 'activity', 'audio-version');
+    expect(mocks.review).toHaveBeenLastCalledWith(expect.objectContaining({ id: 'copied-template',
+      content: expect.objectContaining({ teacherReview: { courseId: 'source-course', signature: 'source-signature' } }),
+    }), 'teacher');
   });
   it('queues the bound snapshot when starting, deduplicates repeated start, and never enqueues on finish', async () => {
     const result = await startClassroomInstance(claims, 'instance');
@@ -61,6 +87,11 @@ describe('V2 publication and classroom start enqueue explanations atomically', (
     const writes = mocks.tx.$executeRaw.mock.calls.length;
     await finishClassroomInstance(claims, 'instance');
     expect(mocks.tx.$executeRaw).toHaveBeenCalledTimes(writes);
+  });
+  it('shares a publication receipt when a classroom starts with the same bound resources', async () => {
+    await createPrivateTemplate(claims, { title: 'Course', snapshot });
+    await startClassroomInstance(claims, 'instance');
+    expect(queued.size).toBe(1);
   });
   it('does not enqueue unrelated snapshots or templates without lecture sections', async () => {
     await createPrivateTemplate(claims, { title: 'Other', snapshot: {} });

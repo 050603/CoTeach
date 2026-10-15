@@ -14,6 +14,8 @@ import type { ChatSession } from '@openmaic/lib/types/chat';
 import type { SceneOutline } from '@openmaic/lib/types/generation';
 import { createLogger } from '@openmaic/lib/logger';
 import { useCanvasStore } from '@openmaic/lib/store/canvas';
+import { useWhiteboardPagesStore } from '@openmaic/lib/store/whiteboard-pages';
+import { whiteboardIdForScene } from '@openmaic/lib/api/stage-api-whiteboard';
 import { migrateScene } from '@openmaic/lib/edit/slide-schema';
 
 const log = createLogger('StageStore');
@@ -520,6 +522,23 @@ const useStageStoreBase = create<StageState>()((set, get) => ({
 }));
 
 export const useStageStore = createSelectors(useStageStoreBase);
+
+// Browsing retained pages never writes into the stage. Preserve the departing
+// live projection before any route/page replacement, including storage loads.
+useStageStoreBase.subscribe((state, previous) => {
+  if (state.stage?.id === previous.stage?.id && state.currentSceneId === previous.currentSceneId) return;
+  const pages = useWhiteboardPagesStore.getState();
+  if (previous.stage?.id && previous.currentSceneId) {
+    const board = previous.stage.whiteboard?.find((entry) => entry.id === whiteboardIdForScene(previous.currentSceneId));
+    if (board) pages.retainCurrentPage({ stageId: previous.stage.id, sceneId: previous.currentSceneId,
+      elements: board.elements, completed: false,
+      fallbackTitle: previous.scenes.find((scene) => scene.id === previous.currentSceneId)?.title });
+  }
+  pages.setActiveStage(state.stage?.id ?? null);
+  pages.closeReview();
+  useCanvasStore.getState().setWhiteboardOpen(false);
+  useCanvasStore.getState().setWhiteboardClearing(false);
+});
 
 // ==================== Debounced Save ====================
 

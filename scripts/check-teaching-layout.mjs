@@ -211,6 +211,7 @@ try {
         else if (pathname === '/api/ai-collaboration/memory') body = { memories: [], continuation: null };
         else if (pathname === '/api/openmaic/classroom') body = { success: true, classroom: { stage: { id: 'layout-player', name: title, createdAt: 1, updatedAt: 1 }, scenes: [scene] } };
         else if (pathname === '/api/openmaic/progress') body = { data: { progress: {} } };
+        else if (pathname.endsWith('/lecture-chat') && request.method() === 'GET') body = { thread: { id: 'layout-lecture-chat', page: { classroomId: 'layout-player', sceneId: scene.id }, pageTitle: scene.title, messages: [] }, requests: [], writable: true };
         else if (pathname === '/api/textbooks') body = { items: [] };
         else if (pathname.endsWith('/resource-package')) body = { job: null };
         else if (/provider|server-providers/.test(pathname)) body = { providers: [], models: [], success: true };

@@ -43,7 +43,7 @@ import { normalizeTeachingToolPlan } from "@/lib/openmaic/generation/teaching-to
 import { courseDetailedEditHref } from "@/lib/courses/preparation-navigation";
 import { cn } from "@/lib/utils";
 import { getNewSystemCourseReadiness } from "@/lib/classroom/new-system-course";
-import { isAdvisoryCourseReadinessCheck, isTechnicalCourseResourceIssue } from "@/lib/course-quality-review/teacher-review";
+import { hasCourseAudioPublicationIdentity, isAdvisoryCourseReadinessCheck, isTechnicalCourseResourceIssue } from "@/lib/course-quality-review/teacher-review";
 import {
   CourseQualityReview,
   type CourseQualityReviewSummary,
@@ -990,10 +990,12 @@ function PublicationStatusRail({
     : 0;
   const plannedTeachingSec = timingAudit?.plannedSubstantiveTeachingSec ?? 0;
   const savedReview = course.content.teacherReview;
-  const reviewStatus = savedReview || reviewSummary?.status === "confirmed" ? "confirmed"
+  const reviewStatus = hasCourseAudioPublicationIdentity(course) || reviewSummary?.status === "audio-updated" ? "audio-updated"
+    : savedReview || reviewSummary?.status === "confirmed" ? "confirmed"
     : reviewSummary?.status ?? "loading";
   const reviewLabel = !reviewRequired ? "无需单独终审"
-    : reviewStatus === "confirmed" ? "当前版本已终审"
+    : reviewStatus === "audio-updated" ? "沿用原内容终审，音频已更新"
+      : reviewStatus === "confirmed" ? "当前版本已终审"
       : reviewStatus === "blocked" ? `存在 ${reviewSummary?.blockingCount ?? 0} 项阻断问题`
         : reviewStatus === "attention" ? `还有 ${reviewSummary?.attentionCount ?? 0} 项建议待核对`
           : reviewStatus === "ready" ? "可以确认当前版本"
@@ -1151,6 +1153,7 @@ function StudentClassroomExperience({
             previewRefreshKey={previewRefreshKey}
             knowledgeGraph={course.content.knowledgeGraph}
             knowledgePoints={course.content.knowledgePoints}
+            courseMindMap={course.content.courseMindMap}
             mode="teacher-preview"
             onSidebarCollapsedChange={onSidebarCollapsedChange}
             sidebarCollapsed={sidebarCollapsed}

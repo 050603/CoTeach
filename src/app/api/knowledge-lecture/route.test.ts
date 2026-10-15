@@ -18,6 +18,7 @@ const store = vi.hoisted(() => ({
   authenticate: vi.fn(),
   scope: vi.fn(),
   access: vi.fn(),
+  readExplanation: vi.fn(),
   claims: null as { role: string; sub: string } | null,
 }));
 vi.mock("@/lib/ai-collaboration/audit-outbox", () => ({ appendDurableAiInteractionEvents: vi.fn(async () => {}) }));
@@ -42,6 +43,9 @@ vi.mock("@openmaic/lib/server/classroom-storage", () => ({ readClassroom: vi.fn(
 vi.mock("@/lib/knowledge-lecture-settings", () => ({ getKnowledgeLectureTutorSettings: vi.fn() }));
 vi.mock("@openmaic/lib/ai/llm", () => ({ callLLM: vi.fn() }));
 vi.mock("@openmaic/lib/server/resolve-model", () => ({ resolveModel: vi.fn(), resolveModelFromRequest: vi.fn() }));
+vi.mock("@/lib/courses/knowledge-explanations", async (importOriginal) => ({
+  ...await importOriginal<typeof import("@/lib/courses/knowledge-explanations")>(), readPreparedExplanation: store.readExplanation,
+}));
 import { POST } from "./route";
 
 function request(answers: Record<string, string | string[]>, extra: Record<string, unknown> = {}) {
@@ -59,6 +63,7 @@ describe("knowledge lecture server-authoritative grading", () => {
     vi.clearAllMocks();
     store.authConfigured = false;
     store.durable = false;
+    store.readExplanation.mockResolvedValue(null);
     store.claims = null;
     store.authenticate.mockImplementation(async () => store.claims ? { claims: { ...store.claims, sv: 1 } } : { response: Response.json({ code: "UNAUTHORIZED" }, { status: 401 }) });
     store.scope.mockResolvedValue({ accessible: true });
@@ -234,7 +239,7 @@ describe("knowledge lecture server-authoritative grading", () => {
     vi.mocked(callLLM).mockResolvedValue({ text: '{"answer":"请对照选项判断","boardNotes":[]}' } as never);
     const tutorResponse = await POST(new NextRequest("http://localhost/api/knowledge-lecture", {
       method: "POST", headers: { "content-type": "application/json", origin: "http://localhost" },
-      body: JSON.stringify({ action: "tutor-explain", courseId: "course-1", studentId: "student-1",
+      body: JSON.stringify({ action: "tutor-message", message: "请说明这两个选项", courseId: "course-1", studentId: "student-1",
         attemptId: payload.attempt.id, questionId: "choice-1" }),
     }));
     expect(tutorResponse.status).toBe(200);
@@ -290,15 +295,80 @@ describe("knowledge lecture server-authoritative grading", () => {
   });
 
 
-  it("shares an unchanged authored question but does not apply edited answers to an older attempt", async () => {
+  it("reads the original explanation by submission fingerprint after a teacher edits the current question", async () => {
     const { attempt } = await (await POST(request({ "choice-1": "A", "short-1": "" }))).json();
-    vi.mocked(callLLM).mockResolvedValue({ text: '{"answer":"题目解析","boardNotes":[]}' } as never);
+    const explanation = { id: "prepared", questionFingerprint: attempt.questions[0].authoredQuestionFingerprint,
+      text: "A正确，B不正确。", boardNotes: [], source: "prepared" };
+    store.readExplanation.mockResolvedValue(explanation);
+    vi.mocked(callLLM).mockClear();
     const args = { action: "tutor-explain", attemptId: attempt.id, questionId: "choice-1" };
-    expect(await (await POST(request({}, args))).json()).toMatchObject({ resultSource: "shared" });
+    expect(await (await POST(request({}, args))).json()).toMatchObject({ resultSource: "shared", explanation });
     const scene = store.classroom!.scenes[0];
     if (scene.content.type !== "quiz") throw new Error("fixture");
     scene.content.questions[0].answer = ["B"];
-    expect(await (await POST(request({}, args))).json()).toMatchObject({ resultSource: "personalized" });
+    expect(await (await POST(request({}, args))).json()).toMatchObject({ resultSource: "shared", explanation });
+    expect(callLLM).not.toHaveBeenCalled();
+    expect(store.claimTutor).not.toHaveBeenCalled();
+  });
+
+  it("serves 30 simultaneous initial reads and missing resources without AI tasks, model resolution or personalized feedback", async () => {
+    const { attempt } = await (await POST(request({ "choice-1": "B", "short-1": "" }))).json();
+    const question = attempts()[0].questions[0]; question.authoredAnalysis = "共同原题解析";
+    question.feedback = "针对这个学生的批阅意见";
+    store.durable = true; vi.mocked(callLLM).mockClear(); vi.mocked(resolveModel).mockClear();
+    const args = { action: "tutor-explain", attemptId: attempt.id, questionId: "choice-1" };
+    const replies = await Promise.all(Array.from({ length: 30 }, async () => (await POST(request({}, args))).json()));
+    expect(replies.every(reply => reply.explanation.text === "共同原题解析" && reply.explanation.source === "reference")).toBe(true);
+    expect(callLLM).not.toHaveBeenCalled(); expect(resolveModel).not.toHaveBeenCalled(); expect(store.claimTutor).not.toHaveBeenCalled();
+    const { updateCourse } = await import("@/lib/session/server-store");
+    vi.mocked(updateCourse).mockClear();
+    await POST(request({}, args)); expect(updateCourse).not.toHaveBeenCalled();
+  });
+
+  it("records fill_blank format and serves its common explanation while retaining existing grading", async () => {
+    const scene = store.classroom!.scenes[0];
+    if (scene.content.type !== "quiz") throw new Error("fixture");
+    Object.assign(scene.content.questions[1], { format: "fill_blank", referenceAnswer: "同化", analysis: "用原框架解释新信息。" });
+    const { attempt } = await (await POST(request({ "choice-1": "B", "short-1": "同化" }))).json();
+    expect(attempt.questions[1]).toMatchObject({ questionFormat: "fill_blank", authoredAnalysis: "用原框架解释新信息。" });
+    vi.mocked(callLLM).mockClear();
+    const response = await POST(request({}, { action: "tutor-explain", attemptId: attempt.id, questionId: "short-1" }));
+    expect(await response.json()).toMatchObject({ explanation: { source: "reference", text: "用原框架解释新信息。\n\n同化" } });
+    expect(callLLM).not.toHaveBeenCalled();
+  });
+
+  it("supplies common lecture context only when the student actively follows up", async () => {
+    const { attempt } = await (await POST(request({ "choice-1": "B", "short-1": "" }))).json();
+    store.readExplanation.mockResolvedValue({ text: "A符合题意，B混淆方向。" });
+    vi.mocked(callLLM).mockClear(); vi.mocked(callLLM).mockResolvedValue({ text: '{"answer":"你选择B，方向判断需要调整。","boardNotes":[]}' } as never);
+    const response = await POST(request({}, { action: "tutor-message", attemptId: attempt.id, questionId: "choice-1", message: "为什么B不对" }));
+    expect(response.status).toBe(200); expect(callLLM).toHaveBeenCalledOnce();
+    expect(vi.mocked(callLLM).mock.calls[0][0].prompt).toContain("统一讲解：A符合题意，B混淆方向。");
+    expect(vi.mocked(callLLM).mock.calls[0][0].prompt).toContain("学生答案：B");
+  });
+
+  it("recognizes old fill blanks without format and uses the saved reference after source edits", async () => {
+    const scene = store.classroom!.scenes[0];
+    if (scene.content.type !== "quiz") throw new Error("fixture");
+    Object.assign(scene.content.questions[1], { format: "fill_blank", referenceAnswer: "同化", analysis: "原框架未变。" });
+    const { attempt } = await (await POST(request({ "choice-1": "A", "short-1": "同化" }))).json();
+    const question = attempts()[0].questions[1];
+    delete question.questionFormat; delete question.authoredAnalysis;
+    vi.mocked(callLLM).mockClear();
+    const args = { action: "tutor-explain", attemptId: attempt.id, questionId: "short-1" };
+    expect(await (await POST(request({}, args))).json()).toMatchObject({ explanation: { text: "原框架未变。\n\n同化" } });
+    scene.content.questions[1].referenceAnswer = "已修改的新答案";
+    expect(await (await POST(request({}, args))).json()).toMatchObject({ explanation: { text: "同化", source: "reference" } });
+    expect(callLLM).not.toHaveBeenCalled(); expect(store.claimTutor).not.toHaveBeenCalled();
+  });
+
+  it("keeps initial generation for a verified deep question and then reuses its thread", async () => {
+    const { attempt } = await (await POST(request({ "choice-1": "A", "short-1": "理由" }))).json();
+    vi.mocked(callLLM).mockClear(); vi.mocked(callLLM).mockResolvedValue({ text: '{"answer":"根据你的理由继续分析。","boardNotes":[]}' } as never);
+    const args = { action: "tutor-explain", attemptId: attempt.id, questionId: "short-1" };
+    expect(await (await POST(request({}, args))).json()).toMatchObject({ thread: { questionId: "short-1" }, resultSource: "personalized" });
+    expect(callLLM).toHaveBeenCalledOnce();
+    await POST(request({}, args)); expect(callLLM).toHaveBeenCalledOnce();
   });
 
   it("retains malformed tutor output as a failure instead of completing a generic explanation", async () => {

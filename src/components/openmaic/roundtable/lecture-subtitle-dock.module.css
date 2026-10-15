@@ -1,23 +1,20 @@
 .mindMapPreview {
-  background: radial-gradient(ellipse 76% 68% at 50% 50%, rgba(190, 229, 217, 0.42), transparent 76%);
-}
-
-:global(.dark) .mindMapPreview {
-  background: radial-gradient(ellipse 76% 68% at 50% 50%, rgba(35, 111, 94, 0.24), transparent 76%);
+  background: #f7faf8;
 }
 
 .mindMapCanvas {
-  -webkit-mask-image: radial-gradient(ellipse 94% 86% at 50% 50%, #000 38%, rgba(0, 0, 0, 0.82) 58%, transparent 100%);
-  mask-image: radial-gradient(ellipse 94% 86% at 50% 50%, #000 38%, rgba(0, 0, 0, 0.82) 58%, transparent 100%);
+  overflow: hidden;
+  border-radius: 10px;
 }
 
 .graphDialog {
+  z-index: 160;
   display: flex;
   flex-direction: column;
-  width: min(960px, calc(100vw - 24px));
-  max-width: min(960px, calc(100vw - 24px));
-  height: min(760px, calc(100dvh - 24px));
-  max-height: calc(100dvh - 24px);
+  width: min(1440px, calc(100vw - 32px));
+  max-width: min(1440px, calc(100vw - 32px));
+  height: min(900px, calc(100dvh - 32px));
+  max-height: calc(100dvh - 32px);
   gap: 0;
   overflow: hidden;
   padding: 0;
@@ -25,7 +22,8 @@
 
 .graphHeader {
   flex-shrink: 0;
-  padding: 20px 64px 16px 24px;
+  padding: 16px 64px 14px 24px;
+  background: #fff;
 }
 
 .graphViewport {
@@ -34,7 +32,350 @@
   min-height: 0;
 }
 
+@media (max-width: 700px), (max-height: 600px) {
+  .graphHeader { padding: 12px 60px 12px 16px; }
+  .graphHeader > p { display: none; }
+  .graphHeader > h2 { font-size: 17px; }
+}
+
+@media (max-width: 700px) {
+  .graphDialog {
+    width: calc(100vw - 16px);
+    max-width: calc(100vw - 16px);
+    height: calc(100dvh - 16px);
+    max-height: calc(100dvh - 16px);
+    border-radius: 12px;
+  }
+}
+
+.chatEntry {
+  position: relative;
+  z-index: 20;
+  flex-shrink: 0;
+  min-width: 0;
+  padding: 0.625rem 1rem 0;
+}
+
+.chatComposer {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  min-height: 44px;
+  border: 1px solid rgb(226 232 240 / 0.85);
+  border-radius: 12px;
+  background: rgb(248 250 252 / 0.6);
+  transition: border-color 150ms, background-color 150ms;
+}
+
+.chatComposer:focus-within {
+  border-color: rgb(13 148 136 / 0.5);
+  background: #fff;
+}
+
+.chatInput {
+  flex: 1;
+  width: 0;
+  min-width: 0;
+  height: 44px;
+  resize: none;
+  border: 0;
+  outline: 0;
+  padding: 12px 0 10px 12px;
+  background: transparent;
+  color: #334155;
+  font-size: 13px;
+  line-height: 20px;
+  scrollbar-width: thin;
+}
+
+.chatInput::placeholder {
+  color: #94a3b8;
+}
+
+.chatInput:disabled {
+  opacity: 0.65;
+}
+
+.chatSend {
+  display: grid;
+  flex-shrink: 0;
+  width: 44px;
+  height: 44px;
+  place-items: center;
+  border-radius: 11px;
+  color: #0f766e;
+}
+
+.chatSend:enabled:hover {
+  background: rgb(204 251 241 / 0.45);
+}
+
+.chatSend:disabled {
+  color: #cbd5e1;
+}
+
+.chatPanel {
+  display: flex;
+  min-width: 0;
+  min-height: 112px;
+  height: min(280px, 32dvh);
+  max-height: 32dvh;
+  flex-direction: column;
+}
+
+.chatMessages {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding-right: 4px;
+  scrollbar-width: thin;
+  scrollbar-color: #cbd5e1 transparent;
+  overflow-anchor: none;
+}
+
+.chatQuestion {
+  margin: 0 0 14px 12px;
+  padding: 10px 12px;
+  border-radius: 12px 12px 3px 12px;
+  background: #eff7f4;
+  color: #334155;
+}
+
+.chatAnswer {
+  min-width: 0;
+  margin-bottom: 18px;
+  color: #334155;
+}
+
+/* Leave room to place even a short latest answer at the top of the reader. */
+.chatAnswer:last-of-type {
+  min-height: 100%;
+  margin-bottom: 0;
+}
+
+.chatMarkdown {
+  min-width: 0;
+  font-size: 13px;
+  line-height: 1.65;
+  overflow-wrap: anywhere;
+}
+
+.chatMarkdown p {
+  margin-block: 0.35rem;
+}
+
+.chatMarkdown ul,
+.chatMarkdown ol {
+  padding-left: 1.25rem;
+  margin-block: 0.5rem;
+}
+
+.chatMarkdown ul { list-style: disc; }
+.chatMarkdown ol { list-style: decimal; }
+
+.chatMarkdown h1,
+.chatMarkdown h2,
+.chatMarkdown h3 {
+  margin-block: 0.75rem 0.25rem;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.chatMarkdown pre,
+.chatMarkdown table,
+.chatMarkdown [data-streamdown="table-wrapper"] {
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+.chatMarkdown pre {
+  margin-block: 0.5rem;
+  border-radius: 8px;
+  padding: 0.75rem;
+  background: #f1f5f9;
+  font-size: 12px;
+}
+
+.chatDisplayMath {
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+  margin-block: 0.5rem;
+}
+
+.chatInlineMath {
+  display: inline-block;
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+  vertical-align: middle;
+  font-size: 0.95em;
+}
+
+.chatSources {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px;
+  margin-top: 2px;
+}
+
+.chatSourceButton,
+.chatSourceClose {
+  position: relative;
+  display: inline-flex;
+  width: 44px;
+  min-height: 44px;
+  flex: 0 0 44px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  color: #0f766e;
+  cursor: pointer;
+}
+
+.chatSourceButton:hover,
+.chatSourceClose:hover { background: rgb(13 148 136 / 0.07); }
+
+.chatSourceButton:focus-visible,
+.chatSourceClose:focus-visible,
+.chatCitation summary:focus-visible {
+  outline: 2px solid #0d9488;
+  outline-offset: 1px;
+}
+
+.chatSourceIndex {
+  position: absolute;
+  right: 6px;
+  bottom: 7px;
+  font-size: 9px;
+  line-height: 1;
+}
+
+.chatSourcePopover {
+  z-index: 90;
+  width: min(320px, calc(100vw - 24px));
+  max-height: min(384px, 70dvh, var(--radix-popover-content-available-height, 70dvh));
+  overflow: auto;
+  overscroll-behavior: contain;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  padding: 8px 12px;
+  background: #fff;
+  color: #334155;
+  box-shadow: 0 8px 28px rgb(15 23 42 / 0.13);
+  font-size: 12px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+  outline: none;
+}
+
+.chatSourceHeader {
+  display: flex;
+  min-width: 0;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 4px;
+}
+
+.chatSourceHeader h5 {
+  min-width: 0;
+  padding-block: 12px;
+  font-weight: 600;
+  line-height: 20px;
+}
+
+.chatSourceClose { margin-right: -8px; color: #64748b; }
+
+.chatSourceSection { padding-top: 6px; }
+.chatSourceSection + .chatSourceSection { border-top: 1px solid #f1f5f9; }
+.chatSourcePath { color: #64748b; font-size: 11px; }
+
+.chatCitation summary {
+  display: flex;
+  min-height: 44px;
+  width: fit-content;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+  color: #0f766e;
+  font-size: 11px;
+  list-style: none;
+}
+
+.chatCitation summary::-webkit-details-marker { display: none; }
+.chatCitation[open] summary svg { transform: rotate(180deg); }
+
+.chatCitation blockquote {
+  margin-block: 0 12px;
+  border-left: 2px solid #99f6e4;
+  padding-left: 8px;
+  color: #64748b;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+:global(.dark) .chatComposer {
+  border-color: rgb(255 255 255 / 0.12);
+  background: rgb(255 255 255 / 0.035);
+}
+
+:global(.dark) .chatComposer:focus-within {
+  border-color: rgb(45 212 191 / 0.5);
+  background: rgb(255 255 255 / 0.055);
+}
+
+:global(.dark) .chatInput,
+:global(.dark) .chatAnswer,
+:global(.dark) .chatQuestion { color: #e2e8f0; }
+:global(.dark) .chatQuestion { background: rgb(20 184 166 / 0.1); }
+:global(.dark) .chatSend { color: #5eead4; }
+:global(.dark) .chatSend:disabled { color: #475569; }
+:global(.dark) .chatMarkdown pre { background: #1e293b; }
+:global(.dark) .chatSourcePopover { border-color: #334155; background: #0f172a; color: #e2e8f0; }
+:global(.dark) .chatSourceSection + .chatSourceSection { border-color: #1e293b; }
+:global(.dark) .chatSourcePath,
+:global(.dark) .chatCitation blockquote { color: #94a3b8; }
+:global(.dark) .chatSourceButton,
+:global(.dark) .chatCitation summary { color: #5eead4; }
+:global(.dark) .chatCitation blockquote { border-color: #115e59; }
+
+@media (min-width: 1280px) {
+  .chatEntry { padding-inline: 1.25rem; }
+  .chatPanel { height: 100%; min-height: 0; max-height: none; }
+}
+
+/* During questions the composer supplies Continue. Reclaim the duplicate
+   presenter and playback rows so the lesson remains visible above it. */
+@media (max-width: 1279px) {
+  .dock [data-lecture-chat-context='true'] {
+    grid-template-rows: minmax(0, 1fr) auto auto;
+  }
+
+  .dock [data-lecture-chat-active='true'] {
+    grid-template-rows: minmax(0, 1fr) auto;
+  }
+
+  .dock [data-lecture-chat-context='true'] > [data-rail-header],
+  .dock [data-lecture-chat-context='true'] > [data-rail-divider],
+  .dock [data-lecture-chat-context='true'] > [role='status'],
+  .dock [data-lecture-chat-active='true'] > [data-subtitle-controls] {
+    display: none;
+  }
+}
+
+@media (max-width: 559px) and (max-height: 640px) {
+  .dock [data-subtitle-viewport-frame] { height: 60px; }
+  .chatPanel { height: 30dvh; max-height: 30dvh; min-height: 96px; }
+}
+
 @media (max-width: 639px) {
+  .chatInput { font-size: 16px; }
+
   .dock [data-subtitle-controls] {
     flex-wrap: wrap;
     justify-content: center;
@@ -81,4 +422,7 @@
     margin-top: 0.5rem;
     padding: 0.5rem 0.75rem;
   }
+
+  .chatEntry { padding: 0.25rem 0.75rem 0; }
+  .chatPanel { height: 100%; min-height: 0; max-height: none; }
 }

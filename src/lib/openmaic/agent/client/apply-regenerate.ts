@@ -135,7 +135,8 @@ export function planRegenerateApply(
     if (!isEqual(block.steps, boardPatch.before)) {
       return fail('这块白板在 AI 编辑期间已被修改，已保留你的最新内容。请重新让 AI 编辑。');
     }
-    if (boardPatch.steps.some((action) => !validateAction(action).valid || action.type === 'wb_open' || action.type === 'wb_close' || (action.type !== 'speech' && !action.type.startsWith('wb_')))) {
+    if (boardPatch.steps.some((action) => !validateAction(action).valid || action.type === 'wb_open' || action.type === 'wb_close'
+      || (block.speechBound && action.type === 'speech') || (action.type !== 'speech' && !action.type.startsWith('wb_')))) {
       return fail('AI 返回了白板之外的步骤或不完整内容，修改没有应用。');
     }
     return {
@@ -157,7 +158,7 @@ export function planRegenerateApply(
     }
     const currentActions = scene.actions ?? [];
     const boardIndexes = new Set(whiteboardBlocks(currentActions).flatMap((block) =>
-      Array.from({ length: block.end - block.start + 1 }, (_item, index) => block.start + index),
+      block.actionIndexes,
     ));
     const currentById = new Map(currentActions.filter((_action, index) => !boardIndexes.has(index)).map((action) => [action.id, action]));
     const edited = new Map<string, Action>();

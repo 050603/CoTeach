@@ -33,6 +33,16 @@ beforeEach(() => {
 });
 
 describe("generation checkpoint execution ownership", () => {
+  it('restores the concept map independently from completed pages and course finalization', async () => {
+    const map = { schemaVersion: 1, sourceFingerprint: 'concept-source', attempts: 1, complete: true };
+    mocks.findCheckpoints.mockResolvedValue([
+      { step: 'course-design:mind-map', state: map },
+      { step: 'page:page-1', state: { pageKey: 'page-1' } },
+    ]);
+    const saved = await loadGenerationCheckpoints('job-1');
+    expect(saved.courseMindMap).toEqual(map);
+    expect(saved.pages).toEqual([{ pageKey: 'page-1' }]);
+  });
   it('loads raw authoring acceptance separately from compiled stages for precise failed-stage recovery', async () => {
     const receipt = { schemaVersion: 1, pageKey: 'page', stage: 'content', accepted: true, inputFingerprint: 'raw-input' };
     const compiled = { schemaVersion: 1, pageKey: 'page', stage: 'content', inputFingerprint: 'compiled-input', payload: {} };

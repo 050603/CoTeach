@@ -61,6 +61,7 @@ import type { ProjectMemoryEntry, ProjectSupportDetails } from "@/lib/ai-collabo
 import { useProjectMemory } from "@/components/views/student/use-project-memory";
 
 import { useCodeDraft } from "./use-code-draft";
+import { CollaborationProjectDetails } from "./collaboration-project-details";
 import { acknowledgeCodeAiRequest, readPendingCodeAiRequest, requestBackgroundCodeAi, requestCodeAi, type PendingCodeAiRequest } from "@/lib/browser/code-ai-request";
 import { loadCodeEditorRuntime } from "@/lib/browser/code-editor-runtime";
 import collaborationStyles from "./collaboration-responsive.module.css";
@@ -72,13 +73,6 @@ type MonacoDisposable = { dispose: () => void };
 
 function codeSubmissionTitle(language: CodeArtifactLanguage): string {
   return language === "python" ? "Python 项目代码" : "C 语言项目代码";
-}
-
-function saveStateLabel(status: "saved" | "unsaved" | "saving" | "error"): string {
-  if (status === "saving") return "保存中";
-  if (status === "unsaved") return "有未保存修改";
-  if (status === "error") return "保存失败";
-  return "已保存";
 }
 
 function nowId(prefix: string): string {
@@ -975,6 +969,14 @@ export function CodeAiCollaboration({
         currentStage={{ index: course.currentStageIndex, total: course.stages.length, label: stage?.label ?? "项目实践" }}
         currentTask={stage?.description}
         headerSlot={stage ? <StudentClassroomHeaderStatus course={course} /> : undefined}
+        saveStatus={{
+          state: session.saveState === "error" ? "error"
+            : saveStatus === "saved" && session.saveState === "saving" ? "saving" : saveStatus,
+          onRetry: () => {
+            if (saveStatus === "error" || saveStatus === "unsaved") void persistArtifact(serializedArtifact);
+            else void session.retrySave();
+          },
+        }}
         hideCourseSwitcher
         leadRole="学生"
         role="student"
@@ -982,15 +984,11 @@ export function CodeAiCollaboration({
       />
       <header className={cn(collaborationStyles.workspaceHeader, "sticky top-16 z-[60] min-h-16 border-b border-[var(--pbl-border)] bg-[color-mix(in_srgb,var(--pbl-surface)_96%,transparent)] backdrop-blur-sm")}>
         <div className="flex min-h-16 w-full flex-wrap items-center justify-between gap-3 px-2 py-2 sm:px-3 lg:px-4">
-          <div className="min-w-0 flex-[1_1_12rem]">
-            <p className="text-[10px] font-medium leading-none text-stone-500">选题方向</p>
-            <h1 className="mt-1 truncate text-base font-bold leading-tight text-stone-950 sm:text-lg">{projectTitle}</h1>
-          </div>
+          <CollaborationProjectDetails course={course} stageKey={stageKey} projectTitle={projectTitle} projectGoal={group?.goal} />
           <div className={cn(collaborationStyles.headerActions, "flex items-center gap-2 sm:gap-3")}>
             {pendingAiRecovery && <button disabled={aiBusy || Boolean(pendingChangeSet)} type="button" className="min-h-11 text-xs underline" onClick={() => { void submitAiRequest({ message: String(pendingAiRecovery.body.message), intent: pendingAiRecovery.body.intent as CodeCollaborationIntent, selection: pendingAiRecovery.body.selection as CodeSelection | undefined }); }}>恢复上次 AI 结果</button>}
             {pendingCommentRecovery && <button disabled={commentBusy || Boolean(pendingChangeSet)} type="button" className="min-h-11 text-xs underline" onClick={() => { void submitCommentReply(undefined, pendingCommentRecovery); }}>恢复批注回复</button>}
             {codeDraft.error && <span role="alert" className="max-w-md text-xs text-red-700">{codeDraft.error}<button type="button" onClick={codeDraft.download} className="ml-2 min-h-11 underline">下载本机代码草稿</button></span>}
-            <span className={cn("hidden items-center gap-1.5 text-xs sm:inline-flex", saveStatus === "error" ? "text-red-600" : "text-stone-500")}>{saveStatus === "saved" ? <Check size={13} /> : null}{saveStateLabel(saveStatus)}</span>
             <PrimaryButton disabled={saveStatus === "saving"} onClick={() => { void persistArtifact(serializedArtifact); }} size="sm" tone="slate" variant="outline"><Save size={14} />保存</PrimaryButton>
           </div>
         </div>

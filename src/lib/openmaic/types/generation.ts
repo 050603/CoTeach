@@ -5,9 +5,10 @@
  * Stage 2: Scene Outlines → Full Scenes (slide/quiz/interactive/pbl with actions)
  */
 
-import type { ActionType } from './action';
+import type { ActionType, SpeechAnchor } from './action';
 import type { MediaGenerationRequest } from '@openmaic/lib/media/types';
 import type { TtsTimingPlan } from '@openmaic/lib/audio/tts-timing';
+import type { WhiteboardDiagram } from '@openmaic/lib/whiteboard/diagram';
 
 // ==================== PDF Image Types ====================
 
@@ -195,6 +196,23 @@ export type TeachingToolPlanItem = {
   content: string[];
   /** Confirmed plans are contractual; generation may not silently omit them. */
   required?: boolean;
+  /** Internal structural diagnostics retained when normalization cannot safely
+   * compile a declared board; they never count as successful tool evidence. */
+  whiteboardValidationIssues?: string[];
+  /** Exact progressive board contract compiled against the saved manuscript. */
+  whiteboard?: {
+    title: string;
+    diagram?: WhiteboardDiagram;
+    steps: Array<{
+      title?: string;
+      content?: string;
+      reveal?: string[];
+      emphasize?: string[];
+      speechId: string;
+      speechAnchor: SpeechAnchor;
+    }>;
+    exit: { speechId: string; speechAnchor: SpeechAnchor };
+  };
 };
 
 /** First-level activity catalog used to validate second-level parent links. */

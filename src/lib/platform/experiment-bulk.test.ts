@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ExperimentConfigSchema, ExperimentQuestionSchema } from "./experiment";
+import { EXPERIMENT_QUESTION_LIMIT, ExperimentConfigSchema, ExperimentQuestionSchema } from "./experiment";
 import assessmentBackup from "../../../scripts/data/aied-assessment-v3.2.json";
 import {
   EXPERIMENT_BULK_EXAMPLE,
@@ -76,10 +76,10 @@ describe("experiment question spreadsheet import", () => {
 
   it("rejects too many questions, blank input, duplicate generated IDs, and malformed answers", () => {
     expect(parseExperimentQuestionRows("  ").ok).toBe(false);
-    const tooMany = Array.from({ length: 31 }, (_, index) => `简答题\t问题 ${index + 1}`).join("\n");
+    const tooMany = Array.from({ length: EXPERIMENT_QUESTION_LIMIT + 1 }, (_, index) => `简答题\t问题 ${index + 1}`).join("\n");
     const overflow = parseExperimentQuestionRows(tooMany, ids());
     expect(overflow.ok).toBe(false);
-    if (!overflow.ok) expect(overflow.errors[0]).toContain("第 31 行");
+    if (!overflow.ok) expect(overflow.errors[0]).toContain(`第 ${EXPERIMENT_QUESTION_LIMIT + 1} 行`);
     const duplicated = parseExperimentQuestionRows("简答题\t问题 1\n简答题\t问题 2", () => "same");
     expect(duplicated.ok).toBe(false);
     const badAnswer = parseExperimentQuestionRows("多选题\t问题\t甲|乙\tA|C", ids());

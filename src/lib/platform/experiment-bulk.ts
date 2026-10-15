@@ -1,5 +1,5 @@
 import { clientUUID } from "@/lib/uuid";
-import { ExperimentConfigSchema, type ExperimentConfig, type ExperimentQuestion } from "./experiment";
+import { EXPERIMENT_QUESTION_LIMIT, ExperimentConfigSchema, type ExperimentConfig, type ExperimentQuestion } from "./experiment";
 
 /** Copy these seven columns from a spreadsheet, including the header if available. */
 export const EXPERIMENT_BULK_HEADER = "题型\t题干\t选项或量表范围\t参考答案（可空）\t研究维度（可空）\t题组标题（可空）\t统一作答说明（可空）";
@@ -153,13 +153,13 @@ function parseQuestion(row: TsvRow, createId: () => string): { question?: Experi
   return { ...(errors.length ? {} : { question }), errors };
 }
 
-/** Import up to 30 questions into one assessment bank. No partial import occurs on errors. */
+/** Import one bounded assessment bank. No partial import occurs on errors. */
 export function parseExperimentQuestionRows(input: string, createId: () => string = clientUUID): ExperimentBulkParseResult {
   const parsed = readTsvRows(input);
   if (parsed.error) return { ok: false, questions: [], errors: [parsed.error] };
   const rows = parsed.rows.filter((row, index) => index !== 0 || !["题型", "type"].includes(normalizeAlias(row.cells[0] ?? "")) || !["题干", "prompt"].includes(normalizeAlias(row.cells[1] ?? "")));
   if (!rows.length) return { ok: false, questions: [], errors: ["第 1 行：请粘贴至少一道题目"] };
-  if (rows.length > 30) return { ok: false, questions: [], errors: [`第 ${rows[30].line} 行：每次最多导入 30 道题`] };
+  if (rows.length > EXPERIMENT_QUESTION_LIMIT) return { ok: false, questions: [], errors: [`第 ${rows[EXPERIMENT_QUESTION_LIMIT].line} 行：每次最多导入 ${EXPERIMENT_QUESTION_LIMIT} 道题`] };
   const questions: ExperimentQuestion[] = [];
   const errors: string[] = [];
   const groupRows: Array<{ row: TsvRow; question: ExperimentQuestion; title: string; instruction: string }> = [];

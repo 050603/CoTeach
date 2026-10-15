@@ -28,6 +28,8 @@ vi.mock("@/lib/realtime/event-bus", () => ({ publishCourseEvent: mocks.publish }
 vi.mock("./access", () => ({ requireStudentUser: mocks.student, requireTeacherUser: mocks.teacher }));
 
 import { ensureExperimentAssignment, getClassroomExperimentResults, getStudentExperimentAssessment, saveExperimentAssessmentDraft, submitExperimentAssessment } from "./experiment-service";
+import { composeExperimentForms, ExperimentConfigSchema } from "./experiment";
+import { COTEACH_COMMUNITY_REFERENCE, createCoTeachAssessmentTemplate } from "./experiment-templates";
 
 const claims = { role: "student", sub: "student" } as AuthClaims;
 const experiment = {
@@ -60,6 +62,23 @@ beforeEach(() => {
 });
 
 describe("classroom experiment submissions", () => {
+  it("publishes and saves the full 53-question template with its original reference notes", async () => {
+    const config = createCoTeachAssessmentTemplate();
+    const forms = composeExperimentForms(config, "none", () => 0);
+    mocks.tx.classroomInstance.findUnique.mockResolvedValue({ ...instance, status: "FINISHED", runtimeConfig: { currentStageIndex: 4 }, activity: { ...instance.activity, config: { experiment: config } } });
+    mocks.tx.experimentAssessmentAssignment.findUnique.mockResolvedValue({ id: "assignment", variant: "none", pretestForm: forms.pretest, posttestForm: forms.posttest });
+    mocks.tx.experimentAssessmentSubmission.findUnique.mockImplementation(({ where }) => where.instanceId_enrollmentId_phase.phase === "pretest" ? { id: "pre" } : null);
+    const view = await getStudentExperimentAssessment(claims, "run", "posttest");
+    expect(view.available).toBe(true);
+    expect(view.questions).toHaveLength(53);
+    expect(view.questions[22].group?.referenceNote).toBe(COTEACH_COMMUNITY_REFERENCE);
+    const answers = Object.fromEntries(forms.posttest.map((question) => [question.id, question.type === "scale" ? "4" : "不知道"]));
+    const row = await submitExperimentAssessment(claims, "run", { phase: "posttest", answers });
+    expect(row).toMatchObject({ answers, objectiveTotal: 0 });
+    expect(ExperimentConfigSchema.safeParse(row.questionnaire).success).toBe(true);
+    expect((row.questionnaire as { posttest: typeof forms.posttest }).posttest[22].group?.referenceNote).toBe(COTEACH_COMMUNITY_REFERENCE);
+  });
+
   it("accepts a pretest before the lesson and stores a run-specific question snapshot", async () => {
     const row = await submitExperimentAssessment(claims, "run", { phase: "pretest", answers: { q1: "乙" } });
     expect(row).toMatchObject({ instanceId: "run", enrollmentId: "enrollment", phase: "pretest", researchKey: "anonymous", objectiveScore: 1, objectiveTotal: 1 });
@@ -196,12 +215,12 @@ describe("classroom experiment submissions", () => {
   });
 
   it("accepts a complete assigned form larger than either teacher question bank", async () => {
-    const shared = Array.from({ length: 30 }, (_, index) => ({ id: `shared-${index}`, type: "short-answer", prompt: `共用题 ${index}` }));
-    const specific = Array.from({ length: 30 }, (_, index) => ({ id: `post-${index}`, type: "short-answer", prompt: `专属题 ${index}` }));
+    const shared = Array.from({ length: 50 }, (_, index) => ({ id: `shared-${index}`, type: "short-answer", prompt: `共用题 ${index}` }));
+    const specific = Array.from({ length: 50 }, (_, index) => ({ id: `post-${index}`, type: "short-answer", prompt: `专属题 ${index}` }));
     mocks.tx.classroomInstance.findUnique.mockResolvedValue({ ...instance, status: "FINISHED", runtimeConfig: { currentStageIndex: 4 } });
     mocks.tx.experimentAssessmentAssignment.findUnique.mockResolvedValue({ id: "assignment", pretestForm: shared, posttestForm: [...shared, ...specific] });
     mocks.tx.experimentAssessmentSubmission.findUnique.mockResolvedValueOnce({ id: "pre" });
     const row = await submitExperimentAssessment(claims, "run", { phase: "posttest", answers: Object.fromEntries([...shared, ...specific].map((question) => [question.id, "作答"])) });
-    expect((row.questionnaire as { posttest: unknown[] }).posttest).toHaveLength(60);
+    expect((row.questionnaire as { posttest: unknown[] }).posttest).toHaveLength(100);
   });
 });

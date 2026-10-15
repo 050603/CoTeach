@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useId, useRef } from "react";
-import { Check } from "lucide-react";
+import { Check, Info } from "lucide-react";
 import { groupExperimentQuestions, type ExperimentQuestionGroup } from "@/lib/platform/experiment";
 import { designPromptParts, parseDesignAnswer, serializeDesignAnswer } from "@/lib/platform/experiment-design-answer";
 
@@ -39,6 +39,13 @@ function promptParagraphs(prompt: string) {
   return (prompt.trim().replace(/\r\n?/g, "\n") || "未填写题干").split(/\n\s*\n/);
 }
 
+function ReferenceNote({ note, id }: { note: string; id: string }) {
+  return <div className="mt-4 flex items-start gap-3 rounded-[10px] border border-[var(--pbl-student-border)] border-l-4 border-l-[var(--pbl-student)] bg-[var(--pbl-student-soft)] p-4 text-[var(--pbl-student)]" id={id}>
+    <Info aria-hidden="true" className="mt-0.5 shrink-0" size={20} />
+    <div className="min-w-0"><p className="text-sm font-bold">指代说明 · 请先阅读</p><p className="mt-1 whitespace-pre-wrap text-sm font-semibold leading-7 [overflow-wrap:anywhere]">{note}</p></div>
+  </div>;
+}
+
 export function ExperimentQuestionCard({ question, index, answer, onAnswerChange, inputName, id, invalid = false, grouped = false, descriptionId, readOnly = false }: {
   question: ExperimentDisplayQuestion;
   index: number;
@@ -52,6 +59,8 @@ export function ExperimentQuestionCard({ question, index, answer, onAnswerChange
   readOnly?: boolean;
 }) {
   const headingId = useId();
+  const referenceNoteId = `${headingId}-reference`;
+  const standaloneReference = !grouped ? question.group?.referenceNote : undefined;
   const textArea = useRef<HTMLTextAreaElement>(null);
   useEffect(() => {
     if (!textArea.current) return;
@@ -67,7 +76,7 @@ export function ExperimentQuestionCard({ question, index, answer, onAnswerChange
   return <fieldset
     aria-invalid={invalid || undefined}
     aria-labelledby={headingId}
-    aria-describedby={descriptionId}
+    aria-describedby={[descriptionId, standaloneReference ? referenceNoteId : undefined].filter(Boolean).join(" ") || undefined}
     className={`min-w-0 scroll-mt-24 bg-white py-5 sm:py-6 ${grouped ? "border-b px-4 last:border-b-0 sm:px-6" : "rounded-[14px] border px-4 sm:px-6"} ${invalid ? "border-[var(--pbl-danger)]" : "border-[var(--pbl-border)]"}`}
     id={id}
     tabIndex={-1}
@@ -83,6 +92,7 @@ export function ExperimentQuestionCard({ question, index, answer, onAnswerChange
       </div>
       <span aria-hidden="true" className="hidden shrink-0 text-xs font-medium text-[var(--pbl-text-muted)] sm:block">{question.optional ? "可跳过" : "必答"}</span>
     </div>
+    {standaloneReference ? <ReferenceNote id={referenceNoteId} note={standaloneReference} /> : null}
     <div className="mt-5 border-t border-[var(--pbl-border)] pt-5">
       {design && designAnswer ? <div className="grid min-w-0 gap-5 xl:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)] xl:gap-7">
         <section aria-label="题目情境" className="min-w-0 rounded-xl border border-[var(--pbl-student-border)] bg-[var(--pbl-student-soft)] p-4 sm:p-5">
@@ -180,9 +190,10 @@ export function ExperimentQuestionList({ questions, answers, onAnswerChange, inp
       const group = section.group;
       const titleId = `${listId}-group-${sectionIndex}-title`;
       const instructionId = `${listId}-group-${sectionIndex}-instruction`;
+      const referenceNoteId = `${listId}-group-${sectionIndex}-reference`;
       const content = section.questions.map((question) => <ExperimentQuestionCard
         answer={answers[question.id]}
-        descriptionId={group?.instruction ? instructionId : undefined}
+        descriptionId={[group?.instruction ? instructionId : undefined, group?.referenceNote ? referenceNoteId : undefined].filter(Boolean).join(" ") || undefined}
         grouped={Boolean(group)}
         id={questionIdPrefix ? `${questionIdPrefix}-${question.id}` : undefined}
         index={startIndex + ordered.findIndex((item) => item.id === question.id)}
@@ -201,6 +212,7 @@ export function ExperimentQuestionList({ questions, answers, onAnswerChange, inp
           {group.instruction ? <div className="mt-3 space-y-2 text-sm leading-7 text-[var(--pbl-text)]" id={instructionId}>
             {promptParagraphs(group.instruction).map((paragraph, index) => <p className="whitespace-pre-wrap [overflow-wrap:anywhere]" key={index}>{paragraph}</p>)}
           </div> : null}
+          {group.referenceNote ? <ReferenceNote id={referenceNoteId} note={group.referenceNote} /> : null}
         </div>
         <div>{content}</div>
       </section>;

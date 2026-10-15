@@ -9,7 +9,9 @@ import type {
   SpeechAction,
   SpeechAnchor,
   SpotlightAction,
+  WhiteboardAction,
 } from '@openmaic/lib/types/action';
+import { isWhiteboardAction } from '@openmaic/lib/types/action';
 import { createLogger } from '@openmaic/lib/logger';
 import { speechCueSentenceEnd } from '../generation/speech-cue-boundaries';
 import type { TTSProviderId } from './types';
@@ -132,7 +134,8 @@ function lastSpokenAnchor(text: string): SpeechAnchor | undefined {
 function nextSpeechId(actions: readonly Action[], index: number): string | undefined {
   for (let next = index + 1; next < actions.length; next += 1) {
     const action = actions[next]!;
-    if (action.type === 'spotlight' || action.type === 'laser') continue;
+    if (action.type === 'spotlight' || action.type === 'laser'
+      || (isWhiteboardAction(action) && action.speechId)) continue;
     return action.type === 'speech' ? action.id : undefined;
   }
   return undefined;
@@ -161,6 +164,10 @@ export function splitLongSpeechActions(actions: Action[], providerId: TTSProvide
   };
 
   actions.forEach((action, index) => {
+    if (isWhiteboardAction(action)) {
+      addProtected(action.speechId, action.speechAnchor);
+      return;
+    }
     if (action.type !== 'spotlight' && action.type !== 'laser') return;
     const speechId = action.speechId ?? nextSpeechId(actions, index);
     addProtected(speechId, action.speechAnchor);
@@ -236,6 +243,7 @@ export function splitLongSpeechActions(actions: Action[], providerId: TTSProvide
     if (startActionIndex < 0 || endActionIndex < startActionIndex
       || actions.slice(startActionIndex, endActionIndex + 1).some((candidate) => (
         candidate.type !== 'speech' && candidate.type !== 'spotlight' && candidate.type !== 'laser'
+        && !(isWhiteboardAction(candidate) && candidate.speechId)
       ))) return [];
     const start = action.speechAnchor
       ? locate(speechId, action.speechAnchor)
@@ -358,8 +366,28 @@ export function splitLongSpeechActions(actions: Action[], providerId: TTSProvide
     });
   };
 
+  const splitWhiteboard = (action: WhiteboardAction): Action[] => {
+    if (!action.speechId || (chunksBySpeech.get(action.speechId)?.length ?? 0) <= 1) return [action];
+    const located = action.speechAnchor ? locate(action.speechId, action.speechAnchor) : undefined;
+    if ((action.speechAnchor && !located)
+      || (!action.speechAnchor && (action.speechOffsetMs ?? 0) > 0)) {
+      log.warn('Omitted whiteboard command with an unrebindable speech anchor: ' + action.id);
+      return [];
+    }
+    const chunk = located?.chunk ?? chunksBySpeech.get(action.speechId)?.[0];
+    if (!chunk) return [];
+    return [{
+      ...action,
+      speechId: chunk.action.id,
+      ...(located ? { speechAnchor: located.anchor } : {}),
+      // Regenerated audio owns a new clock; the original clip's offset is stale.
+      speechOffsetMs: undefined,
+    }];
+  };
+
   return actions.flatMap((action, index): Action[] => {
     if (action.type === 'speech') return (chunksBySpeech.get(action.id) ?? []).map((chunk) => chunk.action);
+    if (isWhiteboardAction(action)) return splitWhiteboard(action);
     if (action.type !== 'spotlight' && action.type !== 'laser') return [action];
     const speechId = action.speechId ?? nextSpeechId(actions, index);
     if (!speechId) return [action];

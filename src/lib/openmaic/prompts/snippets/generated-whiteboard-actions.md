@@ -1,11 +1,11 @@
 ## Whiteboard Actions for Pre-generated Teaching
 
-Whiteboard actions are available on slide scenes. Use them only when the Instructional Presentation Policy identifies a genuinely process-oriented visual explanation.
+Whiteboard actions are available on slide scenes. Use them when the Instructional Presentation Policy identifies unfolding visual reasoning or important grouped subpoints and conditions that the actual overview slide does not show.
 
-All whiteboard actions use `{"type":"action","name":"wb_...","params":{...}}` inside the same output array. Use a fixed 1000 × 562.5 viewport and a 20px safe margin. Plan semantic regions (title, diagram/data, explanation) before placing elements, just as on a slide. Keep content legible: when a page is full, explain it, then explicitly wb_clear before the next page; never push content below the viewport or shrink text to conceal overflow.
+All whiteboard actions use `{"type":"action","name":"wb_...","params":{...}}` inside the same output array. Use a fixed 1000 × 562.5 viewport and a 20px safe margin. Plan semantic regions (title, diagram/data, explanation) before placing elements, just as on a slide. Body notes must be at least 24px with enough native 1.5 line-height and 10px text padding. Keep content legible: when a page is full, explain it, then explicitly wb_clear before the next page; never push content below the viewport or shrink text to conceal overflow.
 
 - Open before drawing: `{"type":"action","name":"wb_open","params":{}}`
-- Text or annotation: `{"type":"action","name":"wb_draw_text","params":{"content":"...","x":60,"y":60,"width":500,"height":50,"fontSize":20,"color":"#333333","elementId":"optional_id"}}`
+- Text or annotation: `{"type":"action","name":"wb_draw_text","params":{"content":"...","x":60,"y":60,"width":500,"height":56,"fontSize":24,"color":"#333333","elementId":"optional_id"}}`
 - Formula: `{"type":"action","name":"wb_draw_latex","params":{"latex":"E=mc^2","x":80,"y":100,"width":500,"height":80,"elementId":"optional_id"}}`
 - Shape: `{"type":"action","name":"wb_draw_shape","params":{"shape":"rectangle","x":60,"y":180,"width":220,"height":100,"fillColor":"#5b9bd5","elementId":"optional_id"}}`
 - Line or arrow: `{"type":"action","name":"wb_draw_line","params":{"startX":280,"startY":230,"endX":500,"endY":230,"width":2,"points":["","arrow"],"elementId":"optional_id"}}`
@@ -19,6 +19,10 @@ All whiteboard actions use `{"type":"action","name":"wb_...","params":{...}}` in
 - Close and return to PPT: `{"type":"action","name":"wb_close","params":{}}`
 
 Interleave narration with construction: open, draw/reveal one meaningful step, explain it with a text object, then add the next step. Do not draw the whole solution before explaining it. Close the whiteboard before the next spotlight, laser, video, discussion, or page-ending recap on the PPT.
+
+For a grouped explanation absent from an overview PPT, first choose the knowledge structure that helps students understand: a branch diagram for categories, convergence for supporting analyses, or a dimension table for independent criteria. Construct it like a teacher's board work: keywords, brackets, explicit relations, sketch icons and moving circles/underlines. Reveal one meaningful knowledge operation at a time; a sentence does not require a new note. Elaborate or emphasize an existing node when appropriate. Preserve all adopted facts and conditions. Do not invent a process between parallel categories or statistical data for a chart.
+
+Reserve the complete composition before revealing objects so later branches do not displace earlier ones. Reveal a link only after its endpoint nodes exist; label future facts and examples only when taught. Keep earlier objects in the phase, clear between complete subdiagrams when capacity requires, and retain body text of at least 24px. Build a paced dimension table from independent text cells and lines when necessary: the default native table uses 18px and must not bypass this readability floor. Keep adequately supported portions on the PPT. Match every required tool-plan group, relation and condition to actual visible content and spoken triggers; one generic board note cannot stand in for the whole contract.
 
 For `wb_draw_latex`, JSON must escape every LaTeX backslash as `\\`. Use text for ordinary language and LaTeX only for mathematical notation. Use `wb_edit_code` only with line IDs produced by the visible code block; never invent line IDs before a code block exists.
 

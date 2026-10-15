@@ -466,6 +466,14 @@
     }
   },
   "whiteboard": {
+    "pages": "Whiteboard pages",
+    "previousPage": "Previous whiteboard page",
+    "nextPage": "Next whiteboard page",
+    "selectPage": "Select whiteboard page",
+    "pageLabel": "Page {{index}} / {{total}}",
+    "currentTeaching": "Current teaching",
+    "returnToTeaching": "Return to teaching",
+    "reviewPages": "Review whiteboards",
     "title": "Interactive Whiteboard",
     "open": "Open Whiteboard",
     "clear": "Clear Whiteboard",

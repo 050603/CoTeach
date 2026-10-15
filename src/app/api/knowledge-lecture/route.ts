@@ -1,5 +1,5 @@
 import { authoredQuestionFingerprint, knowledgeTutorEvidence, tutorEvidencePrompt } from "@/lib/courses/knowledge-tutor-evidence";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { isDatabaseConfigured, prisma } from "@/lib/db/client";
 import { loadKnowledgeLectureContext, persistKnowledgeLectureAttempt, QuizAlreadySubmittedError, sameSubmittedAnswers, withGradeSummary } from "@/lib/courses/knowledge-lecture-attempts";
 import { legacyAiError } from "@/lib/ai-collaboration/legacy-scope";
@@ -21,7 +21,8 @@ import type {
   StudentAiProgress,
   CourseContent,
 } from "@/lib/session/types";
-import { objectiveExplanation, resolveKnowledgeTutorModel } from "@/lib/courses/knowledge-explanations";
+import { isOrdinaryQuestion, readPreparedExplanation, resolveKnowledgeTutorModel } from "@/lib/courses/knowledge-explanations";
+import type { KnowledgeLectureExplanation } from "@/lib/courses/knowledge-explanation-types";
 import { parseTutorPayload, TUTOR_EXECUTION_MS, TUTOR_SYSTEM } from "@/lib/courses/knowledge-tutor-payload";
 import { withClassroomAiUsage } from "@/lib/observability/classroom-ai";
 import { canAccessLegacyCourse } from "@/lib/platform/access";
@@ -168,6 +169,8 @@ function createAttempt(
       answer,
       rawAnswer,
       questionType: question.type,
+      questionFormat: question.format,
+      authoredAnalysis: question.analysis,
       authoredQuestionFingerprint: authoredQuestionFingerprint(question, knowledgeTutorEvidence(courseContent, knowledgePointIds.length ? knowledgePointIds : section.knowledgePointIds, units.length ? units : teachingUnitIds)),
       gradingRubric: question.commentPrompt,
       scoringRubric: question.scoringRubric,
@@ -389,6 +392,41 @@ export async function POST(request: NextRequest) {
   });
   const threadId = `lecture-tutor-${attempt.id}-${question.questionId}`;
   const existingThread = progress?.knowledgeLectureTutorThreads?.find((thread) => thread.id === threadId);
+  const sourceClassroom = await readClassroom(progress!.classroomId);
+  const sourceScene = sourceClassroom?.scenes.find(scene => scene.id === attempt.runtimeSceneId);
+  const sourceQuestion = sourceScene?.content?.type === "quiz"
+    ? sourceScene.content.questions.find(item => item.id === question.questionId) : undefined;
+  const sourceEvidence = knowledgeTutorEvidence(course.content, question.knowledgePointIds, question.teachingUnitIds);
+  const sourceMatches = sourceQuestion && question.authoredQuestionFingerprint === authoredQuestionFingerprint(sourceQuestion, sourceEvidence);
+  const ordinary = isOrdinaryQuestion({ type: question.questionType ?? "single", format: question.questionFormat })
+    || Boolean(sourceMatches && sourceQuestion && isOrdinaryQuestion(sourceQuestion))
+    // An old short-answer record may actually be a fill blank. If the original
+    // question cannot be verified, keep its saved reference rather than spend
+    // a model call guessing whether it was a deep response.
+    || (!question.questionFormat && !sourceMatches);
+  let sharedExplanation: KnowledgeLectureExplanation | null = null;
+  if (ordinary && question.authoredQuestionFingerprint) {
+    try {
+      sharedExplanation = await readPreparedExplanation({ classroomId: progress!.classroomId,
+        sceneId: attempt.runtimeSceneId, questionFingerprint: question.authoredQuestionFingerprint });
+    } catch (error) { return legacyAiError(error); }
+  }
+  if (initialExplanation && ordinary) {
+    const reference = question.authoredAnalysis || (sourceMatches ? sourceQuestion?.analysis : undefined);
+    const parts = [reference, question.referenceAnswer && question.referenceAnswer !== reference ? question.referenceAnswer : undefined].filter(Boolean);
+    const fingerprint = question.authoredQuestionFingerprint || createHash("sha256").update(JSON.stringify([
+      question.prompt, question.options, question.matchingOptions, question.referenceAnswer, question.authoredAnalysis,
+    ])).digest("hex");
+    const explanation: KnowledgeLectureExplanation = sharedExplanation ?? {
+      id: `reference-${fingerprint}`, questionFingerprint: fingerprint,
+      text: parts.join("\n\n") || "这道题的参考讲解尚未准备好，可以向助教提出具体问题。",
+      boardNotes: [], source: "reference",
+    };
+    return Response.json({ explanation, resultSource: sharedExplanation ? "shared" : "reference" });
+  }
+  if (initialExplanation && existingThread?.messages.some(item => item.role === "assistant")) {
+    return Response.json({ thread: existingThread, resultSource: "personalized" });
+  }
   const recentConversation = (existingThread?.messages ?? []).slice(-8)
     .map((item) => `${item.role === "student" ? "学生" : "助教"}：${item.content}`)
     .join("\n");
@@ -396,7 +434,8 @@ export async function POST(request: NextRequest) {
     course.content.knowledgePoints.find((point) => point.id === id)?.name ?? id,
   );
   const durable = isDatabaseConfigured();
-  const requestId = text(body.requestId, 160);
+  const requestId = text(body.requestId, 160) || (initialExplanation
+    ? `initial-${createHash("sha256").update(threadId).digest("hex")}` : "");
   if (durable && !requestId) return Response.json({ error: "REQUEST_ID_REQUIRED" }, { status: 400 });
   const tutorRequest: TutorRequest = { courseId, studentId, classroomId: progress!.classroomId, requestId: requestId || randomUUID(), threadId, attemptId: attempt.id, questionId: question.questionId, message, initial: initialExplanation };
   let token: string | undefined;
@@ -412,27 +451,12 @@ export async function POST(request: NextRequest) {
       token = claim.token;
     }
   const resolvedModel = await resolveKnowledgeTutorModel();
-  const sourceClassroom = await readClassroom(progress!.classroomId);
-  const sourceScene = sourceClassroom?.scenes.find(scene => scene.id === attempt.runtimeSceneId);
-  const sourceQuestion = sourceScene?.content?.type === "quiz"
-    ? sourceScene.content.questions.find(item => item.id === question.questionId) : undefined;
-  // Only an unchanged authored question can join the shared cache. Historical
-  // attempts keep their original prompt/answer context after a teacher edit.
-  const sourceEvidence = knowledgeTutorEvidence(course.content, question.knowledgePointIds, question.teachingUnitIds);
-  const sourceMatches = sourceQuestion && question.authoredQuestionFingerprint === authoredQuestionFingerprint(sourceQuestion, sourceEvidence);
-  const shareable = initialExplanation && sourceQuestion && sourceQuestion.type !== "short_answer" && sourceMatches;
-  let resultSource: "shared" | "personalized" = "personalized";
-  if (shareable && sourceScene) {
-    resultSource = "shared";
-    rawModelOutput = await objectiveExplanation({ classroomId: progress!.classroomId, sceneId: sourceScene.id,
-      question: sourceQuestion, knowledgePointNames, sourceEvidence, answer: question.rawAnswer ?? question.answer }, resolvedModel, tutorSignal);
-  } else {
+  const resultSource = "personalized" as const;
     const result = await withClassroomAiUsage({ courseId, studentId, requestId: tutorRequest.requestId, feature: "knowledge-tutor" }, () => callLLM({
       model: resolvedModel.model, abortSignal: tutorSignal, maxRetries: 0, system: TUTOR_SYSTEM,
-      prompt: `知识点：${knowledgePointNames.join("、")}\n题目：${question.prompt}${choices ? `\n${choices}` : ""}\n学生答案：${question.answer || "未作答"}\n批阅状态：${question.gradingStatus || "历史记录未核验"}\n批阅反馈：${question.feedback}\n参考讲解：${question.referenceAnswer || "未提供"}\n已有对话：\n${recentConversation || "无"}\n学生追问：${message}\n${tutorEvidencePrompt(sourceMatches ? sourceEvidence : undefined)}`,
+      prompt: `知识点：${knowledgePointNames.join("、")}\n题目：${question.prompt}${choices ? `\n${choices}` : ""}\n学生答案：${question.answer || "未作答"}\n批阅状态：${question.gradingStatus || "历史记录未核验"}\n批阅反馈：${question.feedback}\n参考讲解：${question.referenceAnswer || "未提供"}\n统一讲解：${sharedExplanation?.text || question.authoredAnalysis || (sourceMatches ? sourceQuestion?.analysis : undefined) || "未提供"}\n已有对话：\n${recentConversation || "无"}\n学生追问：${message}\n${tutorEvidencePrompt(sourceMatches ? sourceEvidence : undefined)}`,
     }, "quiz-grade", undefined, resolvedModel.thinkingConfig));
     rawModelOutput = result.text;
-  }
   tutorSignal.throwIfAborted();
   const now = new Date().toISOString();
   const tutorPayload = parseTutorPayload(rawModelOutput, now);

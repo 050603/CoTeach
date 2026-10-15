@@ -18,6 +18,8 @@ import type {
   KnowledgeLectureAttempt,
   KnowledgeLectureTutorThread,
 } from "@/lib/session/types";
+import type { KnowledgeLectureExplanation } from "@/lib/courses/knowledge-explanation-types";
+import { createLearningEvent, postLearningEvents } from "@/lib/learning-analytics/telemetry";
 import { browserRandomUUID } from "@/lib/browser/random-uuid";
 import { cn } from "@/lib/utils";
 import { dispatchPlaybackModalBlock } from "@openmaic/lib/playback/activity-events";
@@ -61,7 +63,7 @@ type TutorAudioSettings = {
   ttsSpeed?: number;
 };
 
-type AudioQueueItem = { id: string; text: string };
+type AudioQueueItem = { id: string; text: string; audioUrl?: string; allowSynthesis: boolean };
 
 function normalizedBoardText(value: string): string {
   return value.replace(/[\s，。；：、,.!?！？;:]/g, "").toLowerCase();
@@ -86,16 +88,25 @@ function explanationText(attempt: KnowledgeLectureAttempt, questionIndex: number
 function boardItems(
   question: KnowledgeLectureAttempt["questions"][number],
   thread: KnowledgeLectureTutorThread | undefined,
+  explanation: KnowledgeLectureExplanation | undefined,
+  shared: boolean,
 ): Array<{ id: string; title: string; body: string }> {
   const candidates = [
-    { id: "grading", title: question.gradingStatus === "failed" || question.gradingStatus === "pending"
+    ...(!shared ? [{ id: "grading", title: question.gradingStatus === "failed" || question.gradingStatus === "pending"
       ? "批阅待完成" : question.questionType === "short_answer" ? "评分反馈" : question.correct ? "得分关键" : "问题定位", body: question.feedback },
     ...(question.referenceAnswer
       ? [{ id: "reference", title: "正确思路", body: question.referenceAnswer }]
+      : [])] : []),
+    ...(explanation?.boardNotes ?? []).map((note) => ({ id: `prepared:${note.id}`, title: note.title, body: note.body })),
+    ...(shared && !explanation ? [
+      ...(question.authoredAnalysis ? [{ id: "analysis", title: "原题解析", body: question.authoredAnalysis }] : []),
+      ...(question.referenceAnswer ? [{ id: "reference", title: "参考答案", body: question.referenceAnswer }] : []),
+    ] : []),
+    ...(!shared || thread?.messages.some((item) => item.role === "student")
+      ? (thread?.boardNotes ?? []).map((note) => ({ id: `private:${note.id}`, title: shared ? `追问补充 · ${note.title}` : note.title, body: note.body }))
       : []),
-    ...(thread?.boardNotes ?? []).map((note) => ({ id: note.id, title: note.title, body: note.body })),
   ];
-  const seen: string[] = [];
+  const seen: string[] = explanation?.text ? [normalizedBoardText(explanation.text)] : [];
   return candidates.filter((item) => {
     const normalized = normalizedBoardText(item.body);
     const duplicate = seen.some((existing) =>
@@ -131,13 +142,17 @@ export function KnowledgeLectureBoard({
     : attempt.questions.findIndex((question) => question.correct === false);
   const [questionIndex, setQuestionIndex] = useState(Math.max(0, preferredIndex));
   const [threads, setThreads] = useState(initialThreads);
+  const [explanations, setExplanations] = useState<Record<string, KnowledgeLectureExplanation>>({});
+  const [loadedQuestions, setLoadedQuestions] = useState<string[]>([]);
+  const [failedQuestions, setFailedQuestions] = useState<string[]>([]);
   const [message, setMessage] = useState("");
   const [sending, setSending] = useState(false);
   const [pendingExplanations, setPendingExplanations] = useState<string[]>([]);
   const [explanationRetry, setExplanationRetry] = useState(0);
   const [error, setError] = useState<string>();
-  const [audioSettings, setAudioSettings] = useState<TutorAudioSettings>();
   const [audioState, setAudioState] = useState<"idle" | "loading" | "playing" | "paused">("idle");
+  const audioSettingsRef = useRef<Promise<TutorAudioSettings | undefined> | undefined>(undefined);
+  const activeSynthesisAbortRef = useRef<AbortController | undefined>(undefined);
   const audioRef = useRef<HTMLAudioElement | undefined>(undefined);
   const returnFocusRef = useRef<HTMLElement | null>(null);
   const closeButtonRef = useRef<HTMLButtonElement>(null);
@@ -148,6 +163,7 @@ export function KnowledgeLectureBoard({
   const activePlaybackResolveRef = useRef<(() => void) | undefined>(undefined);
   const audioSequenceRef = useRef(0);
   const requestedExplanationRef = useRef(new Set<string>());
+  const viewedExplanationsRef = useRef(new Set<string>());
   const question = attempt.questions[questionIndex] ?? attempt.questions[0];
   const activeQuestionRef = useRef(question?.questionId);
   useEffect(() => { activeQuestionRef.current = question?.questionId; }, [question?.questionId]);
@@ -155,11 +171,15 @@ export function KnowledgeLectureBoard({
   const thread = threads.find((item) =>
     item.attemptId === attempt.id && item.questionId === question?.questionId,
   );
+  const explanation = explanations[question?.questionId ?? ""];
+  const sharedExplanation = Boolean(explanation) || question?.questionType !== "short_answer"
+    || question?.questionFormat === "fill_blank"
+    || (!question?.questionFormat && !loadedQuestions.includes(question?.questionId ?? ""));
   const knowledgePoints = useMemo(
     () => question?.knowledgePointIds.map((id) => knowledgePointNames.get(id) ?? id) ?? [],
     [knowledgePointNames, question],
   );
-  const items = useMemo(() => question ? boardItems(question, thread) : [], [question, thread]);
+  const items = useMemo(() => question ? boardItems(question, thread, explanation, sharedExplanation) : [], [question, thread, explanation, sharedExplanation]);
 
   useEffect(() => {
     dispatchPlaybackModalBlock({ blocked: true, source: "knowledge-lecture-tutor" });
@@ -167,14 +187,15 @@ export function KnowledgeLectureBoard({
   }, []);
 
   useEffect(() => {
-    if (!question || thread?.messages.some((item) => item.role === "assistant")) return;
+    if (!question) return;
     const key = `${attempt.id}:${question.questionId}`;
     if (requestedExplanationRef.current.has(key)) return;
     requestedExplanationRef.current.add(key);
     const questionId = question.questionId;
     setPendingExplanations(current => [...current, questionId]);
+    setFailedQuestions(current => current.filter(id => id !== questionId));
     setError(undefined);
-    void fetchTutor({
+    const body = {
         action: "tutor-explain",
         courseId,
         studentId,
@@ -182,41 +203,133 @@ export function KnowledgeLectureBoard({
         questionId: question.questionId,
         options: question.options,
         matchingOptions: question.matchingOptions,
-    }).then(async (response) => {
-      const payload = await response.json() as { thread?: KnowledgeLectureTutorThread; error?: string };
-      if (!response.ok || !payload.thread) throw new Error(payload.error || "助教讲解生成失败");
-      setThreads((current) => [
-        ...current.filter((item) => item.id !== payload.thread!.id),
-        payload.thread!,
-      ]);
+    };
+    // Unknown legacy short answers may still need durable deep-answer polling.
+    // Legacy fill blanks return their shared resource before any personal claim.
+    const needsTutorReceipt = question.questionType === "short_answer" && question.questionFormat !== "fill_blank";
+    const request = needsTutorReceipt ? fetchTutor(body) : fetch("/api/knowledge-lecture", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-OpenPBL-Role": "student" },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(20_000),
+    });
+    void request.then(async (response) => {
+      const payload = await response.json() as { explanation?: KnowledgeLectureExplanation; thread?: KnowledgeLectureTutorThread; error?: string };
+      if (!response.ok || (!payload.explanation && !payload.thread)) throw new Error(payload.error || "助教讲解暂时不可用");
+      if (payload.explanation) {
+        setExplanations((current) => ({ ...current, [questionId]: payload.explanation! }));
+      }
+      if (payload.thread) setThreads((current) => [
+          ...current.filter((item) => item.id !== payload.thread!.id),
+          payload.thread!,
+        ]);
+      setLoadedQuestions((current) => [...current, questionId]);
     }).catch(() => {
       requestedExplanationRef.current.delete(key);
-      if (activeQuestionRef.current === questionId) setError("助教讲解暂时不可用，题目解析仍可查看。请点击重试讲解。");
+      setFailedQuestions(current => [...current, questionId]);
+      if (activeQuestionRef.current === questionId) setError("助教讲解暂时无法加载，原题仍可查看。请点击重试讲解重新加载。");
     }).finally(() => setPendingExplanations(current => current.filter(id => id !== questionId)));
-  }, [attempt.id, courseId, question, studentId, thread?.messages, explanationRetry]);
+  }, [attempt.id, courseId, question, studentId, explanationRetry]);
 
   useEffect(() => {
-    void fetch("/api/knowledge-lecture/settings")
-      .then((response) => response.ok ? response.json() : undefined)
-      .then((payload) => setAudioSettings(payload?.settings))
-      .catch(() => undefined);
+    if (!question || !explanation) return;
+    const key = `${attempt.id}:${question.questionId}:${explanation.id}`;
+    if (viewedExplanationsRef.current.has(key)) return;
+    viewedExplanationsRef.current.add(key);
+    void postLearningEvents({ courseId, studentId, events: [createLearningEvent("knowledge_explanation_view", {
+      courseId, studentId, stageKey: "ai-learning", sceneId: attempt.runtimeSceneId,
+      content: { knowledgePointIds: question.knowledgePointIds },
+      metadata: { attemptId: attempt.id, questionId: question.questionId, explanationId: explanation.id,
+        questionFingerprint: explanation.questionFingerprint, source: explanation.source },
+    })] }).catch(() => undefined);
+  }, [attempt.id, attempt.runtimeSceneId, courseId, studentId, question, explanation]);
+
+  useEffect(() => {
     return () => {
       playbackGenerationRef.current += 1;
       audioQueueRef.current = [];
+      activeSynthesisAbortRef.current?.abort();
       activePlaybackResolveRef.current?.();
       audioRef.current?.pause();
       window.speechSynthesis?.cancel();
     };
   }, []);
 
-  async function playAudioItem(text: string, generation: number): Promise<void> {
-    const clean = text.trim();
-    if (!clean) return;
+  async function playAudioUrl(url: string, generation: number): Promise<void> {
+    const audio = new Audio(url);
+    audioRef.current = audio;
+    await new Promise<void>((resolve, reject) => {
+      let settled = false;
+      const finish = (error?: Error) => {
+        if (settled) return;
+        settled = true;
+        activePlaybackResolveRef.current = undefined;
+        if (error) reject(error);
+        else resolve();
+      };
+      activePlaybackResolveRef.current = () => finish();
+      audio.onplay = () => {
+        if (generation === playbackGenerationRef.current) setAudioState("playing");
+      };
+      audio.onpause = () => {
+        if (!audio.ended && generation === playbackGenerationRef.current) setAudioState("paused");
+      };
+      audio.onended = () => finish();
+      audio.onerror = () => finish(new Error("语音播放失败"));
+      void audio.play().catch((error: unknown) => finish(error instanceof Error ? error : new Error("语音播放失败")));
+    });
+  }
+
+  async function speakInBrowser(text: string, generation: number, speed = 1): Promise<void> {
+    if (!("speechSynthesis" in window)) throw new Error("当前设备不支持语音播放");
+    await new Promise<void>((resolve) => {
+      const utterance = new SpeechSynthesisUtterance(text);
+      let settled = false;
+      const finish = () => {
+        if (settled) return;
+        settled = true;
+        activePlaybackResolveRef.current = undefined;
+        resolve();
+      };
+      activePlaybackResolveRef.current = finish;
+      utterance.lang = "zh-CN";
+      utterance.rate = speed;
+      utterance.onstart = () => {
+        if (generation === playbackGenerationRef.current) setAudioState("playing");
+      };
+      utterance.onend = finish;
+      utterance.onerror = finish;
+      window.speechSynthesis.speak(utterance);
+    });
+  }
+
+  async function playAudioItem(item: AudioQueueItem, generation: number): Promise<void> {
+    const clean = item.text.trim();
+    if (!clean || generation !== playbackGenerationRef.current) return;
     setAudioState("loading");
     try {
-      if (audioSettings?.ttsProviderId && audioSettings.ttsProviderId !== "browser-native-tts" && audioSettings.ttsVoice) {
+      if (item.audioUrl) {
+        try {
+          await playAudioUrl(item.audioUrl, generation);
+          return;
+        } catch {
+          if (generation !== playbackGenerationRef.current) return;
+          audioRef.current = undefined;
+          // Prepared narration stays local when its stored audio is unavailable.
+        }
+      }
+      const audioSettings = item.allowSynthesis
+        ? await (audioSettingsRef.current ??= fetch("/api/knowledge-lecture/settings")
+          .then(async (response) => response.ok ? (await response.json()).settings as TutorAudioSettings : undefined)
+          .catch(() => undefined))
+        : undefined;
+      if (generation !== playbackGenerationRef.current) return;
+      if (item.allowSynthesis && audioSettings?.ttsProviderId && audioSettings.ttsProviderId !== "browser-native-tts" && audioSettings.ttsVoice) {
+        const controller = new AbortController();
+        activeSynthesisAbortRef.current = controller;
         const response = await fetch("/api/openmaic/generate/tts", {
           method: "POST",
+          signal: controller.signal,
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             text: clean.slice(0, 3_500),
@@ -229,53 +342,17 @@ export function KnowledgeLectureBoard({
           }),
         });
         const payload = await response.json().catch(() => null);
+        if (activeSynthesisAbortRef.current === controller) activeSynthesisAbortRef.current = undefined;
         const base64 = payload?.base64 ?? payload?.data?.base64;
         const format = payload?.format ?? payload?.data?.format ?? "mp3";
         if (!response.ok || !base64) throw new Error("语音生成失败");
         if (generation !== playbackGenerationRef.current) return;
-        const audio = new Audio(`data:audio/${format};base64,${base64}`);
-        audioRef.current = audio;
-        await new Promise<void>((resolve, reject) => {
-          let settled = false;
-          const finish = () => {
-            if (settled) return;
-            settled = true;
-            activePlaybackResolveRef.current = undefined;
-            resolve();
-          };
-          activePlaybackResolveRef.current = finish;
-          audio.onplay = () => setAudioState("playing");
-          audio.onpause = () => {
-            if (!audio.ended && generation === playbackGenerationRef.current) setAudioState("paused");
-          };
-          audio.onended = finish;
-          audio.onerror = () => reject(new Error("语音播放失败"));
-          void audio.play().catch(reject);
-        });
+        await playAudioUrl(`data:audio/${format};base64,${base64}`, generation);
         return;
       }
-      if ("speechSynthesis" in window) {
-        await new Promise<void>((resolve) => {
-          const utterance = new SpeechSynthesisUtterance(clean);
-          let settled = false;
-          const finish = () => {
-            if (settled) return;
-            settled = true;
-            activePlaybackResolveRef.current = undefined;
-            resolve();
-          };
-          activePlaybackResolveRef.current = finish;
-          utterance.lang = "zh-CN";
-          utterance.rate = audioSettings?.ttsSpeed ?? 1;
-          utterance.onstart = () => setAudioState("playing");
-          utterance.onend = finish;
-          utterance.onerror = finish;
-          window.speechSynthesis.speak(utterance);
-        });
-        return;
-      }
-      throw new Error("当前设备不支持语音播放");
+      await speakInBrowser(clean, generation, audioSettings?.ttsSpeed);
     } catch (cause) {
+      if (generation !== playbackGenerationRef.current) return;
       setAudioState("idle");
       setError(cause instanceof Error ? `${cause.message}，可点击播放按钮重试。` : "语音播放失败");
     }
@@ -288,7 +365,7 @@ export function KnowledgeLectureBoard({
     try {
       while (generation === playbackGenerationRef.current && audioQueueRef.current.length) {
         const next = audioQueueRef.current.shift();
-        if (next) await playAudioItem(next.text, generation);
+        if (next) await playAudioItem(next, generation);
       }
     } finally {
       drainingAudioRef.current = false;
@@ -310,6 +387,8 @@ export function KnowledgeLectureBoard({
   function stopAudioQueue() {
     playbackGenerationRef.current += 1;
     audioQueueRef.current = [];
+    activeSynthesisAbortRef.current?.abort();
+    activeSynthesisAbortRef.current = undefined;
     activePlaybackResolveRef.current?.();
     activePlaybackResolveRef.current = undefined;
     audioRef.current?.pause();
@@ -318,32 +397,25 @@ export function KnowledgeLectureBoard({
     setAudioState("idle");
   }
 
-  const firstAssistantMessage = thread?.messages.find((item) => item.role === "assistant");
-  const coreNarration = firstAssistantMessage?.content
-    || (!initialExplaining ? explanationText(attempt, questionIndex) : "");
+  const firstAssistantMessage = thread?.messages[0]?.role === "assistant" ? thread.messages[0] : undefined;
+  const coreNarration = explanation?.text
+    || (!sharedExplanation && loadedQuestions.includes(question?.questionId ?? "")
+      ? firstAssistantMessage?.content || explanationText(attempt, questionIndex)
+      : "");
 
   useEffect(() => {
-    if (!audioSettings || !question) return;
-    enqueueAudio({ id: `core:${question.questionId}`, text: coreNarration });
-    const spokenAssistantTexts = new Set(
-      firstAssistantMessage ? [normalizedBoardText(firstAssistantMessage.content)] : [],
-    );
-    for (const item of thread?.messages ?? []) {
-      if (item.role === "assistant" && item.id !== firstAssistantMessage?.id) {
-        const normalized = normalizedBoardText(item.content);
-        if (spokenAssistantTexts.has(normalized)) continue;
-        spokenAssistantTexts.add(normalized);
-        enqueueAudio({ id: `message:${item.id}`, text: item.content });
-      }
-    }
-    // Queue helpers intentionally serialize the configured TTS and new tutor replies.
+    if (!question || !coreNarration) return;
+    enqueueAudio({ id: `core:${question.questionId}`, text: coreNarration,
+      audioUrl: explanation?.audioUrl, allowSynthesis: !sharedExplanation });
+    // Historical follow-ups remain readable; only sendMessage queues a new reply.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [audioSettings, attempt, question, questionIndex, thread?.messages]);
+  }, [question?.questionId, coreNarration, explanation?.audioUrl, sharedExplanation]);
 
   async function sendMessage() {
     const content = message.trim();
     const sendingQuestionId = question?.questionId;
     if (!content || !question || sending || initialExplaining) return;
+    stopAudioQueue();
     setSending(true);
     setError(undefined);
     try {
@@ -354,11 +426,18 @@ export function KnowledgeLectureBoard({
       });
       const payload = await response.json() as { thread?: KnowledgeLectureTutorThread; error?: string };
       if (!response.ok || !payload.thread) throw new Error(payload.error || "助教暂时没有回应");
+      const existingMessageIds = new Set(thread?.messages.map((item) => item.id));
       setThreads((current) => [
         ...current.filter((item) => item.id !== payload.thread!.id),
         payload.thread!,
       ]);
-      if (activeQuestionRef.current === sendingQuestionId) setMessage("");
+      if (activeQuestionRef.current === sendingQuestionId) {
+        setMessage("");
+        const reply = payload.thread.messages.findLast((item) => item.role === "assistant");
+        if (reply && !existingMessageIds.has(reply.id)) {
+          enqueueAudio({ id: `message:${reply.id}`, text: reply.content, allowSynthesis: true });
+        }
+      }
     } catch (cause) {
       if (activeQuestionRef.current === sendingQuestionId) setError(cause instanceof Error ? cause.message : "助教暂时没有回应");
     } finally {
@@ -379,28 +458,41 @@ export function KnowledgeLectureBoard({
       window.speechSynthesis.resume();
       setAudioState("playing");
     } else {
-      enqueueAudio({ id: `manual:${question.questionId}:${audioSequenceRef.current++}`, text: coreNarration });
+      enqueueAudio({ id: `manual:${question.questionId}:${audioSequenceRef.current++}`, text: coreNarration,
+        audioUrl: explanation?.audioUrl, allowSynthesis: !sharedExplanation });
     }
   }
 
   function replayCoreExplanation() {
     stopAudioQueue();
-    enqueueAudio({ id: `replay:${question.questionId}:${audioSequenceRef.current++}`, text: coreNarration });
+    enqueueAudio({ id: `replay:${question.questionId}:${audioSequenceRef.current++}`, text: coreNarration,
+      audioUrl: explanation?.audioUrl, allowSynthesis: !sharedExplanation });
   }
 
   function selectQuestion(index: number) {
     if (index === questionIndex) return;
     stopAudioQueue();
     const nextQuestion = attempt.questions[index];
+    activeQuestionRef.current = nextQuestion?.questionId;
     if (nextQuestion) queuedAudioIdsRef.current.delete(`core:${nextQuestion.questionId}`);
     setError(undefined);
     setQuestionIndex(index);
   }
 
+  function closeBoard() {
+    stopAudioQueue();
+    onClose();
+  }
+
+  const firstStudentMessageIndex = thread?.messages.findIndex((item) => item.role === "student") ?? -1;
+  const chatMessages = sharedExplanation
+    ? firstStudentMessageIndex >= 0 ? thread!.messages.slice(firstStudentMessageIndex) : []
+    : thread?.messages ?? [];
+
   if (!question) return null;
 
   return (
-    <DialogPrimitive.Root open onOpenChange={(open) => { if (!open) onClose(); }}>
+    <DialogPrimitive.Root open onOpenChange={(open) => { if (!open) closeBoard(); }}>
       {/* Keep the dialog inside the player so native fullscreen contains it too. */}
       <DialogPrimitive.Overlay className="fixed inset-0 z-[140] grid place-items-center bg-stone-950/55 p-2 backdrop-blur-sm sm:p-5">
       <DialogPrimitive.Content
@@ -437,19 +529,19 @@ export function KnowledgeLectureBoard({
             ))}
           </nav>
           <div className={cn(styles.audioControls, "flex shrink-0 items-center gap-2")}>
-            {!thread?.messages.some(item => item.role === "assistant") && !initialExplaining && error && (
+            {failedQuestions.includes(question.questionId) && !initialExplaining && (
               <button className="inline-flex h-9 items-center rounded-lg border border-amber-300 bg-amber-50 px-3 text-xs font-bold text-amber-900" type="button"
                 onClick={() => { requestedExplanationRef.current.delete(`${attempt.id}:${question.questionId}`); setExplanationRetry(value => value + 1); }}>重试讲解</button>
             )}
-            <button className="inline-flex h-9 items-center gap-2 rounded-lg border border-stone-200 bg-white px-3 text-xs font-bold text-stone-700 hover:bg-stone-50" onClick={replayCoreExplanation} type="button">
-              <RotateCcw size={15} />重新讲解
+            <button className="inline-flex h-9 items-center gap-2 rounded-lg border border-stone-200 bg-white px-3 text-xs font-bold text-stone-700 hover:bg-stone-50 disabled:opacity-60" disabled={!coreNarration} onClick={replayCoreExplanation} type="button">
+              <RotateCcw size={15} />再听一遍
             </button>
-            <button className="inline-flex h-9 items-center gap-2 rounded-lg border border-cyan-200 bg-cyan-50 px-3 text-xs font-bold text-cyan-900 disabled:opacity-60" disabled={audioState === "loading"} onClick={toggleAudio} type="button">
+            <button className="inline-flex h-9 items-center gap-2 rounded-lg border border-cyan-200 bg-cyan-50 px-3 text-xs font-bold text-cyan-900 disabled:opacity-60" disabled={audioState === "loading" || !coreNarration} onClick={toggleAudio} type="button">
               {audioState === "loading" ? <Loader2 className="animate-spin" size={15} /> : audioState === "playing" ? <Pause size={15} /> : <Play size={15} />}
-              {audioState === "playing" ? "暂停播放" : audioState === "paused" ? "继续播放" : audioState === "loading" ? "正在准备" : "继续播放"}
+              {audioState === "playing" ? "暂停播放" : audioState === "paused" ? "继续播放" : audioState === "loading" ? "正在准备" : "播放讲解"}
             </button>
           </div>
-          <button ref={closeButtonRef} className={cn(styles.close, "grid size-9 shrink-0 place-items-center rounded-full text-stone-500 hover:bg-stone-100")} onClick={onClose} type="button" aria-label="关闭讲解"><X size={19} /></button>
+          <button ref={closeButtonRef} className={cn(styles.close, "grid size-9 shrink-0 place-items-center rounded-full text-stone-500 hover:bg-stone-100")} onClick={closeBoard} type="button" aria-label="关闭讲解"><X size={19} /></button>
         </header>
 
         <div className={styles.body}>
@@ -480,15 +572,12 @@ export function KnowledgeLectureBoard({
                     </div>
                   ) : null}
                 </section>
-                <section className="border-b border-dashed border-white/30 pb-5">
-                  <p className="text-xs font-bold tracking-[.16em] text-amber-200">学生回答</p>
-                  <p className="mt-2 whitespace-pre-wrap text-base leading-8 text-white/90">{question.answer || "未作答"}</p>
-                </section>
                 <section className="space-y-4">
                   <div className="flex flex-wrap items-center gap-2">
-                    <p className="text-xs font-bold tracking-[.16em] text-sky-200">板书解析</p>
+                    <p className="text-xs font-bold tracking-[.16em] text-sky-200">{sharedExplanation ? "题目讲解" : "板书解析"}</p>
                     {knowledgePoints.map((name) => <span className="rounded-full border border-white/20 px-2 py-0.5 text-[10px] text-white/70" key={name}>{name}</span>)}
                   </div>
+                  {explanation ? <p aria-label="统一题目讲解" className="whitespace-pre-wrap text-base leading-8 text-white/95">{explanation.text}</p> : null}
                   <ol className="space-y-5 text-base leading-8">
                     {items.map((item, index) => (
                       <li className="grid grid-cols-[34px_minmax(0,1fr)] gap-3" key={item.id}>
@@ -499,8 +588,12 @@ export function KnowledgeLectureBoard({
                         </div>
                       </li>
                     ))}
-                    {sending || initialExplaining ? <p className="inline-flex items-center gap-2 text-sm text-emerald-200"><Loader2 className="animate-spin" size={16} />助教正在继续书写和讲解…</p> : null}
                   </ol>
+                  {sending || initialExplaining ? <p role="status" className="inline-flex items-center gap-2 text-sm text-emerald-200"><Loader2 className="animate-spin" size={16} />{initialExplaining ? "正在加载题目讲解…" : "助教正在回答你的追问…"}</p> : null}
+                </section>
+                <section className="rounded-lg border border-white/15 bg-white/5 px-4 py-3">
+                  <p className="text-xs font-bold tracking-[.16em] text-amber-200">你的回答 · 对照查看</p>
+                  <p className="mt-1 whitespace-pre-wrap text-sm leading-7 text-white/80">{question.answer || "未作答"}</p>
                 </section>
               </div>
             </section>
@@ -508,7 +601,9 @@ export function KnowledgeLectureBoard({
 
           <aside aria-label="助教追问" className={cn(styles.chat, "flex flex-col border-t border-stone-300 bg-white lg:border-l lg:border-t-0")}>
             <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-4">
-              {(thread?.messages ?? []).map((item) => <div className={cn("max-w-[92%] rounded-xl p-3 text-sm leading-6", item.role === "student" ? "ml-auto rounded-tr-sm bg-cyan-950 text-white" : "rounded-tl-sm bg-stone-100 text-stone-800")} key={item.id}>{item.content}</div>)}
+              <p className="text-xs font-bold text-stone-500">针对这道题继续追问</p>
+              {chatMessages.length ? chatMessages.map((item) => <div className={cn("max-w-[92%] whitespace-pre-wrap rounded-xl p-3 text-sm leading-6", item.role === "student" ? "ml-auto rounded-tr-sm bg-cyan-950 text-white" : "rounded-tl-sm bg-stone-100 text-stone-800")} key={item.id}>{item.content}</div>)
+                : <p className="text-sm leading-6 text-stone-500">听完讲解后，可以告诉助教你对哪个选项或解题步骤还有疑问。</p>}
             </div>
             <div className="border-t border-stone-100 p-3">
               <div className="mb-2 flex gap-1.5 overflow-x-scroll pb-2 [scrollbar-color:#94a3b8_#e7e5e4] [scrollbar-width:thin] [&::-webkit-scrollbar]:h-1.5 [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-slate-400 [&::-webkit-scrollbar-track]:rounded-full [&::-webkit-scrollbar-track]:bg-stone-200">{["我错在哪一步？", "请换个简单例子", "帮我梳理答题关键词"].map((prompt) => <button className="inline-flex h-7 min-w-[124px] shrink-0 items-center justify-center gap-1 whitespace-nowrap rounded-full bg-stone-100 px-2.5 text-[10px] font-bold text-stone-600 hover:bg-stone-200" key={prompt} onClick={() => setMessage(prompt)} type="button"><MessageCircleQuestion size={11} />{prompt}</button>)}</div>

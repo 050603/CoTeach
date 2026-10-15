@@ -112,6 +112,21 @@ describe("new-system course contract", () => {
     course.content.teacherReview.classroomId = "old-classroom";
     expect(getNewSystemCourseReadiness(course).find((check) => check.id === "teacher-review")?.ok).toBe(false);
   });
+  it("shows an inherited content review for an audio publication without claiming a new teacher audio review", () => {
+    const course = readyCourse();
+    course.content.qualityReviewRequired = true;
+    course.content.teacherReview = { schemaVersion: 1, courseId: course.id, classroomId: "old-classroom", signature: "a".repeat(64),
+      teacherId: "teacher", confirmedAt: "2026-09-14", acceptedIssueIds: [], seal: "b".repeat(64) };
+    course.content.teachingRevisionState = { schemaVersion: 1, changeType: "narration", baseClassroomRevision: 1,
+      classroomRevision: 1, affectedSceneIds: [], invalidated: [], updatedAt: "2026-10-14", audioPublication: {
+        schemaVersion: 1, kind: "course-audio-publication", courseId: course.id, teacherId: "teacher", classroomId: "classroom-ai",
+        teacherReviewSeal: course.content.teacherReview.seal, seal: "c".repeat(64),
+      } as never };
+    expect(getNewSystemCourseReadiness(course).find((check) => check.id === "teacher-review"))
+      .toMatchObject({ ok: true, message: "已沿用原内容终审，音频已更新并重新同步页面动作。" });
+    course.content.teachingRevisionState.audioPublication!.teacherId = "another-teacher";
+    expect(getNewSystemCourseReadiness(course).find((check) => check.id === "teacher-review")?.ok).toBe(false);
+  });
   it("keeps a single-lesson production sample out of the publishable state", () => {
     const course = readyCourse();
     course.content.classroomGenerationRun = {

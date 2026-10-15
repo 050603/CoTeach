@@ -1,10 +1,13 @@
 import type { Action } from '@openmaic/lib/types/action';
 import { clampInsertSlot } from './actions-edit';
-import { whiteboardBlocks, type WhiteboardBlock } from '@openmaic/lib/edit/whiteboard-blocks';
+import type { WhiteboardBlock } from '@openmaic/lib/edit/whiteboard-blocks';
 export {
   whiteboardBlocks,
   replaceWhiteboardSteps,
   moveTimelineActionByIdDir,
+  removeWhiteboardBlock,
+  moveWhiteboardBlock,
+  whiteboardPreviewActions,
   type WhiteboardBlock,
 } from '@openmaic/lib/edit/whiteboard-blocks';
 
@@ -181,39 +184,6 @@ export function appendWhiteboardBlock(actions: Action[], id: string): Action[] {
   ];
 }
 
-export function removeWhiteboardBlock(actions: Action[], id: string): Action[] {
-  const block = whiteboardBlocks(actions).find((item) => item.id === id);
-  return block ? [...actions.slice(0, block.start), ...actions.slice(block.end + 1)] : actions;
-}
-
-/** Move a board past one whole adjacent segment, never past a terminal discussion. */
-export function moveWhiteboardBlock(actions: Action[], id: string, direction: -1 | 1): Action[] {
-  const blocks = whiteboardBlocks(actions);
-  const block = blocks.find((item) => item.id === id);
-  if (!block) return actions;
-  if (direction < 0) {
-    if (!block.start) return actions;
-    const previous = blocks.find((item) => item.end === block.start - 1);
-    const start = previous?.start ?? block.start - 1;
-    return [
-      ...actions.slice(0, start),
-      ...actions.slice(block.start, block.end + 1),
-      ...actions.slice(start, block.start),
-      ...actions.slice(block.end + 1),
-    ];
-  }
-  if (block.end === actions.length - 1 || actions[block.end + 1].type === 'discussion')
-    return actions;
-  const next = blocks.find((item) => item.start === block.end + 1);
-  const end = next?.end ?? block.end + 1;
-  return [
-    ...actions.slice(0, block.start),
-    ...actions.slice(block.end + 1, end + 1),
-    ...actions.slice(block.start, block.end + 1),
-    ...actions.slice(end + 1),
-  ];
-}
-
 export function boardStepLabel(action: Action): string {
   const labels: Record<string, string> = {
     speech: 'AI 讲解',
@@ -267,5 +237,8 @@ export function whiteboardAIPrompt(
   block: WhiteboardBlock,
   instruction: string,
 ): string {
-  return `请使用 edit_whiteboard 编辑当前白板。页面 ID：${sceneId}；白板 ID：${block.id}。\n教师要求：${instruction}\n白板步骤按顺序播放，speech 为 AI 讲解，wb_draw_text 为逐次板书，支持表格、图表、图片、图形、连接箭头、公式和代码。保留其他课堂页面和白板以外的步骤。先读取当前页面获取最新白板内容。`;
+  const timing = block.speechBound
+    ? '当前白板随页面原讲词同步，steps 只包含白板命令。保留每个已有步骤的 speechId、speechAnchor、speechOffsetMs；新增内容绑定到本板打开与关闭之间的真实讲词。原讲稿仍在白板之外，不纳入替换。'
+    : '白板步骤按顺序播放，speech 为 AI 讲解，wb_draw_text 为逐次板书。';
+  return `请使用 edit_whiteboard 编辑当前白板。页面 ID：${sceneId}；白板 ID：${block.id}。\n教师要求：${instruction}\n${timing}支持表格、图表、图片、图形、连接箭头、公式和代码。保留其他课堂页面和白板以外的步骤。先读取当前页面获取最新白板内容。`;
 }

@@ -1,7 +1,7 @@
 import { Type, type Static } from 'typebox';
 import type { AgentTool } from '@earendil-works/pi-agent-core';
 import { MAX_WHITEBOARD_STEPS, prepareWhiteboardPatch, type WhiteboardPatch } from '@openmaic/lib/edit/whiteboard-patch';
-import { replaceWhiteboardSteps } from '@openmaic/lib/edit/whiteboard-blocks';
+import { replaceWhiteboardSteps, whiteboardBlocks } from '@openmaic/lib/edit/whiteboard-blocks';
 import type { RegenerateActionsDeps } from './regenerate-scene-actions';
 import { normalizeWhiteboardActionLayout } from '@openmaic/lib/generation/whiteboard-layout';
 import { auditWhiteboardLayout } from '@openmaic/lib/whiteboard/layout';
@@ -12,7 +12,7 @@ export const EditWhiteboardParams = Type.Object({
   boardId: Type.String({ minLength: 1, maxLength: 200, description: 'Existing whiteboard id returned by read_scene_content (the wb_open action id).' }),
   steps: Type.Array(Type.Record(Type.String(), Type.Unknown()), {
     maxItems: MAX_WHITEBOARD_STEPS,
-    description: 'Complete replacement for this board’s internal steps, in playback order. Exclude wb_open/wb_close. Keep existing step ids and elementIds; omit id for new steps. Interleave speech with drawings. An empty array clears this board segment.',
+    description: 'Complete replacement for this board’s internal steps, in playback order. Exclude wb_open/wb_close. Keep existing step ids, elementIds and speechId/speechAnchor/speechOffsetMs. A narration-bound board contains whiteboard commands only; its original narration remains outside the segment. Legacy boards may interleave speech with drawings. An empty array clears this board segment.',
   }),
 });
 export type EditWhiteboardParams = Static<typeof EditWhiteboardParams>;
@@ -28,6 +28,8 @@ export function makeEditWhiteboardTool(deps: Pick<RegenerateActionsDeps, 'getSce
     label: '编辑白板',
     description: 'Edit one existing whiteboard after read_scene_content. Supply sceneId, boardId and its COMPLETE internal Action steps; all other scene actions and content stay intact. ' +
       'Every step has type, optional id/title/description/groupId. Allowed types and required fields: ' +
+      'Whiteboard commands also accept speechId, speechAnchor:{quote,occurrence?}, speechOffsetMs. Preserve retained speech bindings. ' +
+      'For a speechBound board, return only whiteboard commands and bind new steps to phrases inside the saved open/close interval; do not return its external narration. ' +
       'speech {text}; wb_draw_text {content:plain text,x,y,width?,height?,fontSize?,color?}; ' +
       'wb_draw_image {src,x,y,width,height}; wb_draw_shape {shape:rectangle|circle|triangle,x,y,width,height,fillColor?}; ' +
       'wb_draw_latex {latex,x,y,width?,height?,color?}; wb_draw_table {x,y,width,height,data:string[][],theme?:{color}}; ' +
@@ -49,8 +51,10 @@ export function makeEditWhiteboardTool(deps: Pick<RegenerateActionsDeps, 'getSce
         const ctx = deps.getSceneContext(sceneId);
         if (!ctx?.actions) throw new Error('未找到当前页面的白板内容，请重新读取页面后再试。');
         const whiteboardPatch = prepareWhiteboardPatch(ctx.actions, boardId, steps);
-        const normalized = normalizeWhiteboardActionLayout(whiteboardPatch.steps);
-        const issues = [...auditWhiteboardLayout(normalized), ...auditWhiteboardContent(normalized)];
+        const normalizedActions = normalizeWhiteboardActionLayout(replaceWhiteboardSteps(ctx.actions, boardId, whiteboardPatch.steps));
+        const normalized = whiteboardBlocks(normalizedActions).find((block) => block.id === boardId)?.steps ?? [];
+        const stepIds = new Set(normalized.map((action) => action.id));
+        const issues = [...auditWhiteboardLayout(normalizedActions).filter((issue) => issue.actionIds.some((id) => stepIds.has(id))), ...auditWhiteboardContent(normalized)];
         if (issues.length) throw new Error(`白板尚有需要修正的问题，请按元素 ID 修正后重试：${issues.slice(0, 8).map((issue) => `[${issue.actionIds.join(', ')}] ${issue.message}`).join('；')}`);
         whiteboardPatch.steps = normalized;
         // Later reads/edits in the same agent turn must see this result. The

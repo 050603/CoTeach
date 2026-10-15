@@ -5,9 +5,11 @@ import type {
   VisualTargetSelector as DslVisualTargetSelector,
 } from '@openmaic/dsl';
 import type { Action } from '@openmaic/lib/types/action';
+import { isWhiteboardAction } from '@openmaic/lib/types/action';
 import type { SceneOutline } from '@openmaic/lib/types/generation';
 import { createLogger } from '@openmaic/lib/logger';
 import { estimateSpeechDurationSec } from '@openmaic/lib/audio/tts-timing';
+import { orderedActionExecutionEntries } from '../whiteboard/action-timeline';
 import {
   findSpeechCueAnchorRange,
   resolveAlignedSpeechCueAnchor,
@@ -248,7 +250,8 @@ function narrationSources(
   let startSec = 0;
   let barrierBeforeNextSpeech = false;
   const sources: NarrationSource[] = [];
-  for (const action of actions) {
+  for (const { action, speechBindingValid } of orderedActionExecutionEntries(actions)) {
+    if (isWhiteboardAction(action) && speechBindingValid === false) continue;
     if (action.type === 'wb_open') slideVisible = false;
     if (action.type === 'wb_close') slideVisible = true;
     if (action.type === 'speech' && !action.text.trim()) {
@@ -875,7 +878,7 @@ export function calibrateGeneratedVisualCues(input: {
 }): Action[] {
   // The authoring call already chose targets and spoken positions. Calibrate
   // those choices without inferring new cues from visible labels or prose order.
-  const refinedActions = input.actions;
+  const refinedActions = calibrateGeneratedWhiteboardActions(input.actions);
   const narration = narrationSources(refinedActions, input.outline);
   const inventory = buildSlideTargetInventory(input.elements);
   if (narration.length === 0 || inventory.length === 0) {
@@ -889,12 +892,26 @@ export function calibrateGeneratedVisualCues(input: {
   const nextSpeechId = (actionIndex: number): string | undefined => {
     for (let index = actionIndex + 1; index < refinedActions.length; index += 1) {
       const candidate = refinedActions[index]!;
-      if (candidate.type === 'spotlight' || candidate.type === 'laser') continue;
+      if (candidate.type === 'spotlight' || candidate.type === 'laser'
+        || (isWhiteboardAction(candidate) && candidate.speechId)) continue;
       if (candidate.type === 'speech') return candidate.text.trim() ? candidate.id : undefined;
       return undefined;
     }
     return undefined;
   };
+
+  const boardOpenAtAction = new Map<number, boolean>();
+  let boardOpen = false;
+  for (const { action, actionIndex, speechBindingValid } of orderedActionExecutionEntries(refinedActions.map((action, index) => (
+    (action.type === 'spotlight' || action.type === 'laser') && !action.speechId
+      ? { ...action, speechId: nextSpeechId(index) }
+      : action
+  )))) {
+    boardOpenAtAction.set(actionIndex, boardOpen);
+    if (isWhiteboardAction(action) && speechBindingValid === false) continue;
+    if (action.type === 'wb_open') boardOpen = true;
+    if (action.type === 'wb_close') boardOpen = false;
+  }
 
   refinedActions.forEach((action, actionIndex) => {
     if (action.type !== 'spotlight' && action.type !== 'laser') return;
@@ -925,7 +942,7 @@ export function calibrateGeneratedVisualCues(input: {
       return;
     }
     if (
-      narration.slice(startIndex, endIndex + 1).some((source) => !source.visualCueAllowed)
+      boardOpenAtAction.get(actionIndex)
       || crossesPlaybackBoundary(startIndex, endIndex, narration)
     ) {
       log.warn(`Dropped generated visual cue ${action.id} across a hidden-slide boundary`);
@@ -1073,6 +1090,37 @@ export function calibrateGeneratedVisualCues(input: {
   return calibrated.flatMap((action) => action.type === 'speech'
     ? [...pending.filter((cue) => (cue.type === 'spotlight' || cue.type === 'laser') && cue.speechId === action.id), action]
     : [action]);
+}
+
+/** Compile whiteboard anchors against the exact saved narration audio.
+ * Preserve pending/invalid authored anchors for diagnostics without a stale
+ * numeric fallback; playback withholds them until the anchor is aligned. */
+export function calibrateGeneratedWhiteboardActions(actions: readonly Action[]): Action[] {
+  const speechById = new Map(actions.flatMap((action) => (
+    action.type === 'speech' ? [[action.id, action] as const] : []
+  )));
+  return actions.flatMap((action): Action[] => {
+    if (!isWhiteboardAction(action) || !action.speechId) return [action];
+    const speech = speechById.get(action.speechId);
+    if (action.speechAnchor) {
+      const range = speech ? findSpeechCueAnchorRange(speech.text, action.speechAnchor) : null;
+      const aligned = range && speech?.speechAlignment?.status === 'aligned'
+        ? resolveAlignedSpeechCueAnchor(speech.text, speech.speechAlignment.spans, action.speechAnchor)
+        : null;
+      if (!range) log.warn(`Whiteboard command ${action.id} has a missing narration anchor`);
+      else if (speech?.speechAlignment?.status === 'aligned' && !aligned) {
+        log.warn(`Whiteboard command ${action.id} has an unaligned spoken anchor`);
+      }
+      return [{ ...action, speechOffsetMs: aligned ? Math.round(aligned.startMs) : undefined }];
+    }
+    const offset = action.speechOffsetMs ?? 0;
+    if (!Number.isFinite(offset) || offset < 0
+      || (speech?.audioDurationSec !== undefined && offset > speech.audioDurationSec * 1000)) {
+      log.warn(`Omitted whiteboard command ${action.id} with an invalid speech offset`);
+      return [];
+    }
+    return [action];
+  });
 }
 
 export type VisualCueAnchorRepairIssue = {

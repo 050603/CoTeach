@@ -1,5 +1,6 @@
 import type { CourseQualityIssue } from './types';
 import type { CourseResourceIssue } from '@/lib/course-generation/resource-audit-server';
+import type { Course } from '@/lib/session/types';
 
 export const COURSE_RENDER_REVIEW_POLICY_VERSION = 'render-visible-content-v2';
 
@@ -34,6 +35,17 @@ export type CourseTeacherReview = {
   /** Authenticates this server-issued confirmation when a template is copied. */
   seal: string;
 };
+
+/** Presentation hint only; the server verifies the receipt's HMAC, snapshot and classroom before opening a session. */
+export function hasCourseAudioPublicationIdentity(course: Pick<Course, 'id' | 'content' | 'aiLearningClassroomId'>): boolean {
+  const publication = course.content.teachingRevisionState?.audioPublication;
+  const review = course.content.teacherReview;
+  return Boolean(publication && review && publication.schemaVersion === 1
+    && publication.kind === 'course-audio-publication' && publication.courseId === course.id
+    && publication.classroomId === (course.aiLearningClassroomId || course.content._openmaicClassroomId)
+    && publication.teacherId === review.teacherId && publication.teacherReviewSeal === review.seal
+    && /^[a-f0-9]{64}$/.test(publication.seal));
+}
 
 export function unresolvedHardIssues(issues: readonly CourseQualityIssue[]): CourseQualityIssue[] {
   return issues.filter((issue) => issue.severity === 'error'

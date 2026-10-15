@@ -466,6 +466,14 @@
     }
   },
   "whiteboard": {
+    "pages": "板书翻页",
+    "previousPage": "上一页板书",
+    "nextPage": "下一页板书",
+    "selectPage": "选择板书页",
+    "pageLabel": "第 {{index}} / {{total}} 页",
+    "currentTeaching": "当前讲解",
+    "returnToTeaching": "返回当前讲解",
+    "reviewPages": "翻阅板书",
     "title": "互动白板",
     "open": "打开白板",
     "clear": "清空白板",

@@ -634,7 +634,7 @@ export async function createTemplateVersion(claims: AuthClaims, templateId: stri
     const teacher = await requireTeacherUser(claims, tx);
     const template = await tx.classroomTemplate.findFirst({ where: { id: templateId, ownerId: teacher.id, status: { in: ["ACTIVE", "active"] } }, include: { versions: { orderBy: { version: "desc" }, take: 1 } } });
     if (!template) throw new PlatformError("NOT_FOUND", "课堂模板不存在", 404);
-    await assertTemplateReviewForPublication(input.snapshot, teacher.id);
+    await assertTemplateReviewForPublication(input.snapshot, teacher.id, templateId);
     const version = (template.versions[0]?.version ?? 0) + 1;
     const created = await tx.classroomTemplateVersion.create({ data: { templateId, version, status: "PUBLISHED", snapshot: jsonValue(input.snapshot), mediaRefs: input.mediaRefs === undefined ? undefined : jsonValue(input.mediaRefs) } });
     await enqueueKnowledgeExplanationSnapshot(tx, { snapshot: input.snapshot, courseId: templateId, identity: `template-version:${created.id}` });
@@ -676,18 +676,18 @@ export async function createClassroomInstance(claims: AuthClaims, activityId: st
     if (!version || version.status.toUpperCase() !== "PUBLISHED" || version.template.status.toUpperCase() !== "ACTIVE" || version.template.ownerId !== (await requireTeacherUser(claims, tx)).id) throw new PlatformError("NOT_FOUND", "课堂模板版本不存在", 404);
     const active = await tx.classroomInstance.findFirst({ where: { activityId, templateVersionId, status: { in: ["SCHEDULED", "TEACHING", "scheduled", "teaching"] } }, orderBy: { runNo: "desc" }, include: { templateVersion: true } });
     if (active) return active;
-    await assertTemplateReviewForPublication(version.snapshot, version.template.ownerId);
+    await assertTemplateReviewForPublication(version.snapshot, version.template.ownerId, version.templateId);
     const latest = await tx.classroomInstance.aggregate({ where: { activityId }, _max: { runNo: true } });
     return tx.classroomInstance.create({ data: { activityId: activity.id, templateVersionId, runNo: (latest._max.runNo ?? 0) + 1, status: "SCHEDULED" }, include: { templateVersion: true } });
   });
 }
 
-async function assertTemplateReviewForPublication(snapshot: unknown, teacherId: string): Promise<void> {
+async function assertTemplateReviewForPublication(snapshot: unknown, teacherId: string, templateId?: string): Promise<void> {
   const { decodePblTemplate, createPblTemplateCourse } = await import("./pbl-template");
   const design = decodePblTemplate(snapshot);
   if (!design) return;
   const { assertCourseTeacherReview, CourseReviewError } = await import("@/lib/course-quality-review/review-service");
-  const course = createPblTemplateCourse(design.content.teacherReview?.courseId ?? 'new-template', design);
+  const course = createPblTemplateCourse(templateId ?? design.content.teacherReview?.courseId ?? 'new-template', design);
   try { await assertCourseTeacherReview(course, teacherId); }
   catch (error) { if (error instanceof CourseReviewError) throw new PlatformError(error.code, error.message, error.status); throw error; }
 }

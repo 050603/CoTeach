@@ -126,4 +126,34 @@ describe('normalizeWhiteboardActionLayout', () => {
     if (result[1].type !== 'wb_draw_line') throw new Error('Expected line');
     expect(resolveWhiteboardLine(result[1], [result[2]])).toMatchObject({ startX: 940, startY: 450 });
   });
+
+  it('starts pages and resolves deletions at their spoken moments without moving persisted actions', () => {
+    const actions: Action[] = [
+      { id: 'new', type: 'wb_draw_text', content: '新组', x: 40, y: 40, speechId: 's1', speechAnchor: { quote: '新组' }, fontSize: 24 },
+      { id: 'clear', type: 'wb_clear', speechId: 's1', speechAnchor: { quote: '清板' } },
+      { id: 'old', type: 'wb_draw_text', content: '旧组', x: 40, y: 40, speechId: 's1', speechAnchor: { quote: '旧组' }, fontSize: 24 },
+      { id: 's1', type: 'speech', text: '讲旧组，清板，再讲新组。' },
+    ];
+    const result = normalizeWhiteboardActionLayout(actions);
+    expect(result.map((action) => action.id)).toEqual(actions.map((action) => action.id));
+    expect(result[0]).toMatchObject({ x: 40, y: 40 });
+    expect(result[2]).toMatchObject({ x: 40, y: 40 });
+    expect(auditWhiteboardLayout(result)).toEqual([]);
+  });
+
+  it('lays out cumulative steps in narration order and preserves a 24px font floor', () => {
+    const result = normalizeWhiteboardActionLayout([
+      { id: 'later', type: 'wb_draw_text', content: '后讲要点', x: 40, y: 40, width: 300, height: 100, fontSize: 24, speechId: 's1', speechAnchor: { quote: '后讲' } },
+      { id: 'first', type: 'wb_draw_text', content: '先讲要点', x: 40, y: 40, width: 300, height: 100, fontSize: 24, speechId: 's1', speechAnchor: { quote: '先讲' } },
+      { id: 's1', type: 'speech', text: '先讲第一项，然后讲第二项。' },
+    ]);
+    expect(result[1]).toMatchObject({ y: 40, fontSize: 24 });
+    expect(result[0]).toMatchObject({ y: 164, fontSize: 24 });
+    const oversized = normalizeWhiteboardActionLayout([
+      { id: 'wide', type: 'wb_draw_text', content: '超宽的要点', x: 0, y: 0, width: 3000, height: 100, fontSize: 24, speechId: 's1', speechAnchor: { quote: '要点' } },
+      { id: 's1', type: 'speech', text: '讲要点。' },
+    ]);
+    expect(oversized[0]).toMatchObject({ fontSize: 24 });
+    expect(auditWhiteboardLayout(oversized).some((issue) => issue.code === 'out-of-bounds')).toBe(true);
+  });
 });

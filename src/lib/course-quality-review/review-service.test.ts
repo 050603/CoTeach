@@ -8,12 +8,33 @@ vi.mock('@/lib/classroom/new-system-course', () => ({ getNewSystemCourseReadines
 vi.mock('@/lib/course-generation/resource-audit-server', () => ({ auditCourseGeneratedResources: mocks.audit }));
 import { assertCourseTeacherReview, confirmCourseTeacherReview, freshQualityReport, freshRenderReview, saveCourseRenderPage, startCourseRenderReview } from './review-service';
 import { computeCourseQualitySignature } from './signature';
+import { audioPublicationSnapshotFingerprint, hashJson, signCourseAudioPublication } from './audio-publication';
 import { COURSE_QUALITY_REVIEW_POLICY_VERSION } from './types';
 
 afterEach(() => vi.unstubAllEnvs());
 
 let course: Course;
 let classroom: PersistedClassroomData;
+
+async function publishAudioReceiptForTest() {
+  await confirmCourseTeacherReview('course', 'teacher', computeCourseQualitySignature(course, classroom), []);
+  const source = structuredClone(classroom);
+  const previousReview = structuredClone(course.content.teacherReview!);
+  classroom = { ...structuredClone(classroom), id: 'updated-audio-classroom', revision: 2 };
+  const speech = classroom.scenes[0]!.actions![0]!;
+  if (speech.type === 'speech') speech.text = '同学们，我们先来看核心认识为什么需要这些条件。';
+  course.aiLearningClassroomId = classroom.id;
+  course.content.teachingRevisionState = { schemaVersion: 1, baseClassroomRevision: 1, classroomRevision: 2,
+    changeType: 'narration', affectedSceneIds: ['slide'], invalidated: [], updatedAt: new Date().toISOString() };
+  course.content.teachingRevisionState.audioPublication = signCourseAudioPublication({
+    schemaVersion: 1, kind: 'course-audio-publication', courseId: course.id, teacherId: 'teacher',
+    sourceVersionId: 'original-v3', sourceClassroomId: source.id, sourceSnapshotFingerprint: 'source-snapshot-hash',
+    sourceClassroomFingerprint: hashJson(source), teacherReviewSeal: previousReview.seal,
+    classroomId: classroom.id, classroomFingerprint: hashJson(classroom), snapshotFingerprint: audioPublicationSnapshotFingerprint(course),
+    signature: computeCourseQualitySignature(course, classroom), publishedAt: new Date().toISOString(),
+  });
+  return previousReview;
+}
 beforeEach(() => {
   mocks.audit.mockReset();
   mocks.audit.mockResolvedValue({ issues: [] });
@@ -62,6 +83,48 @@ describe('teacher confirmation of an exact teaching draft', () => {
     course.content.qualityReview!.signature = signature;
     await confirmCourseTeacherReview('course', 'teacher', signature, []);
     course.resources[0].downloadedBy = ['student-1'];
+    await expect(assertCourseTeacherReview(course, 'teacher')).resolves.toBeUndefined();
+  });
+  it('accepts an authentic operational audio receipt while retaining the original teacher review and old reports', async () => {
+    const review = await publishAudioReceiptForTest();
+    await expect(assertCourseTeacherReview(course, 'teacher')).resolves.toBeUndefined();
+    expect(course.content.teacherReview).toEqual(review);
+    const currentSignature = computeCourseQualitySignature(course, classroom);
+    expect(freshQualityReport(course, currentSignature)).toBeUndefined();
+    expect(course.content.qualityReview!.signature).toBe(review.signature);
+    expect(mocks.audit).toHaveBeenCalledWith(course.id, { course, classroom });
+  });
+  it.each(['receipt', 'course', 'classroom', 'owner', 'review', 'reused'] as const)(
+    'rejects an audio receipt after changing its %s binding', async (change) => {
+      await publishAudioReceiptForTest();
+      const proof = course.content.teachingRevisionState!.audioPublication!;
+      if (change === 'receipt') proof.sourceVersionId = 'forged-source';
+      if (change === 'course') course.summary = '未经授权的新课程摘要';
+      if (change === 'classroom') classroom.scenes[0]!.actions!.push({ id: 'added-action', type: 'wb_open' });
+      if (change === 'owner') {
+        await expect(assertCourseTeacherReview(course, 'another-teacher')).rejects.toMatchObject({ code: 'TEACHER_REVIEW_REQUIRED' });
+        return;
+      }
+      if (change === 'review') course.content.teacherReview!.seal = 'f'.repeat(64);
+      if (change === 'reused') {
+        classroom.id = 'another-classroom';
+        course.aiLearningClassroomId = classroom.id;
+      }
+      await expect(assertCourseTeacherReview(course, 'teacher')).rejects.toMatchObject({
+        code: change === 'review' ? 'TEACHER_REVIEW_REQUIRED' : 'REVIEW_STALE',
+      });
+    },
+  );
+  it('still rejects missing technical resources after an authorized audio publication', async () => {
+    await publishAudioReceiptForTest();
+    mocks.audit.mockResolvedValue({ issues: [{ id: 'tts:slide:speech', type: 'tts' }] });
+    await expect(assertCourseTeacherReview(course, 'teacher')).rejects.toMatchObject({ code: 'RESOURCES_NOT_READY' });
+  });
+  it('keeps an authorized audio publication valid when optional diagnostic reports are refreshed', async () => {
+    await publishAudioReceiptForTest();
+    course.content.qualityReview = { ...course.content.qualityReview!, signature: computeCourseQualitySignature(course, classroom), issues: [] };
+    course.content.renderReview = { schemaVersion: 1, signature: computeCourseQualitySignature(course, classroom),
+      classroomId: classroom.id, status: 'completed', pages: [], updatedAt: new Date().toISOString() };
     await expect(assertCourseTeacherReview(course, 'teacher')).resolves.toBeUndefined();
   });
   it('records explicit teacher review when automated content checking failed', async () => {

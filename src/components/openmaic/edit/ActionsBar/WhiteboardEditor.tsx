@@ -45,6 +45,7 @@ import {
   visibleBoardDraws,
   whiteboardAIPrompt,
   whiteboardBlocks,
+  whiteboardPreviewActions,
   type BoardStepType,
   type BoardChart,
 } from './whiteboard-edit';
@@ -545,7 +546,7 @@ export function WhiteboardEditor({
   const ownedSpeech = useRef<SpeechSynthesisUtterance | null>(null);
   const [notice, setNotice] = useState('');
   const issues = block ? [
-    ...auditWhiteboardLayout((scene?.actions ?? []).slice(0, block.end + 1)),
+    ...auditWhiteboardLayout(scene?.actions ?? []),
     ...auditWhiteboardContent(block.steps),
   ].filter((issue) => issue.actionIds.some((id) => block.steps.some((step) => step.id === id))) : [];
 
@@ -596,10 +597,11 @@ export function WhiteboardEditor({
       return;
     setPast((values) => [...values.slice(-49), current.steps]);
     setFuture([]);
-    lastWritten.current = next;
+    const replaced = replaceWhiteboardSteps(actions, boardId, next);
+    lastWritten.current = whiteboardBlocks(replaced).find((item) => item.id === boardId)?.steps;
     useStageStore
       .getState()
-      .updateScene(sceneId, { actions: replaceWhiteboardSteps(actions, boardId, next) });
+      .updateScene(sceneId, { actions: replaced });
   }
 
   function history(direction: 'undo' | 'redo') {
@@ -624,16 +626,18 @@ export function WhiteboardEditor({
       setFuture(future.slice(0, -1));
       setPast([...past, current.steps]);
     }
-    lastWritten.current = next;
+    const replaced = replaceWhiteboardSteps(actions, boardId, next);
+    lastWritten.current = whiteboardBlocks(replaced).find((item) => item.id === boardId)?.steps;
     useStageStore
       .getState()
-      .updateScene(sceneId, { actions: replaceWhiteboardSteps(actions, boardId, next) });
+      .updateScene(sceneId, { actions: replaced });
   }
 
   function add(type: BoardStepType) {
     const id = clientUUID();
     const current = whiteboardBlocks(useStageStore.getState().getSceneById(sceneId)?.actions ?? []).find((item) => item.id === boardId);
     if (!current) return;
+    if (current.speechBound && type === 'speech') return;
     const placed = placeBoardStep(type, id, current.steps);
     commit((steps) => [...steps, placed.action]);
     setNotice(placed.crowded ? '当前页空间有限，已保留已有内容。可调整大小和位置、整理布局，或新建白板页。' : '');
@@ -749,7 +753,7 @@ export function WhiteboardEditor({
               </div>
               <div className="grid min-h-40 flex-1 place-items-center overflow-hidden rounded-[10px] border border-zinc-200 bg-zinc-100 dark:border-zinc-800 dark:bg-zinc-900">
                 <WhiteboardPreview
-                  actions={(scene?.actions ?? []).slice(0, block.start + selectedIndex + 2)}
+                  actions={whiteboardPreviewActions(scene?.actions ?? [], boardId, selectedIndex)}
                 />
               </div>
               <p
@@ -798,7 +802,7 @@ export function WhiteboardEditor({
                     }}
                   >
                     <option value="">选择要添加的内容…</option>
-                    {stepTypes.map(([type, label]) => (
+                    {stepTypes.filter(([type]) => !block.speechBound || type !== 'speech').map(([type, label]) => (
                       <option key={type} value={type}>
                         {label}
                       </option>
@@ -886,7 +890,7 @@ export function WhiteboardEditor({
                     <StepFields
                       key={selected.id}
                       action={selected}
-                      actions={(scene?.actions ?? []).slice(0, block.start + selectedIndex + 1)}
+                      actions={whiteboardPreviewActions(scene?.actions ?? [], boardId, selectedIndex - 1)}
                       onChange={(update) =>
                         commit((steps) => editBoardStep(steps, selected.id, update))
                       }

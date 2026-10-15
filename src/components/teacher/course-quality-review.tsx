@@ -27,7 +27,7 @@ export type TeacherReviewDecision = { canConfirm: boolean; signature: string; ac
 export type CourseQualityReviewSummary = {
   attentionCount: number;
   blockingCount: number;
-  status: 'loading' | 'ready' | 'attention' | 'blocked' | 'confirmed' | 'error';
+  status: 'loading' | 'ready' | 'attention' | 'blocked' | 'confirmed' | 'audio-updated' | 'error';
 };
 type ReviewSnapshot = {
   required: boolean;
@@ -39,6 +39,7 @@ type ReviewSnapshot = {
   reviewScope?: CourseQualityReport['reviewScope'];
   renderReview: CourseRenderReview | null;
   teacherReview: CourseTeacherReview | null;
+  audioPublication?: { publishedAt: string; sourceVersionId: string; inheritsTeacherContentReview: true; audioTeacherReviewed: false } | null;
   teacherReviewItems: TeacherReviewItem[];
   teacherReviewSummary: string | null;
 };
@@ -252,6 +253,7 @@ export function CourseQualityReview({ courseId, onDecisionChange, onOpenPage, on
       status: !snapshot
         ? error ? 'error' : 'loading'
         : blockingIssues.length ? 'blocked'
+            : snapshot.audioPublication ? 'audio-updated'
             : snapshot.teacherReview ? 'confirmed'
             : attentionCount ? 'attention' : 'ready',
     });
@@ -334,7 +336,7 @@ export function CourseQualityReview({ courseId, onDecisionChange, onOpenPage, on
         <div className="max-w-3xl">
           <div className="flex flex-wrap items-center gap-2">
             <h2 className="text-base font-black text-stone-950">课程检查与教师终审</h2>
-            {snapshot?.teacherReview && !blockingIssues.length ? <span className="rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[11px] font-bold text-emerald-800">当前版本已终审</span> : null}
+            {snapshot?.teacherReview && !blockingIssues.length ? <span className="rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[11px] font-bold text-emerald-800">{snapshot.audioPublication ? '沿用原内容终审' : '当前版本已终审'}</span> : null}
           </div>
           <p className="mt-0.5 text-xs leading-5 text-stone-500">确定影响授课的故障需要先修正；教学疑点和页面建议由教师结合课堂意图核对。</p>
         </div>
@@ -351,6 +353,9 @@ export function CourseQualityReview({ courseId, onDecisionChange, onOpenPage, on
     </header>
 
     {!snapshot ? <div className="grid min-h-40 place-items-center px-6 py-10 text-sm text-stone-500"><span className="inline-flex items-center gap-2"><Loader2 className="animate-spin" size={16} />正在读取当前课程版本…</span></div> : <>
+      {snapshot.audioPublication ? <p className="border-b border-stone-200 bg-stone-50 px-4 py-3 text-xs leading-6 text-stone-600 sm:px-5">
+        音频已更新并重新同步页面动作，课件与题目沿用已审核版本。下方保留原内容与页面检查记录；本次音频更新未新增教师听审记录。
+      </p> : null}
       {reviewScope?.kind === 'test-lesson' ? <p className="border-b border-stone-200 bg-stone-50 px-4 py-3 text-xs leading-6 text-stone-600 sm:px-5">
         当前检查范围：{reviewScope.checkedSectionTitle || '已生成的单节测试样本'}。
         {reviewScope.unreviewedSectionCount !== undefined ? `其余 ${reviewScope.unreviewedSectionCount} 个小节未检查` : `其余 ${reviewScope.uncheckedOutlineCount} 个计划页面未检查`}，不计为缺失；生成完整课程后再终审发布。
@@ -366,7 +371,7 @@ export function CourseQualityReview({ courseId, onDecisionChange, onOpenPage, on
               ? '检查服务未完成，仍可由教师手动核对'
               : qualityRunning ? `正在分段核对课程内容${sectionCount ? ` · ${completedSectionCount} / ${sectionCount} 个小节完成` : ''}` : '尚未运行，可按需启动'}
           icon={qualityRunning ? <Loader2 className="animate-spin" size={18} /> : <FileSearch size={18} />}
-          label="内容一致性"
+          label={snapshot.audioPublication ? '原内容一致性' : '内容一致性'}
           onAction={() => void runCheck('content')}
           retryLabel={snapshot.quality?.status === 'failed' ? '仅重试未完成小节' : undefined}
           onRetry={() => void runCheck('content', 'retry')}
@@ -381,7 +386,7 @@ export function CourseQualityReview({ courseId, onDecisionChange, onOpenPage, on
             : !pages.length && !renderRequested ? '尚未运行，使用实际浏览器测量'
               : `${completedPageCount} / ${slides.length} 页完成${pageCheckedAt ? ` · ${pageCheckedAt}` : ''}`}
           icon={pageCheckActive ? <Loader2 className="animate-spin" size={18} /> : <MonitorCheck size={18} />}
-          label="PPT 页面呈现"
+          label={snapshot.audioPublication ? '原 PPT 页面呈现' : 'PPT 页面呈现'}
           onAction={() => void runCheck('pages')}
           retryLabel={pages.some((page) => page.status === 'failed') ? '仅重试未完成页面' : undefined}
           onRetry={() => void runCheck('pages', 'retry')}
@@ -391,12 +396,13 @@ export function CourseQualityReview({ courseId, onDecisionChange, onOpenPage, on
         <ReviewStatusCard
           detail={blockingIssues.length
             ? `${blockingIssues.length} 项必须先修正，暂不能确认发布`
+            : snapshot.audioPublication && teacherConfirmedAt ? `原内容已于 ${teacherConfirmedAt} 完成教师终审，音频已更新`
             : snapshot.teacherReview && teacherConfirmedAt ? `当前版本已于 ${teacherConfirmedAt} 完成教师终审`
             : attentionCount ? `${reviewedCount} / ${toReview.length} 项参考建议已核对`
               : toReview.length ? `${toReview.length} 项建议均已核对` : '当前没有待教师处理的检查项'}
           icon={blockingIssues.length ? <CircleAlert size={18} /> : <ShieldCheck size={18} />}
           label="教师确认"
-          status={blockingIssues.length ? '有阻断项' : snapshot.teacherReview ? '已终审' : attentionCount ? '待核对' : '可确认'}
+          status={blockingIssues.length ? '有阻断项' : snapshot.audioPublication ? '沿用原终审' : snapshot.teacherReview ? '已终审' : attentionCount ? '待核对' : '可确认'}
           tone={blockingIssues.length ? 'danger' : attentionCount ? 'warning' : 'success'}
         />
       </div>

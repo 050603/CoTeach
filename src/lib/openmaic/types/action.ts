@@ -12,6 +12,8 @@
 
 export type {
   ActionBase,
+  WhiteboardActionBase,
+  WhiteboardAction,
   WhiteboardAnchor,
   TableRowVisualTargetSelector,
   VisualTargetSelector,
@@ -50,8 +52,10 @@ export type {
 // imports as `undefined` at runtime.
 export {
   ACTION_TYPES,
+  WHITEBOARD_ACTION_TYPES,
   FIRE_AND_FORGET_ACTIONS,
   SLIDE_ONLY_ACTIONS,
   SYNC_ACTIONS,
   isActionType,
+  isWhiteboardAction,
 } from '@openmaic/dsl';

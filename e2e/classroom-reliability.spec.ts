@@ -143,7 +143,7 @@ test('offline document edits survive reload and replay to the server', async ({ 
   const editor = await openEditor(page);
   await editor.fill('离线仍然保留的完整项目方案');
   await expect.poll(async () => (await drafts(page)).some(draft => draft.content.includes('离线仍然保留'))).toBe(true);
-  await expect(page.getByText(/同步失败/).first()).toBeVisible();
+  await expect(page.locator('[data-slot="save-status"]')).toContainText('保存失败');
   server.faults.offline = false;
   await page.reload();
   await expect(page.locator('[data-slate-editor="true"]').first()).toContainText('离线仍然保留');
@@ -156,7 +156,7 @@ test('a lost save acknowledgement retries one stable request without duplicate w
   server.faults.loseSaveAck = true;
   const editor = await openEditor(page);
   await editor.fill('一次写入经过丢失回执后恢复');
-  await expect(page.getByText('服务器已保存', { exact: true })).toBeVisible();
+  await expect(page.locator('[data-slot="save-status"]')).toContainText('已保存');
   await expect.poll(() => server.writes.length).toBe(1);
   await expect.poll(() => drafts(page)).toEqual([]);
   expect(server.course.submissions?.[0].version).toBe(2);
@@ -170,7 +170,7 @@ test('another tab cannot overwrite the accepted draft and retains its own unsent
   await firstEditor.fill('第一个标签页已确认的方案');
   await expect.poll(() => server.writes.length).toBe(1);
   await otherEditor.fill('第二个标签页尚未合并的方案');
-  await expect(other.getByText(/同步失败/).first()).toBeVisible();
+  await expect(other.locator('[data-slot="save-status"]')).toContainText('保存失败');
   expect(server.writes).toHaveLength(1);
   const conflicts = server.conflicts();
   await other.waitForTimeout(1_900);

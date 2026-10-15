@@ -3,6 +3,8 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { StudentExperimentAssessment, paginateExperimentQuestions, type ExperimentQuestion } from "./student-experiment-assessment";
 import { parseDesignAnswer } from "@/lib/platform/experiment-design-answer";
+import { COTEACH_COMMUNITY_REFERENCE, createCoTeachAssessmentTemplate } from "@/lib/platform/experiment-templates";
+import { composeExperimentForms, publicExperimentQuestions } from "@/lib/platform/experiment";
 
 const group = { id: "g", title: "研究情境", instruction: "阅读情境后作答" };
 const questions: ExperimentQuestion[] = [
@@ -28,6 +30,27 @@ beforeEach(() => {
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 
 describe("student experiment assessment", () => {
+  it("repeats the full community explanation on every social-presence page and after draft restoration", async () => {
+    const form = publicExperimentQuestions(composeExperimentForms(createCoTeachAssessmentTemplate(), "none", () => 0).posttest);
+    const pages = paginateExperimentQuestions(form);
+    const socialStart = pages.findIndex((page) => page.questions[0].id === "CoI14");
+    vi.mocked(fetch).mockImplementation(async (_url, options) => options?.method === "PUT"
+      ? response({ draft: { ...JSON.parse(String(options.body)), version: 2, updatedAt: "2026-01-01T00:00:00Z" } })
+      : response({ ...assessment({ answers: {}, currentPage: socialStart, version: 1, updatedAt: "2026-01-01T00:00:00Z" }), questions: form }));
+    render(<StudentExperimentAssessment instanceId="run-1" phase="posttest" />);
+    await screen.findByText(/^CoI14/);
+    expect(screen.getByText(COTEACH_COMMUNITY_REFERENCE)).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "下一步" }));
+    expect(screen.getByText(/^CoI18/)).toBeVisible();
+    expect(screen.getByText(COTEACH_COMMUNITY_REFERENCE)).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "下一步" }));
+    expect(screen.getByText(/^CoI22/)).toBeVisible();
+    expect(screen.getByText(COTEACH_COMMUNITY_REFERENCE)).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "下一步" }));
+    expect(screen.getByText(/^CoI23/)).toBeVisible();
+    expect(screen.queryByText(COTEACH_COMMUNITY_REFERENCE)).not.toBeInTheDocument();
+  });
+
   it.each(["confirmed", "recovered"] as const)("calls onSubmitted only after a %s server submission", async (mode) => {
     const onSubmitted = vi.fn();
     let posted = false;

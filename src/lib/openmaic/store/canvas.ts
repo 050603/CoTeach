@@ -115,6 +115,7 @@ interface CanvasState {
 
   // ===== Whiteboard =====
   whiteboardOpen: boolean; // Whether whiteboard is open
+  whiteboardInstantTransition: boolean; // Media-clock commands must not lag behind narration
   whiteboardClearing: boolean; // Whiteboard clear animation in progress
 
   // ===== Other =====
@@ -167,7 +168,7 @@ interface CanvasState {
   pauseVideo: () => void;
 
   // ----- Whiteboard -----
-  setWhiteboardOpen: (open: boolean) => void;
+  setWhiteboardOpen: (open: boolean, instantTransition?: boolean) => void;
   setWhiteboardClearing: (clearing: boolean) => void;
 
   // ----- Other -----
@@ -241,6 +242,7 @@ const initialState = {
 
   // Whiteboard
   whiteboardOpen: false,
+  whiteboardInstantTransition: false,
   whiteboardClearing: false,
 
   // Other: false,
@@ -354,7 +356,7 @@ const useCanvasStoreBase = create<CanvasState>((set, get) => ({
 
   // ===== Whiteboard Actions =====
 
-  setWhiteboardOpen: (open) => set({ whiteboardOpen: open }),
+  setWhiteboardOpen: (open, instantTransition = false) => set({ whiteboardOpen: open, whiteboardInstantTransition: instantTransition }),
   setWhiteboardClearing: (clearing) => set({ whiteboardClearing: clearing }),
 
   // ===== Other Actions =====

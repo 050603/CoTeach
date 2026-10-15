@@ -59,6 +59,8 @@ interface RoundtableProps {
   readonly currentSpeech?: string | null; // Live SSE speech (from StreamBuffer — discussion/QA)
   readonly lectureSpeech?: string | null; // Active lecture speech (from PlaybackEngine, full text)
   readonly lectureSpeechProgress?: number;
+  readonly lectureMediaTimeMs?: number | null;
+  readonly lectureQuizWaiting?: boolean;
   readonly lectureCues?: ReadonlyArray<LectureCue>;
   readonly activeLectureActionIndex?: number;
   readonly idleText?: string | null; // Static idle text (first speech action)
@@ -158,6 +160,8 @@ export function Roundtable({
   currentSpeech,
   lectureSpeech,
   lectureSpeechProgress = 0,
+  lectureMediaTimeMs,
+  lectureQuizWaiting = false,
   lectureCues = [],
   activeLectureActionIndex = -1,
   idleText,
@@ -724,6 +728,8 @@ export function Roundtable({
         cues={lectureCues}
         currentText={sourceText}
         speechProgress={lectureSpeechProgress}
+        mediaTimeMs={lectureMediaTimeMs}
+        quizWaiting={lectureQuizWaiting}
         engineMode={engineMode}
         interactionAssistance={interactionAssistance}
         muted={ttsMuted}
@@ -753,9 +759,10 @@ export function Roundtable({
     return (
       <div className="h-0 w-full relative z-10 overflow-visible">
         {hideCompanionArea ? <div
-          className="fixed top-3 z-40 rounded-full border border-slate-200/60 bg-white/85 shadow-sm backdrop-blur-md pointer-events-auto dark:border-white/10 dark:bg-slate-900/85"
+          className="fixed top-3 z-40 pointer-events-auto"
           style={{ right: chatCollapsed === false ? displayedChatAreaWidth + 12 : 12 }}
-        ><CourseKnowledgeGraphButton /></div> : null}
+        ><CourseKnowledgeGraphButton showLabel activeActionIndex={activeLectureActionIndex}
+          mediaTimeMs={lectureMediaTimeMs} quizWaiting={lectureQuizWaiting} /></div> : null}
         {/* Speech overlay — fills the full stage area via absolute positioning */}
         <PresentationSpeechOverlay
           instructorIdentity={instructorIdentity ?? undefined}

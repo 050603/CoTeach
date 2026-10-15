@@ -230,7 +230,7 @@ export function makeRegenerateSceneActionsTool(
       const { outline, allOutlines, content, stageId, agents, languageDirective, sectionNarrations } = ctxData;
       const originalActions = ctxData.actions;
       const boardIndexes = new Set(whiteboardBlocks(originalActions ?? []).flatMap((block) =>
-        Array.from({ length: block.end - block.start + 1 }, (_item, index) => block.start + index),
+        block.actionIndexes,
       ));
       const editableSpeeches = originalActions?.filter((action, index) => action.type === 'speech' && !boardIndexes.has(index));
       if (originalActions?.length && !editableSpeeches?.length) {

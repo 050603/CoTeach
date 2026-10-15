@@ -14,6 +14,7 @@ import {
 import {
   InvalidClassroomEditError,
   prepareClassroomEdit,
+  rewriteClassroomMediaReferences,
 } from '@openmaic/lib/server/classroom-edit';
 import type { Scene, Stage } from '@openmaic/lib/types/stage';
 import {
@@ -27,6 +28,7 @@ import {
 } from '@/lib/course-generation/teacher-review-items';
 import type { SceneOutline } from '@/lib/openmaic/types/generation';
 import { resolveCourseDesignUpdate } from '@/lib/course-design/workspace';
+import { resolveCourseMindMapBindings } from '@/lib/course-mind-map/bindings';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -122,11 +124,16 @@ function deriveRevisionState(before: Scene[], after: Scene[], nextRevision: numb
   for (const scene of after) {
     const prior = previous.get(scene.id);
     if (!prior) { visualIds.push(scene.id); narrationIds.push(scene.id); continue; }
+    const comparable = rewriteClassroomMediaReferences(scene, scene.stageId, prior.stageId);
     const beforeSpeech = (prior.actions ?? []).filter((action) => action.type === 'speech').map((action) => [action.id, action.text]);
     const afterSpeech = (scene.actions ?? []).filter((action) => action.type === 'speech').map((action) => [action.id, action.text]);
     if (JSON.stringify(beforeSpeech) !== JSON.stringify(afterSpeech)) narrationIds.push(scene.id);
-    if (JSON.stringify(sceneVisualMeaning(prior)) !== JSON.stringify(sceneVisualMeaning(scene))) visualIds.push(scene.id);
-    else if (JSON.stringify(prior.content) !== JSON.stringify(scene.content)) layoutIds.push(scene.id);
+    const priorActions = (prior.actions ?? []).filter((action) => action.type !== 'speech');
+    const nextActions = (comparable.actions ?? []).filter((action) => action.type !== 'speech');
+    if (JSON.stringify(sceneVisualMeaning(prior)) !== JSON.stringify(sceneVisualMeaning(comparable))
+      || JSON.stringify(priorActions) !== JSON.stringify(nextActions)
+      || JSON.stringify(prior.teachingToolPlan) !== JSON.stringify(comparable.teachingToolPlan)) visualIds.push(scene.id);
+    else if (JSON.stringify(prior.content) !== JSON.stringify(comparable.content)) layoutIds.push(scene.id);
   }
   const afterIds = new Set(after.map((scene) => scene.id));
   for (const scene of before) if (!afterIds.has(scene.id)) {
@@ -159,7 +166,7 @@ export async function GET(
   if (!classroomId) return Response.json({ error: '学生 AI 课堂尚未生成' }, { status: 404 });
   const classroom = await readClassroom(classroomId);
   if (!classroom) return Response.json({ error: '课堂资源不存在' }, { status: 404 });
-  return Response.json({ success: true, classroom });
+  return Response.json({ success: true, classroom, courseMindMap: course.content.courseMindMap });
 }
 
 export async function PATCH(
@@ -293,6 +300,9 @@ export async function PATCH(
         aiLearningClassroomId: targetClassroomId,
         content: {
           ...current.content,
+          ...(current.content.courseMindMap ? {
+            courseMindMap: resolveCourseMindMapBindings(current.content.courseMindMap, prepared.scenes),
+          } : {}),
           teacherReview: undefined,
           renderReview: undefined,
           qualityReview: undefined,

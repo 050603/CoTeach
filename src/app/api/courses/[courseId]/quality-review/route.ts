@@ -1,7 +1,8 @@
 import { z } from 'zod';
 import { authorizeTemplateRequest } from '@/lib/platform/template-access';
 import { enqueueCourseQualityReview } from '@/lib/course-quality-review/job-runner';
-import { confirmCourseTeacherReview, CourseReviewError, freshQualityReport, freshRenderReview, isTechnicalStructureIssue, loadCourseReviewContext, requiresCourseTeacherReview, saveCourseRenderPage, startCourseRenderReview } from '@/lib/course-quality-review/review-service';
+import { confirmCourseTeacherReview, CourseReviewError, freshQualityReport, freshRenderReview, isAuthenticTeacherReview, isTechnicalStructureIssue, loadCourseReviewContext, requiresCourseTeacherReview, saveCourseRenderPage, startCourseRenderReview } from '@/lib/course-quality-review/review-service';
+import { hasAuthenticCourseAudioPublication } from '@/lib/course-quality-review/audio-publication';
 import { collectCourseStructureIssues } from '@/lib/course-quality-review/semantic-review';
 import { unresolvedHardIssues } from '@/lib/course-quality-review/teacher-review';
 import type { CourseQualityIssue } from '@/lib/course-quality-review/types';
@@ -35,12 +36,16 @@ export async function GET(request: Request, context: { params: Promise<{ courseI
   if (teacher instanceof Response) return teacher;
   try {
     const { course, classroom, signature } = await loadCourseReviewContext(courseId);
+    const inheritedAudioPublication = Boolean(course.content.teacherReview
+      && isAuthenticTeacherReview(course.content.teacherReview)
+      && hasAuthenticCourseAudioPublication(course, classroom, teacher));
     const required = requiresCourseTeacherReview(course);
     const structure = collectCourseStructureIssues(course, classroom.scenes, { includePresentation: false });
     const blockingIssues = unresolvedHardIssues(structure.filter(isTechnicalStructureIssue));
     const qualityDiagnostics = structure.filter((issue) => !isTechnicalStructureIssue(issue))
       .map((issue) => ({ ...issue, blocking: false }));
-    const quality = freshQualityReport(course, signature);
+    const quality = freshQualityReport(course, signature)
+      ?? (inheritedAudioPublication ? course.content.qualityReview : undefined);
     const generationRun = course.content.classroomGenerationRun;
     const checkedOutlineIds = generationRun?.testLesson?.sceneOutlineIds ?? generationRun?.generatedOutlineIds ?? [];
     const reviewScope = generationRun?.scope === 'test-lesson'
@@ -59,13 +64,19 @@ export async function GET(request: Request, context: { params: Promise<{ courseI
     const advisoryQuality = quality ? { ...quality, issues: quality.issues
       .filter((issue) => !liveBlockingIds.has(issue.id))
       .map(asAdvisory), sections: quality.sections?.map((section) => ({ ...section, issues: section.issues.map(asAdvisory) })) } : null;
-    const render = freshRenderReview(course, signature);
+    const render = freshRenderReview(course, signature)
+      ?? (inheritedAudioPublication ? course.content.renderReview : undefined);
     const advisoryRender = render ? { ...render, pages: render.pages.map((page) => ({ ...page,
       issues: page.issues.map((issue) => ({ ...issue, blocking: false, severity: 'suggestion' as const })) })) } : null;
     return Response.json({ required, signature, reviewScope, quality: advisoryQuality,
       blockingIssues, qualityDiagnostics,
       renderReview: advisoryRender,
-      teacherReview: course.content.teacherReview?.signature === signature ? course.content.teacherReview : null,
+      teacherReview: course.content.teacherReview?.signature === signature || inheritedAudioPublication ? course.content.teacherReview : null,
+      audioPublication: inheritedAudioPublication ? {
+        publishedAt: course.content.teachingRevisionState!.audioPublication!.publishedAt,
+        sourceVersionId: course.content.teachingRevisionState!.audioPublication!.sourceVersionId,
+        inheritsTeacherContentReview: true, audioTeacherReviewed: false,
+      } : null,
       teacherReviewItems: course.content.teacherReviewItems ?? [],
       teacherReviewSummary: course.content.teacherReviewSummary ?? null,
       teacherReviewVersion: course.content.teacherReviewVersion ?? null,

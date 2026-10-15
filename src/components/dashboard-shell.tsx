@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
-import type { ReactNode } from "react";
+import type { ComponentProps, ReactNode } from "react";
 import {
   Bell,
   ArrowLeft,
@@ -47,6 +47,8 @@ export type DashboardShellProps = {
   variant?: "default" | "bare";
   headerSlot?: ReactNode;
   headerEndSlot?: ReactNode;
+  /** Current workspace saves take precedence over the generic classroom status. */
+  saveStatus?: ComponentProps<typeof SaveStatus>;
   hideAiSettings?: boolean;
   hideNotifications?: boolean;
   classroomBar?: ReactNode;
@@ -71,6 +73,7 @@ export type DashboardTopBarProps = Pick<
   | "course"
   | "headerSlot"
   | "headerEndSlot"
+  | "saveStatus"
   | "hideAiSettings"
   | "hideNotifications"
   | "classroomBar"
@@ -116,6 +119,7 @@ export function DashboardTopBar({
   course,
   headerSlot,
   headerEndSlot,
+  saveStatus,
   hideAiSettings = false,
   hideNotifications = false,
   classroomBar,
@@ -219,7 +223,7 @@ export function DashboardTopBar({
 
   return (
     <header className="fixed inset-x-0 top-0 z-[70] border-b border-[var(--pbl-border)] bg-[color-mix(in_srgb,var(--pbl-surface)_96%,transparent)] backdrop-blur-sm">
-      <div className="pbl-wide-container flex min-h-16 items-center px-3 py-2 md:px-5">
+      <div className={cn("pbl-wide-container flex min-h-16 items-center px-3 py-2 md:px-5", saveStatus && "max-sm:px-2 max-[22.5rem]:px-1")}>
         <Link aria-label={homeLabel} className="flex min-h-11 min-w-0 shrink-0 items-center gap-2.5" href={homeHref} title={homeLabel}>
           {backHref ? <ArrowLeft aria-hidden="true" className="shrink-0 text-[var(--pbl-text-muted)]" size={18} /> : null}
           <LogoMark role={role} />
@@ -228,7 +232,7 @@ export function DashboardTopBar({
             <div className="mt-0.5 max-w-44 truncate text-xs font-medium text-[var(--pbl-text-muted)]">{courseName ?? (isTeacher ? "教师课程空间" : title)}</div>
           </div>
         </Link>
-        <div className="ml-2 flex min-w-0 flex-1 items-center gap-2 md:ml-4">
+        <div className={cn("ml-2 flex min-w-0 flex-1 items-center gap-2 md:ml-4", saveStatus && "max-sm:ml-1 max-sm:gap-1 max-[22.5rem]:ml-0")}>
           <div className={cn("min-w-0 flex-1", hideCourseSwitcher ? "lg:hidden" : "md:hidden")}>
             <p className="truncate text-xs font-semibold" title={courseName ?? title}>{courseName ?? title}</p>
             {stageLabel ? <p className="mt-0.5 truncate text-[11px] text-[var(--pbl-text-muted)]" title={stageLabel}>{stageLabel}</p> : null}
@@ -246,8 +250,10 @@ export function DashboardTopBar({
           ) : null}
           {headerSlot}
         </div>
-        <div className="ml-auto flex shrink-0 items-center gap-1.5 md:gap-2">
-          <div className="hidden lg:block"><SaveStatus lastSavedAt={session.lastSavedAt} onRetry={() => void session.retrySave()} state={session.saveState} /></div>
+        <div className={cn("ml-auto flex shrink-0 items-center gap-1.5 md:gap-2", saveStatus && "max-sm:gap-1 max-[22.5rem]:gap-0")}>
+          <div className={saveStatus ? "max-sm:[&>div>span]:sr-only max-sm:[&_button]:hidden" : "hidden lg:block"}>
+            <SaveStatus {...(saveStatus ?? { lastSavedAt: session.lastSavedAt, onRetry: () => void session.retrySave(), state: session.saveState })} />
+          </div>
           {isTeacher && !hideAiSettings ? <Link className="hidden h-9 items-center gap-1.5 rounded-[var(--radius-sm)] border border-[var(--pbl-border)] bg-white/80 px-3 text-[13px] font-semibold text-[var(--pbl-text-muted)] transition hover:border-[var(--pbl-teacher-border)] hover:text-[var(--pbl-teacher)] md:inline-flex" href={teacherSettingsHref(pathname)}><Settings size={14} /> AI 设置</Link> : null}
           {!hideNotifications ? <div className="relative">
             <button aria-label="通知中心" className="relative grid h-11 w-11 place-items-center rounded-[var(--radius-sm)] border border-transparent text-[var(--pbl-text-muted)] transition hover:border-[var(--pbl-border)] hover:bg-[var(--pbl-surface)]" onClick={() => toggle("notifications")} type="button">
@@ -294,6 +300,7 @@ export function DashboardShell({
   viewportLocked = false,
   headerSlot,
   headerEndSlot,
+  saveStatus,
   hideAiSettings = false,
   hideNotifications = false,
   classroomBar,
@@ -321,7 +328,7 @@ export function DashboardShell({
         isTeacher ? "pbl-app-bg-role-teacher" : "pbl-app-bg-role-student",
       )}
     >
-      {!immersive ? <DashboardTopBar backHref={backHref} backLabel={backLabel} classroomBar={classroomBar} course={course} currentCourse={currentCourse} currentStage={currentStage} currentTask={currentTask} headerSlot={headerSlot} headerEndSlot={headerEndSlot} hideAiSettings={hideAiSettings} hideNotifications={hideNotifications} hideCourseSwitcher={hideCourseSwitcher} leadRole={leadRole} onSelectStage={onSelectStage} phase={phase} role={role} stageOptions={stageOptions} title={title} userName={userName} /> : null}
+      {!immersive ? <DashboardTopBar backHref={backHref} backLabel={backLabel} classroomBar={classroomBar} course={course} currentCourse={currentCourse} currentStage={currentStage} currentTask={currentTask} headerSlot={headerSlot} headerEndSlot={headerEndSlot} saveStatus={saveStatus} hideAiSettings={hideAiSettings} hideNotifications={hideNotifications} hideCourseSwitcher={hideCourseSwitcher} leadRole={leadRole} onSelectStage={onSelectStage} phase={phase} role={role} stageOptions={stageOptions} title={title} userName={userName} /> : null}
 
       <main className={immersive
         ? "h-full min-h-0 overflow-hidden p-0"

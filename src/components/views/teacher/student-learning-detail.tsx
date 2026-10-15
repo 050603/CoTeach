@@ -22,6 +22,7 @@ const EVENT_TYPE_LABELS: Record<LearningEventType, string> = {
   "scene-complete": "完成学习页面",
   heartbeat: "持续学习",
   "scene-replay": "重新播放讲解",
+  "knowledge_explanation_view": "查看题目统一讲解",
   "interaction-result": "完成互动操作",
   "artifact-change": "更新学习内容",
   "stage-enter": "进入学习阶段",

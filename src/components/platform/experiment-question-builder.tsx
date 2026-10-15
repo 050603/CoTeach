@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { Copy, Plus, Trash2 } from "lucide-react";
 import { clientUUID } from "@/lib/uuid";
-import { groupExperimentQuestions, type ExperimentConfig, type ExperimentQuestion, type ExperimentQuestionGroup } from "@/lib/platform/experiment";
+import { EXPERIMENT_QUESTION_LIMIT, experimentQuestionBankLimit, groupExperimentQuestions, type ExperimentConfig, type ExperimentQuestion, type ExperimentQuestionGroup } from "@/lib/platform/experiment";
 export type { ExperimentConfig, ExperimentQuestion } from "@/lib/platform/experiment";
 
 type Bank = "sharedQuestions" | "pretest" | "posttest";
@@ -41,7 +41,10 @@ export function validateExperiment(config: ExperimentConfig): string | null {
   for (const bank of ["sharedQuestions", "pretest", "posttest"] as const) {
     const name = bankNames[bank];
     const questions = config[bank] ?? [];
-    if (questions.length > 30) return `${name}最多设置 30 道题目`;
+    if (questions.length > EXPERIMENT_QUESTION_LIMIT) return `${name}最多设置 ${EXPERIMENT_QUESTION_LIMIT} 道题目`;
+  }
+  for (const phase of ["pretest", "posttest"] as const) {
+    if (shared.length + config[phase].length + (config.scenarioPair ? 1 : 0) > EXPERIMENT_QUESTION_LIMIT) return `${bankNames[phase]}共用题和专属题合计最多 ${EXPERIMENT_QUESTION_LIMIT} 题`;
   }
   const labelledQuestions = [
     ...shared.map((question, index) => ({ question, label: `共用第 ${index + 1} 题` })),
@@ -58,7 +61,7 @@ export function validateExperiment(config: ExperimentConfig): string | null {
       if (question.group) {
         if (!question.group.title.trim()) return `请填写${label}所属题组的标题`;
         const previous = groups.get(question.group.id);
-        if (previous && (previous.title !== question.group.title || (previous.instruction ?? "") !== (question.group.instruction ?? ""))) return "同一题组的标题和作答说明必须一致";
+        if (previous && (previous.title !== question.group.title || (previous.instruction ?? "") !== (question.group.instruction ?? "") || (previous.referenceNote ?? "") !== (question.group.referenceNote ?? ""))) return "同一题组的标题、作答说明和指代说明必须一致";
         groups.set(question.group.id, question.group);
       }
       if (!question.prompt.trim()) return `请填写${label}的题干`;
@@ -90,7 +93,7 @@ export function validateExperiment(config: ExperimentConfig): string | null {
 
 export function prepareExperiment(config: ExperimentConfig): ExperimentConfig {
   const prepareQuestion = (question: ExperimentQuestion): ExperimentQuestion => {
-    const prepared: ExperimentQuestion = { id: question.id, type: question.type, prompt: question.prompt.trim(), ...(question.category ? { category: question.category } : {}), ...(question.optional ? { optional: true } : {}), ...(question.skipReasonRequired ? { skipReasonRequired: true } : {}), ...(question.group ? { group: { id: question.group.id, title: question.group.title.trim(), ...(question.group.instruction?.trim() ? { instruction: question.group.instruction.trim() } : {}) } } : {}) };
+    const prepared: ExperimentQuestion = { id: question.id, type: question.type, prompt: question.prompt.trim(), ...(question.category ? { category: question.category } : {}), ...(question.optional ? { optional: true } : {}), ...(question.skipReasonRequired ? { skipReasonRequired: true } : {}), ...(question.group ? { group: { id: question.group.id, title: question.group.title.trim(), ...(question.group.instruction?.trim() ? { instruction: question.group.instruction.trim() } : {}), ...(question.group.referenceNote?.trim() ? { referenceNote: question.group.referenceNote.trim() } : {}) } } : {}) };
     if (question.type === "single-choice" || question.type === "multiple-choice") {
       prepared.options = question.options?.map((option) => option.trim()) ?? [];
       const answer = Array.isArray(question.correctAnswer)
@@ -158,6 +161,7 @@ export function ExperimentQuestionBuilder({ value, onChange }: {
   function renderBank(bank: Bank) {
     const name = bankNames[bank];
     const questions = value[bank] ?? [];
+    const limit = experimentQuestionBankLimit(value, bank);
     const sections = groupExperimentQuestions(questions);
     const groups = sections.flatMap((section) => section.group ? [section.group] : []);
     const orderedQuestions = sections.flatMap((section) => section.questions);
@@ -172,11 +176,11 @@ export function ExperimentQuestionBuilder({ value, onChange }: {
             <p className="mt-1 text-xs text-[var(--pbl-text-muted)]">{description}</p>
           </div>
           <div className="flex flex-wrap gap-2">
-            <button type="button" className={smallButton} disabled={questions.length > 28} onClick={() => {
+            <button type="button" className={smallButton} disabled={questions.length + 2 > limit} onClick={() => {
               const group = { id: clientUUID(), title: "", instruction: "" };
               updateQuestions(bank, [...questions, { ...createQuestion("scale"), group }, { ...createQuestion("scale"), group: { ...group } }]);
             }}><Plus size={14} />添加量表题组</button>
-            <button type="button" className={smallButton} disabled={questions.length >= 30} onClick={() => updateQuestions(bank, [...questions, createQuestion()])}>
+            <button type="button" className={smallButton} disabled={questions.length >= limit} onClick={() => updateQuestions(bank, [...questions, createQuestion()])}>
               <Plus size={14} />添加{name}题目
             </button>
           </div>
@@ -188,7 +192,8 @@ export function ExperimentQuestionBuilder({ value, onChange }: {
             <div className="flex flex-wrap items-center justify-between gap-2"><p className="text-sm font-semibold text-[var(--pbl-teacher)]">题组 · {section.questions.length} 题</p><button type="button" className={smallButton} onClick={() => updateQuestions(bank, questions.map((question) => question.group?.id === section.group?.id ? { ...question, group: undefined } : question))}>取消题组</button></div>
             <label className="block space-y-1 text-xs text-[var(--pbl-text-muted)]"><span>题组大标题 <small>必填</small></span><input aria-label={`${name}题组 ${sectionIndex + 1} 标题`} className={field} maxLength={120} value={section.group.title} onChange={(event) => updateGroup(bank, section.group!.id, { title: event.target.value })} placeholder="例如：任务信心" /></label>
             <label className="block space-y-1 text-xs text-[var(--pbl-text-muted)]"><span>统一作答说明 <small>可选</small></span><textarea aria-label={`${name}题组 ${sectionIndex + 1} 作答说明`} className={`${field} min-h-20`} maxLength={1000} value={section.group.instruction ?? ""} onChange={(event) => updateGroup(bank, section.group!.id, { instruction: event.target.value })} placeholder="例如：请根据目前的真实感受，选择最符合自己的一项。" /></label>
-            <button type="button" className={smallButton} disabled={questions.length >= 30} onClick={() => addGroupQuestion(bank, section.group!)}><Plus size={14} />在题组中添加量表题</button>
+            <label className="block space-y-1 text-xs text-[var(--pbl-text-muted)]"><span>指代说明 <small>可选，学生答题时突出显示</small></span><textarea aria-label={`${name}题组 ${sectionIndex + 1} 指代说明`} className={`${field} min-h-20`} maxLength={1000} value={section.group.referenceNote ?? ""} onChange={(event) => updateGroup(bank, section.group!.id, { referenceNote: event.target.value })} placeholder="例如：题目中的教师包含真人教师与 AI。" /></label>
+            <button type="button" className={smallButton} disabled={questions.length >= limit} onClick={() => addGroupQuestion(bank, section.group!)}><Plus size={14} />在题组中添加量表题</button>
           </div> : null}
           {section.questions.map((question) => {
           const index = questions.findIndex((item) => item.id === question.id);
@@ -198,7 +203,7 @@ export function ExperimentQuestionBuilder({ value, onChange }: {
             <fieldset key={question.id} className="space-y-3 rounded-[8px] border border-[var(--pbl-border)] bg-[var(--pbl-surface)] p-3">
               <legend className="text-xs font-semibold text-[var(--pbl-text-strong)]">{label}</legend>
               <div className="flex justify-end gap-2">
-                <button type="button" aria-label={`复制${label}`} className={smallButton} disabled={questions.length >= 30} onClick={() => updateQuestions(bank, [...questions.slice(0, index + 1), { ...question, id: clientUUID(), options: question.options ? [...question.options] : undefined, correctAnswer: Array.isArray(question.correctAnswer) ? [...question.correctAnswer] : question.correctAnswer, scale: question.scale ? { ...question.scale } : undefined }, ...questions.slice(index + 1)])}>
+                <button type="button" aria-label={`复制${label}`} className={smallButton} disabled={questions.length >= limit} onClick={() => updateQuestions(bank, [...questions.slice(0, index + 1), { ...question, id: clientUUID(), options: question.options ? [...question.options] : undefined, correctAnswer: Array.isArray(question.correctAnswer) ? [...question.correctAnswer] : question.correctAnswer, scale: question.scale ? { ...question.scale } : undefined }, ...questions.slice(index + 1)])}>
                   <Copy size={14} />复制
                 </button>
                 <button type="button" aria-label={`删除${label}`} className={`${smallButton} text-red-600`} onClick={() => updateQuestions(bank, questions.filter((_, position) => position !== index))}>

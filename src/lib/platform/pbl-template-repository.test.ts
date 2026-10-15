@@ -56,6 +56,33 @@ describe("V2 PBL template persistence", () => {
     expect(mocks.updateVersion).not.toHaveBeenCalled(); expect(mocks.createVersion).not.toHaveBeenCalled();
   });
 
+  it("queues newly saved classroom questions before publication without reading resources inside the transaction", async () => {
+    const generated = { ...course, aiLearningClassroomId: "classroom", content: { ...course.content,
+      knowledgeLectureSections: [{ id: "section", quizOutlineId: "quiz", knowledgePointIds: ["kp"], title: "概念", order: 0, sceneOutlineIds: [], estimatedMinutes: 1 }],
+      knowledgePoints: [{ id: "kp", name: "概念", description: "" }],
+      teacherReviewVersion: { classroomId: "classroom", classroomRevision: 1, generationPolicyVersion: "test", generatedAt: now.toISOString() },
+    } };
+    await savePblTemplateCourse(generated, "teacher");
+    const queued = mocks.lock.mock.calls.filter(call => call[0].join("").includes('INSERT INTO "KnowledgeExplanationWarmup"'));
+    expect(queued).toHaveLength(1);
+    expect(JSON.parse(queued[0][3])).toMatchObject({ classroomId: "classroom", classroomRevision: 1 });
+    expect(mocks.readClassroom).not.toHaveBeenCalled();
+  });
+
+  it("reuses a receipt for unrelated saves and changes it when an adopted question revision changes", async () => {
+    const generated = { ...course, aiLearningClassroomId: "classroom", content: { ...course.content,
+      knowledgeLectureSections: [{ id: "section", quizOutlineId: "quiz", knowledgePointIds: [], title: "概念", order: 0, sceneOutlineIds: [], estimatedMinutes: 1 }],
+      teacherReviewVersion: { classroomId: "classroom", classroomRevision: 1, generationPolicyVersion: "test", generatedAt: now.toISOString() },
+    } };
+    await savePblTemplateCourse(generated, "teacher");
+    await savePblTemplateCourse({ ...generated, name: "只更新标题" }, "teacher");
+    await savePblTemplateCourse({ ...generated, content: { ...generated.content,
+      teacherReviewVersion: { ...generated.content.teacherReviewVersion, classroomRevision: 2 },
+    } }, "teacher");
+    const ids = mocks.lock.mock.calls.filter(call => call[0].join("").includes('INSERT INTO "KnowledgeExplanationWarmup"')).map(call => call[1]);
+    expect(ids[0]).toBe(ids[1]); expect(ids[2]).not.toBe(ids[0]);
+  });
+
   it("lists immutable versions with their own pages and measured audio", async () => {
     const historical = createPblTemplateCourse("template", {
       name: "旧版课程",

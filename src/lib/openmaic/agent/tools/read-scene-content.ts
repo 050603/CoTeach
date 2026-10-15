@@ -161,8 +161,16 @@ function projectWhiteboards(actions: SceneContext['actions']): string {
   if (blocks.length === 0) return '\n\nWhiteboards: none. The teacher can add a whiteboard in the timeline.';
   const projection = blocks.map((block) => ({
     boardId: block.id,
+    speechBound: block.speechBound,
+    ...(block.speechBound ? {
+      open: actions?.[block.start],
+      close: block.actionIndexes.map((index) => actions?.[index]).find((action) => action?.type === 'wb_close'),
+      narration: (actions ?? []).flatMap((action) => action.type === 'speech' && block.actionIndexes.some((index) => (
+        'speechId' in (actions?.[index] ?? {}) && (actions?.[index] as { speechId?: string }).speechId === action.id
+      )) ? [{ id: action.id, text: action.text }] : []),
+    } : {}),
     canvas: { width: 1000, height: 562.5, safeMargin: 20 },
-    qualityIssues: [...auditWhiteboardLayout(block.steps), ...auditWhiteboardContent(block.steps)],
+    qualityIssues: [...auditWhiteboardLayout(actions ?? []).filter((issue) => issue.actionIds.some((id) => block.steps.some((step) => step.id === id))), ...auditWhiteboardContent(block.steps)],
     steps: block.steps.map((action) => {
       if (action.type === 'speech') {
         const { audioId: _audioId, audioUrl: _audioUrl, audioInvalidated: _invalidated, ...speech } = action;

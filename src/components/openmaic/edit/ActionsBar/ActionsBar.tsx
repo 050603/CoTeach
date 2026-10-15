@@ -1310,7 +1310,7 @@ export function ActionsBar({
   const slideElements = scene?.content?.type === 'slide' ? scene.content.canvas.elements : [];
   const editingLaser = actions.find((action): action is LaserAction => action.id === editingLaserId && action.type === 'laser');
   const items = actions.flatMap((action, index) => {
-    if (boards.some((board) => index > board.start && index <= board.end)) return [];
+    if (boards.some((board) => index !== board.start && board.actionIndexes.includes(index))) return [];
     const block = boards.find((board) => board.start === index);
     const speechIndex = actions
       .slice(0, index + 1)
@@ -1545,7 +1545,8 @@ export function ActionsBar({
                                 const current = useStageStore.getState().getSceneById(sceneId)?.actions ?? [];
                                 const removed = whiteboardBlocks(current).find((item) => item.id === block.id);
                                 if (!removed) return;
-                                const saved = current.slice(removed.start, removed.end + 1);
+                                const members = new Set(removed.actionIndexes);
+                                const saved = current.filter((_step, index) => members.has(index));
                                 commit((latest) => removeWhiteboardBlock(latest, block.id));
                                 toast('白板已删除', { action: { label: '撤销', onClick: () => commit((latest) => {
                                   if (latest.some((step) => step.id === block.id)) return latest;

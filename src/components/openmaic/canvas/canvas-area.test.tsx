@@ -1,5 +1,7 @@
 import { fireEvent, render, screen } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import type { PPTElement } from '@openmaic/dsl';
+import { useWhiteboardPagesStore } from '@openmaic/lib/store/whiteboard-pages';
 
 vi.mock('@openmaic/components/stage/scene-renderer', () => ({
   SceneRenderer: () => <div>scene</div>,
@@ -21,6 +23,10 @@ vi.mock('@openmaic/components/scene-renderers/classroom-complete', () => ({
 }));
 
 import { CanvasArea } from './canvas-area';
+
+afterEach(() => {
+  useWhiteboardPagesStore.setState({ pages: [], activePageKeys: {}, reviewPageId: null, reviewStageId: null });
+});
 
 const baseProps = {
   currentScene: {
@@ -75,6 +81,73 @@ describe('CanvasArea whiteboard restore entry', () => {
 
     fireEvent.click(screen.getByRole('button', { name: '重新打开白板' }));
     expect(onWhiteboardClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('opens only the current PPT page’s saved boards', () => {
+    const store = useWhiteboardPagesStore.getState();
+    store.startPage('stage-1', 'earlier-scene', 'first-board');
+    store.retainCurrentPage({
+      stageId: 'stage-1', sceneId: 'earlier-scene', completed: true,
+      elements: [{ id: 'first-note', type: 'text', content: '<p>前期分析</p>' } as PPTElement],
+    });
+    store.startPage('stage-1', 'scene-1', 'current-board');
+    const currentPage = store.retainCurrentPage({
+      stageId: 'stage-1', sceneId: 'scene-1', completed: true,
+      elements: [{ id: 'current-note', type: 'text', content: '<p>本页板书</p>' } as PPTElement],
+    })!;
+    const onWhiteboardClose = vi.fn();
+    render(<CanvasArea {...baseProps} whiteboardOpen={false} onWhiteboardClose={onWhiteboardClose} />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'whiteboard.reviewPages' }));
+    expect(useWhiteboardPagesStore.getState().reviewPageId).toBe(currentPage.id);
+    expect(onWhiteboardClose).not.toHaveBeenCalled();
+    expect(screen.queryByText('scene')).toBeNull();
+  });
+
+  it('hides both review and reopen entries on a page without boards and restores access on return', () => {
+    const store = useWhiteboardPagesStore.getState();
+    store.startPage('stage-1', 'scene-1', 'board');
+    store.retainCurrentPage({ stageId: 'stage-1', sceneId: 'scene-1', completed: true,
+      elements: [{ id: 'note', type: 'text', content: '<p>本页板书</p>' } as PPTElement] });
+    const { rerender } = render(<CanvasArea {...baseProps} />);
+
+    rerender(<CanvasArea {...baseProps} whiteboardOpen={false}
+      currentScene={{ ...baseProps.currentScene, id: 'scene-without-boards' }} />);
+    expect(screen.queryByRole('button', { name: 'whiteboard.reviewPages' })).toBeNull();
+    expect(screen.queryByRole('button', { name: '重新打开白板' })).toBeNull();
+    expect(screen.getByText('scene')).toBeVisible();
+
+    rerender(<CanvasArea {...baseProps} whiteboardOpen={false} />);
+    expect(screen.getByRole('button', { name: 'whiteboard.reviewPages' })).toHaveTextContent('1');
+  });
+
+  it('keeps each PPT page’s entry and active review separate within the same course', () => {
+    const store = useWhiteboardPagesStore.getState();
+    const pages = ['scene-1', 'scene-2'].map((sceneId) => {
+      store.startPage('stage-1', sceneId, 'board');
+      return store.retainCurrentPage({ stageId: 'stage-1', sceneId, completed: true,
+        elements: [{ id: sceneId, type: 'text', content: `<p>${sceneId}</p>` } as PPTElement] })!;
+    });
+    const { rerender } = render(<CanvasArea {...baseProps} whiteboardOpen={false} />);
+    fireEvent.click(screen.getByRole('button', { name: 'whiteboard.reviewPages' }));
+    expect(useWhiteboardPagesStore.getState().reviewPageId).toBe(pages[0].id);
+
+    rerender(<CanvasArea {...baseProps} whiteboardOpen={false}
+      currentScene={{ ...baseProps.currentScene, id: 'scene-2' }} />);
+    expect(screen.getByText('scene')).toBeVisible();
+    const entry = screen.getByRole('button', { name: 'whiteboard.reviewPages' });
+    expect(entry).toHaveTextContent('1');
+    fireEvent.click(entry);
+    expect(useWhiteboardPagesStore.getState().reviewPageId).toBe(pages[1].id);
+  });
+
+  it('does not expose another course’s retained boards', () => {
+    const store = useWhiteboardPagesStore.getState();
+    store.startPage('other-stage', 'other-scene', 'board');
+    store.retainCurrentPage({ stageId: 'other-stage', sceneId: 'other-scene', completed: true,
+      elements: [{ id: 'other', type: 'text', content: '<p>Other</p>' } as PPTElement] });
+    render(<CanvasArea {...baseProps} whiteboardOpen={false} />);
+    expect(screen.queryByRole('button', { name: 'whiteboard.reviewPages' })).toBeNull();
   });
 });
 

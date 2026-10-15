@@ -2,7 +2,9 @@ import { nanoid } from 'nanoid';
 import { z } from 'zod';
 import { validateAction } from '@openmaic/dsl';
 import type { Action } from '@openmaic/lib/types/action';
-import { whiteboardBlocks } from './whiteboard-blocks';
+import { retainWhiteboardStepBindings, replaceWhiteboardSteps, whiteboardBlocks } from './whiteboard-blocks';
+import { isWhiteboardAction } from '@openmaic/lib/types/action';
+import { findSpeechCueAnchorRange } from '../generation/speech-cue-boundaries';
 
 export interface WhiteboardPatch {
   boardId: string;
@@ -23,23 +25,29 @@ const position = {
 };
 const drawing = { ...position, elementId: id.optional() };
 const common = { id: id.optional(), groupId: id.optional(), title: z.string().max(200).optional(), description: z.string().max(2000).optional() };
+const whiteboardCommon = {
+  ...common,
+  speechId: id.optional(),
+  speechAnchor: z.object({ quote: text, occurrence: z.number().int().nonnegative().optional() }).optional(),
+  speechOffsetMs: z.number().finite().nonnegative().optional(),
+};
 const anchor = z.object({ elementId: id, side: z.enum(['top', 'right', 'bottom', 'left', 'center']) });
 const tableData = z.array(z.array(z.string().max(2000)).min(1).max(16)).min(1).max(40)
   .refine((rows) => rows.every((row) => row.length === rows[0].length), '表格每行必须具有相同列数');
 
 const stepSchema = z.discriminatedUnion('type', [
   z.object({ ...common, type: z.literal('speech'), text, voice: z.string().max(200).optional(), speed: z.number().min(0.5).max(2).optional() }),
-  z.object({ ...common, type: z.literal('wb_draw_text'), ...drawing, content: text, width: size.optional(), height: size.optional(), fontSize: z.number().min(8).max(120).optional(), color: color.optional() }),
-  z.object({ ...common, type: z.literal('wb_draw_image'), ...drawing, src: z.string().max(1_000_000).optional(), width: size, height: size }),
-  z.object({ ...common, type: z.literal('wb_draw_shape'), ...drawing, shape: z.enum(['rectangle', 'circle', 'triangle']), width: size, height: size, fillColor: color.optional() }),
-  z.object({ ...common, type: z.literal('wb_draw_latex'), ...drawing, latex: text, width: size.optional(), height: size.optional(), color: color.optional() }),
-  z.object({ ...common, type: z.literal('wb_draw_table'), ...drawing, width: size, height: size, data: tableData, outline: z.object({ width: z.number().min(0).max(20), style: z.enum(['solid', 'dashed', 'dotted']), color }).optional(), theme: z.object({ color }).optional() }),
-  z.object({ ...common, type: z.literal('wb_draw_chart'), ...drawing, chartType: z.enum(['bar', 'column', 'line', 'pie', 'ring', 'area', 'radar', 'scatter']), width: size, height: size, data: z.object({ labels: z.array(z.string().max(200)).min(1).max(80), legends: z.array(z.string().max(200)).min(1).max(16), series: z.array(z.array(z.number().finite()).min(1).max(80)).min(1).max(16) }), themeColors: z.array(color).min(1).max(16).optional() }),
-  z.object({ ...common, type: z.literal('wb_draw_line'), elementId: id.optional(), startX: position.x, startY: position.y, endX: position.x, endY: position.y, startAnchor: anchor.optional(), endAnchor: anchor.optional(), color: color.optional(), width: z.number().positive().max(30).optional(), style: z.enum(['solid', 'dashed']).optional(), points: z.tuple([z.enum(['', 'arrow']), z.enum(['', 'arrow'])]).optional() }),
-  z.object({ ...common, type: z.literal('wb_draw_code'), ...drawing, language: z.string().min(1).max(40), code: z.string().max(30000), width: size.optional(), height: size.optional(), fileName: z.string().max(200).optional() }),
-  z.object({ ...common, type: z.literal('wb_edit_code'), elementId: id, operation: z.enum(['insert_after', 'insert_before', 'delete_lines', 'replace_lines']), lineId: id.optional(), lineIds: z.array(id).min(1).max(500).optional(), content: z.string().max(30000).optional() }),
-  z.object({ ...common, type: z.literal('wb_clear') }),
-  z.object({ ...common, type: z.literal('wb_delete'), elementId: id }),
+  z.object({ ...whiteboardCommon, type: z.literal('wb_draw_text'), ...drawing, content: text, width: size.optional(), height: size.optional(), fontSize: z.number().min(8).max(120).optional(), color: color.optional() }),
+  z.object({ ...whiteboardCommon, type: z.literal('wb_draw_image'), ...drawing, src: z.string().max(1_000_000).optional(), width: size, height: size }),
+  z.object({ ...whiteboardCommon, type: z.literal('wb_draw_shape'), ...drawing, shape: z.enum(['rectangle', 'circle', 'triangle']), width: size, height: size, fillColor: color.optional() }),
+  z.object({ ...whiteboardCommon, type: z.literal('wb_draw_latex'), ...drawing, latex: text, width: size.optional(), height: size.optional(), color: color.optional() }),
+  z.object({ ...whiteboardCommon, type: z.literal('wb_draw_table'), ...drawing, width: size, height: size, data: tableData, outline: z.object({ width: z.number().min(0).max(20), style: z.enum(['solid', 'dashed', 'dotted']), color }).optional(), theme: z.object({ color }).optional() }),
+  z.object({ ...whiteboardCommon, type: z.literal('wb_draw_chart'), ...drawing, chartType: z.enum(['bar', 'column', 'line', 'pie', 'ring', 'area', 'radar', 'scatter']), width: size, height: size, data: z.object({ labels: z.array(z.string().max(200)).min(1).max(80), legends: z.array(z.string().max(200)).min(1).max(16), series: z.array(z.array(z.number().finite()).min(1).max(80)).min(1).max(16) }), themeColors: z.array(color).min(1).max(16).optional() }),
+  z.object({ ...whiteboardCommon, type: z.literal('wb_draw_line'), elementId: id.optional(), startX: position.x, startY: position.y, endX: position.x, endY: position.y, startAnchor: anchor.optional(), endAnchor: anchor.optional(), color: color.optional(), width: z.number().positive().max(30).optional(), style: z.enum(['solid', 'dashed']).optional(), points: z.tuple([z.enum(['', 'arrow']), z.enum(['', 'arrow'])]).optional() }),
+  z.object({ ...whiteboardCommon, type: z.literal('wb_draw_code'), ...drawing, language: z.string().min(1).max(40), code: z.string().max(30000), width: size.optional(), height: size.optional(), fileName: z.string().max(200).optional() }),
+  z.object({ ...whiteboardCommon, type: z.literal('wb_edit_code'), elementId: id, operation: z.enum(['insert_after', 'insert_before', 'delete_lines', 'replace_lines']), lineId: id.optional(), lineIds: z.array(id).min(1).max(500).optional(), content: z.string().max(30000).optional() }),
+  z.object({ ...whiteboardCommon, type: z.literal('wb_clear') }),
+  z.object({ ...whiteboardCommon, type: z.literal('wb_delete'), elementId: id }),
 ]);
 
 function safeImageSource(src: string): boolean {
@@ -69,7 +77,8 @@ export function prepareWhiteboardPatch(
     throw new Error('白板内容过长，请分次编辑；已有内嵌图片可保留步骤 ID 并省略 src。');
   }
   const previous = new Map(block.steps.map((action) => [action.id, action]));
-  const outside = actions.filter((_action, index) => index <= block.start || index > block.end || actions[index].type === 'wb_close');
+  const stepIds = new Set(block.steps.map((action) => action.id));
+  const outside = actions.filter((action) => !stepIds.has(action.id));
   const reservedIds = new Set(outside.map((action) => action.id));
   const reservedElements = new Set(outside.flatMap((action) =>
     action.type.startsWith('wb_draw_') && 'elementId' in action && action.elementId ? [action.elementId] : [],
@@ -88,6 +97,9 @@ export function prepareWhiteboardPatch(
     usedIds.add(stepId);
     const before = previous.get(stepId);
     const candidate = { ...parsed.data, id: stepId } as Action;
+    if (block.speechBound && !isWhiteboardAction(candidate)) {
+      throw new Error('随讲词同步的白板只能编辑板书步骤；原讲稿保留在页面讲解中。');
+    }
 
     if (candidate.type.startsWith('wb_draw_')) {
       const draw = candidate as Action & { elementId?: string };
@@ -148,5 +160,20 @@ export function prepareWhiteboardPatch(
     if (!validation.valid) throw new Error(`第 ${index + 1} 步缺少必要内容或位置参数：${validation.errors.map((issue) => issue.path).join('、')}`);
     return candidate;
   });
-  return { boardId, before: structuredClone(block.steps), steps };
+  const synced = retainWhiteboardStepBindings(actions, block, steps);
+  if (block.speechBound) {
+    const speeches = new Map(actions.flatMap((action) => action.type === 'speech' ? [[action.id, action] as const] : []));
+    for (const step of synced) {
+      if (!isWhiteboardAction(step) || !step.speechId) throw new Error('同步白板步骤缺少讲词绑定，请保留原绑定或指定真实讲词锚点。');
+      const speech = speeches.get(step.speechId);
+      if (!speech || (step.speechAnchor && !findSpeechCueAnchorRange(speech.text, step.speechAnchor))) {
+        throw new Error(`步骤“${step.id}”引用的讲词或锚点不存在，请重新读取当前讲稿。`);
+      }
+    }
+    const projected = whiteboardBlocks(replaceWhiteboardSteps([...actions], boardId, synced)).find((item) => item.id === boardId);
+    if (synced.some((step) => !projected?.steps.some((member) => member.id === step.id))) {
+      throw new Error('同步板书的讲词锚点必须位于这块白板的打开与关闭区间内。');
+    }
+  }
+  return { boardId, before: structuredClone(block.steps), steps: synced };
 }

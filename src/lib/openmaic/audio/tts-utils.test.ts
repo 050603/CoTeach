@@ -207,4 +207,49 @@ describe("splitLongSpeechActions visual anchors", () => {
       expect(action.speechAlignment).toBeUndefined();
     }
   });
+
+  it("rebinds whiteboard open, writing, clearing and closing to their exact generated clips", () => {
+    const text = `目标短语${"甲".repeat(700)}。目标短语${"乙".repeat(700)}。`;
+    const actions: Action[] = [
+      { id: "open", type: "wb_open", speechId: "speech", speechAnchor: { quote: "目标短语", occurrence: 0 } },
+      { id: "write", type: "wb_draw_text", content: "要点", x: 40, y: 40, speechId: "speech", speechAnchor: { quote: "目标短语", occurrence: 1 }, speechOffsetMs: 9000 },
+      { id: "clear", type: "wb_clear", speechId: "speech", speechAnchor: { quote: "目标短语", occurrence: 1 } },
+      { id: "close", type: "wb_close", speechId: "speech", speechAnchor: { quote: "目标短语", occurrence: 1 } },
+      { id: "speech", type: "speech", text },
+    ];
+    const split = splitLongSpeechActions(actions, "glm-tts");
+    expect(split[0]).toMatchObject({ id: "open", speechId: "speech_tts_1" });
+    for (const id of ["write", "clear", "close"]) {
+      expect(split.find((action) => action.id === id)).toMatchObject({
+        speechId: "speech_tts_2", speechAnchor: { quote: "目标短语", occurrence: 0 },
+      });
+    }
+    expect(split.find((action) => action.id === "write")).not.toHaveProperty("speechOffsetMs", 9000);
+    expect(split.filter((action) => action.type === "speech").map((action) => action.text).join("")).toBe(text);
+  });
+
+  it("protects a whiteboard quote from a hard clip boundary", () => {
+    const quote = "不能切断的关键短语";
+    const text = "甲".repeat(1020) + quote + "乙".repeat(80);
+    const split = splitLongSpeechActions([
+      { id: "write", type: "wb_draw_text", content: quote, x: 40, y: 40, speechId: "speech", speechAnchor: { quote } },
+      { id: "speech", type: "speech", text },
+    ], "glm-tts");
+    expect(split[0]).toMatchObject({ speechId: "speech_tts_2", speechAnchor: { quote, occurrence: 0 } });
+    expect(split.filter((action) => action.type === "speech").every((action) => action.text.length <= 1024)).toBe(true);
+  });
+
+  it("keeps unbound legacy commands sequential and omits unrebindable timed commands", () => {
+    const legacy: Action = { id: "legacy", type: "wb_clear" };
+    const split = splitLongSpeechActions([
+      legacy,
+      { id: "missing", type: "wb_open", speechId: "speech", speechAnchor: { quote: "不存在" } },
+      { id: "offset-only", type: "wb_close", speechId: "speech", speechOffsetMs: 8000 },
+      { id: "start", type: "wb_clear", speechId: "speech" },
+      { id: "speech", type: "speech", text: "甲".repeat(1500) },
+    ], "glm-tts");
+    expect(split[0]).toBe(legacy);
+    expect(split.some((action) => action.id === "missing" || action.id === "offset-only")).toBe(false);
+    expect(split.find((action) => action.id === "start")).toMatchObject({ speechId: "speech_tts_1" });
+  });
 });

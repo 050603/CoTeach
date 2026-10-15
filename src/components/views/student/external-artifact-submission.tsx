@@ -1,10 +1,11 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useMemo, useState } from "react";
 import { uploadMultipartWithReceipt } from '@/lib/browser/upload-request';
 import { CheckCircle2, Download, FileArchive, FileAudio2, FileImage, FileText, FileUp, FileVideo2, LoaderCircle, UploadCloud } from "lucide-react";
-import { Card, Pill } from "@/components/ui";
+import { Pill } from "@/components/ui";
 import type { Course, ProjectPdfVersion } from "@/lib/session/types";
+import { CollaborationDialog } from "./collaboration-dialog";
 
 const MAX_UPLOAD_BYTES = 100 * 1024 * 1024;
 const ACCEPT = [
@@ -56,7 +57,6 @@ function versionTime(version: ProjectPdfVersion): string {
 }
 
 export function ExternalArtifactSubmission({ course, studentId }: { course: Course; studentId: string }) {
-  const inputRef = useRef<HTMLInputElement>(null);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<UploadMessage>();
   const [localVersions, setLocalVersions] = useState<ProjectPdfVersion[]>([]);
@@ -67,12 +67,6 @@ export function ExternalArtifactSubmission({ course, studentId }: { course: Cour
       .forEach((version) => byId.set(version.id, version));
     return [...byId.values()].sort((left, right) => right.sequence - left.sequence);
   }, [course.projectPdfVersions, localVersions, studentId]);
-
-  useEffect(() => {
-    const open = () => inputRef.current?.click();
-    window.addEventListener("openpbl:open-external-upload", open);
-    return () => window.removeEventListener("openpbl:open-external-upload", open);
-  }, []);
 
   async function submit(file: File) {
     const extension = file.name.toLocaleLowerCase().match(/\.[^.]+$/)?.[0] ?? "";
@@ -132,25 +126,29 @@ export function ExternalArtifactSubmission({ course, studentId }: { course: Cour
   }
 
   return (
-    <Card className="border-[var(--pbl-student-border)] bg-[color-mix(in_srgb,var(--pbl-student-soft)_35%,white)]" compact>
-      <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-        <div className="flex items-start gap-3">
-          <span className="grid size-10 shrink-0 place-items-center rounded-[var(--radius-sm)] bg-[var(--pbl-student-soft)] text-[var(--pbl-student)]"><UploadCloud size={19} /></span>
-          <div>
-            <h2 className="font-bold text-[var(--pbl-text-strong)]">提交本地成果</h2>
-            <p className="mt-1 max-w-3xl text-sm leading-6 text-[var(--pbl-text-muted)]">PPT、视频、代码、设计稿等成果可继续在本机制作，完成一个阶段就上传一个不可覆盖的版本。系统只记录文件信息，不解析文件内容。</p>
-            <p className="mt-1 text-xs text-[var(--pbl-text-subtle)]">支持 PDF、Word、PPTX、表格、图片、音视频、压缩包、代码和文本文件；单个文件不超过 100 MiB。</p>
-          </div>
+    <CollaborationDialog
+      title="提交本地成果"
+      trigger={
+        <button className="inline-flex min-h-11 items-center justify-center gap-2 rounded-[var(--radius-sm)] bg-[var(--pbl-teacher)] px-3.5 text-[13px] font-semibold text-white transition hover:bg-[var(--pbl-teacher-hover)] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--pbl-student)]" type="button">
+          {busy ? <LoaderCircle aria-hidden="true" className="animate-spin" size={14} /> : <UploadCloud aria-hidden="true" size={14} />}
+          提交本地成果
+        </button>
+      }
+    >
+      <div className="flex flex-col items-start gap-4">
+        <div>
+          <p className="text-sm leading-6 text-[var(--pbl-text-muted)]">PPT、视频、代码、设计稿等成果可继续在本机制作，完成一个阶段就上传一个独立版本，已上传的版本会保留。</p>
+          <p className="mt-2 text-xs leading-6 text-[var(--pbl-text-muted)]">支持 PDF、Word、PPTX、表格、图片、音视频、压缩包、代码和文本文件；单个文件不超过 100 MiB。</p>
         </div>
-        <label className="inline-flex h-10 shrink-0 cursor-pointer items-center justify-center gap-2 rounded-[var(--radius-sm)] bg-[var(--pbl-student)] px-4 text-sm font-semibold text-white transition hover:bg-[var(--pbl-student-hover)] has-[:disabled]:cursor-wait has-[:disabled]:opacity-60">
+        <label className="inline-flex h-11 shrink-0 cursor-pointer items-center justify-center gap-2 rounded-[var(--radius-sm)] bg-[var(--pbl-student)] px-4 text-sm font-semibold text-white transition hover:bg-[var(--pbl-student-hover)] focus-within:outline-2 focus-within:outline-offset-2 focus-within:outline-[var(--pbl-student)] has-[:disabled]:cursor-wait has-[:disabled]:opacity-60">
           {busy ? <LoaderCircle className="animate-spin" size={16} /> : <FileUp size={16} />}
           {busy ? "上传中…" : "选择文件上传"}
-          <input accept={ACCEPT} className="sr-only" disabled={busy} onChange={(event) => { const file = event.target.files?.[0]; event.target.value = ""; if (file) void submit(file); }} ref={inputRef} type="file" />
+          <input accept={ACCEPT} className="sr-only" disabled={busy} onChange={(event) => { const file = event.target.files?.[0]; event.target.value = ""; if (file) void submit(file); }} type="file" />
         </label>
       </div>
 
       {message ? (
-        <div className="mt-3 flex items-center gap-2 text-sm">
+        <div className="mt-3 flex items-center gap-2 text-sm" role={message.tone === "error" ? "alert" : "status"}>
           <Pill tone={message.tone === "ok" ? "green" : "red"}>{message.tone === "ok" ? <CheckCircle2 size={13} /> : <FileUp size={13} />}{message.tone === "ok" ? "已保存" : "提交失败"}</Pill>
           <span className={message.tone === "ok" ? "text-emerald-700" : "text-rose-700"}>{message.text}</span>
         </div>
@@ -166,7 +164,7 @@ export function ExternalArtifactSubmission({ course, studentId }: { course: Cour
               return (
                 <li className="flex flex-col gap-2 rounded-xl border border-[var(--pbl-border)] bg-white px-3 py-2.5 sm:flex-row sm:items-center sm:justify-between" key={version.id}>
                   <div className="flex min-w-0 items-center gap-2"><span className="grid size-8 shrink-0 place-items-center rounded-lg bg-stone-100 text-stone-600"><FileKindIcon name={version.title} /></span><div className="min-w-0"><p className="truncate text-xs font-semibold text-stone-900">第 {version.sequence} 版 · {version.title}</p><p className="mt-0.5 text-[10px] text-stone-500">{version.mimeType || "成果文件"} · {formatBytes(version.size)} · {versionTime(version)}</p></div></div>
-                  <div className="flex shrink-0 items-center gap-2 pl-10 sm:pl-0"><span className="text-[10px] text-stone-500">{openable ? "可打开查看" : "暂不支持在线预览"}</span>{openable ? <a className="inline-flex h-8 items-center gap-1 rounded-lg border border-[var(--pbl-student-border)] px-2.5 text-xs font-semibold text-[var(--pbl-student)] hover:bg-[var(--pbl-student-soft)]" href={fileUrl} rel="noreferrer" target="_blank">打开</a> : null}<a className="inline-flex h-8 items-center gap-1 rounded-lg bg-[var(--pbl-student)] px-2.5 text-xs font-semibold text-white hover:bg-[var(--pbl-student-hover)]" download href={`${fileUrl}?download=1`}><Download size={13} />下载</a></div>
+                  <div className="flex shrink-0 flex-wrap items-center gap-2 pl-10 sm:pl-0"><span className="text-[10px] text-stone-500">{openable ? "可打开查看" : "暂不支持在线预览"}</span>{openable ? <a className="inline-flex min-h-11 items-center gap-1 rounded-lg border border-[var(--pbl-student-border)] px-2.5 text-xs font-semibold text-[var(--pbl-student)] hover:bg-[var(--pbl-student-soft)]" href={fileUrl} rel="noreferrer" target="_blank">打开</a> : null}<a className="inline-flex min-h-11 items-center gap-1 rounded-lg bg-[var(--pbl-student)] px-2.5 text-xs font-semibold text-white hover:bg-[var(--pbl-student-hover)]" download href={`${fileUrl}?download=1`}><Download size={13} />下载</a></div>
                 </li>
               );
             })}
@@ -175,6 +173,6 @@ export function ExternalArtifactSubmission({ course, studentId }: { course: Cour
       ) : (
         <div className="mt-4 rounded-xl border border-dashed border-[var(--pbl-student-border)] bg-white/70 px-4 py-5 text-center text-xs text-[var(--pbl-text-muted)]">完成本机成果的阶段性版本后，在这里上传；协作稿和 AI 对话不会因上传失败而丢失。</div>
       )}
-    </Card>
+    </CollaborationDialog>
   );
 }

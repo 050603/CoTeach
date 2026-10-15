@@ -14,6 +14,7 @@ import { createStageAPI } from '@openmaic/lib/api/stage-api';
 import { whiteboardIdForScene } from '@openmaic/lib/api/stage-api-whiteboard';
 import { useCanvasStore } from '@openmaic/lib/store/canvas';
 import { useWhiteboardHistoryStore } from '@openmaic/lib/store/whiteboard-history';
+import { useWhiteboardPagesStore } from '@openmaic/lib/store/whiteboard-pages';
 import { useMediaGenerationStore, isMediaPlaceholder } from '@openmaic/lib/store/media-generation';
 import type { AudioPlayer } from '@openmaic/lib/utils/audio-player';
 import type {
@@ -28,6 +29,7 @@ import type {
   WidgetSetStateAction,
   WidgetAnnotationAction,
   WidgetRevealAction,
+  WhiteboardAction,
 } from '@openmaic/lib/types/action';
 import {
   editWhiteboardCodeElement,
@@ -74,7 +76,7 @@ export class ActionEngine {
   private effectTimerRemaining = 0;
   private effectGeneration = 0;
   private widgetMessageCallback: WidgetMessageCallback | null = null;
-  private restoringWhiteboard = false;
+  private whiteboardVersion = 0;
 
   constructor(
     stageStore: StageStore,
@@ -94,6 +96,8 @@ export class ActionEngine {
 
   /** Clean up timers when the engine is no longer needed */
   dispose(): void {
+    this.whiteboardVersion++;
+    useCanvasStore.getState().setWhiteboardClearing(false);
     if (this.effectTimer) {
       clearTimeout(this.effectTimer);
       this.effectTimer = null;
@@ -108,6 +112,7 @@ export class ActionEngine {
    * Synchronous actions return a Promise that resolves when the action is complete.
    */
   async execute(action: Action): Promise<void> {
+    if (action.type === 'wb_open' || action.type.startsWith('wb_draw_')) this.ensureWhiteboardPageKey(action.id);
     // Auto-open whiteboard if a draw/clear/delete action is attempted while it's closed
     if (action.type.startsWith('wb_') && action.type !== 'wb_open' && action.type !== 'wb_close') {
       await this.ensureWhiteboardOpen();
@@ -142,7 +147,7 @@ export class ActionEngine {
       case 'wb_edit_code':
         return this.executeWbEditCode(action as WbEditCodeAction);
       case 'wb_clear':
-        return this.executeWbClear();
+        return this.executeWbClear(action.id);
       case 'wb_delete':
         return this.executeWbDelete(action as WbDeleteAction);
       case 'wb_close':
@@ -217,21 +222,52 @@ export class ActionEngine {
     if (!wb.success || !wb.data) {
       throw new Error('Unable to restore the active whiteboard');
     }
+    this.retainCurrentWhiteboard(false);
+    const scope = this.whiteboardScope();
+    if (scope) useWhiteboardPagesStore.getState().resetCurrentPage(scope.stageId, scope.sceneId);
     this.stageAPI.whiteboard.update({ elements: [] }, wb.data.id);
     useCanvasStore.getState().setWhiteboardClearing(false);
-    useCanvasStore.getState().setWhiteboardOpen(false);
-    this.restoringWhiteboard = true;
-    try {
-      for (const action of actions) {
-        if (action.type.startsWith('wb_')) await this.execute(action);
+    useCanvasStore.getState().setWhiteboardOpen(false, true);
+    this.executeWhiteboardTimeline(actions.filter((action): action is WhiteboardAction => action.type.startsWith('wb_')));
+  }
+
+  /** Apply one media-clock batch atomically, without adding animation delays to speech. */
+  executeWhiteboardTimeline(actions: ReadonlyArray<WhiteboardAction>): void {
+    this.whiteboardVersion++;
+    useCanvasStore.getState().setWhiteboardClearing(false);
+    const wb = this.getActiveWhiteboard();
+    if (!wb.success || !wb.data) throw new Error('Unable to update the active whiteboard');
+    for (const action of actions) {
+      this.clearEffects();
+      if (action.type === 'wb_close') {
+        this.retainCurrentWhiteboard(true);
+        useCanvasStore.getState().setWhiteboardOpen(false, true);
+        continue;
       }
-    } finally {
-      this.restoringWhiteboard = false;
+      useCanvasStore.getState().setWhiteboardOpen(true, true);
+      if (action.type === 'wb_open') { this.ensureWhiteboardPageKey(action.id); continue; }
+      if (action.type === 'wb_clear') {
+        this.retainCurrentWhiteboard(true);
+        this.stageAPI.whiteboard.update({ elements: [] }, wb.data.id);
+        this.startWhiteboardPage(action.id);
+        useCanvasStore.getState().setWhiteboardClearing(false);
+      } else if (action.type === 'wb_delete') {
+        this.stageAPI.whiteboard.deleteElement(action.elementId, wb.data.id);
+      } else if (action.type === 'wb_edit_code') {
+        const element = this.stageAPI.whiteboard.getElement(action.elementId, wb.data.id).data;
+        if (element?.type === 'code') {
+          this.stageAPI.whiteboard.updateElement(editWhiteboardCodeElement(element, action), wb.data.id);
+        }
+      } else {
+        this.ensureWhiteboardPageKey(action.id);
+        const element = whiteboardActionToElement(action);
+        if (element) this.stageAPI.whiteboard.addElement(element, wb.data.id);
+      }
     }
   }
 
   private async waitForWhiteboardVisual(ms: number): Promise<void> {
-    if (!this.restoringWhiteboard) await delay(ms);
+    await delay(ms);
   }
 
   /** Schedule a token-guarded clear so an old timer cannot erase a newer cue. */
@@ -426,6 +462,32 @@ export class ActionEngine {
     );
   }
 
+  private whiteboardScope() {
+    const { stage, currentSceneId, scenes } = this.stageStore.getState();
+    return stage?.id && currentSceneId ? { stageId: stage.id, sceneId: currentSceneId,
+      fallbackTitle: scenes.find((scene) => scene.id === currentSceneId)?.title } : null;
+  }
+
+  private ensureWhiteboardPageKey(key: string): void {
+    const scope = this.whiteboardScope();
+    if (!scope) return;
+    const pages = useWhiteboardPagesStore.getState();
+    pages.setActiveStage(scope.stageId);
+    if (!pages.getCurrentPageKey(scope.stageId, scope.sceneId)) pages.startPage(scope.stageId, scope.sceneId, key);
+  }
+
+  private startWhiteboardPage(key: string): void {
+    const scope = this.whiteboardScope();
+    if (scope) useWhiteboardPagesStore.getState().startPage(scope.stageId, scope.sceneId, key);
+  }
+
+  private retainCurrentWhiteboard(completed: boolean): void {
+    const scope = this.whiteboardScope();
+    if (!scope) return;
+    const board = this.stageStore.getState().stage?.whiteboard?.find((entry) => entry.id === whiteboardIdForScene(scope.sceneId));
+    if (board) useWhiteboardPagesStore.getState().retainCurrentPage({ ...scope, elements: board.elements, completed });
+  }
+
   /** Auto-open the whiteboard if it's not already open */
   private async ensureWhiteboardOpen(): Promise<void> {
     if (!useCanvasStore.getState().whiteboardOpen) {
@@ -475,31 +537,36 @@ export class ActionEngine {
     await this.waitForWhiteboardVisual(300);
   }
 
-  private async executeWbClear(): Promise<void> {
+  private async executeWbClear(pageKey: string): Promise<void> {
     const wb = this.getActiveWhiteboard();
     if (!wb.success || !wb.data) return;
 
     const elementCount = wb.data.elements?.length || 0;
-    if (elementCount === 0) return;
+    if (elementCount === 0) { this.startWhiteboardPage(pageKey); return; }
+    this.retainCurrentWhiteboard(true);
+    const version = this.whiteboardVersion;
+    const scope = this.whiteboardScope();
 
     // Timeline restoration must not pollute the learner's manual undo history.
-    if (!this.restoringWhiteboard) {
-      useWhiteboardHistoryStore.getState().pushSnapshot(wb.data.elements!);
-    }
+    useWhiteboardHistoryStore.getState().pushSnapshot(wb.data.elements!);
 
     // Trigger cascade exit animation
-    if (!this.restoringWhiteboard) useCanvasStore.getState().setWhiteboardClearing(true);
+    useCanvasStore.getState().setWhiteboardClearing(true);
 
     // Wait for cascade: base 380ms + 55ms per element, capped at 1400ms
     const animMs = Math.min(380 + elementCount * 55, 1400);
     await this.waitForWhiteboardVisual(animMs);
+    if (version !== this.whiteboardVersion || this.whiteboardScope()?.stageId !== scope?.stageId
+      || this.whiteboardScope()?.sceneId !== scope?.sceneId) return;
 
     // Actually remove elements
     this.stageAPI.whiteboard.update({ elements: [] }, wb.data.id);
+    this.startWhiteboardPage(pageKey);
     useCanvasStore.getState().setWhiteboardClearing(false);
   }
 
   private async executeWbClose(): Promise<void> {
+    this.retainCurrentWhiteboard(true);
     useCanvasStore.getState().setWhiteboardOpen(false);
     // Wait for close animation (500ms ease-out tween)
     await this.waitForWhiteboardVisual(700);

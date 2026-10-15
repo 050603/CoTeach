@@ -60,6 +60,7 @@ import {
   type PlaybackModalBlockDetail,
 } from '@openmaic/lib/playback/activity-events';
 import { continueAfterActivityConfirmation } from '@openmaic/lib/playback/activity-continuation';
+import { applyPlaybackModalBlock, createPlaybackModalGateState } from '@openmaic/lib/playback/modal-gate';
 import { sceneAutoAdvanceDelayMs } from '@openmaic/lib/playback/scene-completion';
 
 /**
@@ -184,6 +185,7 @@ export const PlaybackChromeRoot = forwardRef<PlaybackChromeRootHandle, PlaybackC
     const [lectureSpeech, setLectureSpeech] = useState<string | null>(null); // From PlaybackEngine (lecture)
     const [lectureCueIndex, setLectureCueIndex] = useState(-1);
     const [lectureSpeechProgress, setLectureSpeechProgress] = useState(0);
+    const [lectureMediaTimeMs, setLectureMediaTimeMs] = useState<number | null>(null);
     const [playbackError, setPlaybackError] = useState<string | null>(null);
     const [liveSpeech, setLiveSpeech] = useState<string | null>(null); // From buffer (discussion/QA)
     const [speechProgress, setSpeechProgress] = useState<number | null>(null); // StreamBuffer reveal progress (0–1)
@@ -298,8 +300,10 @@ export const PlaybackChromeRoot = forwardRef<PlaybackChromeRootHandle, PlaybackC
     const autoStartRef = useRef(false);
     const handledAutoplaySceneIdRef = useRef<string | null>(null);
     const autoAdvanceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const interruptedLectureAdvanceRef = useRef<{ sceneId: string } | null>(null);
     const completedActivitySceneIdsRef = useRef(new Set<string>());
     const modalPlaybackBlockedRef = useRef(false);
+    const modalPlaybackGateRef = useRef(createPlaybackModalGateState<PlaybackEngine>());
     // Discussion buffer-level pause state (distinct from soft-pause which aborts SSE)
     const [isDiscussionPaused, setIsDiscussionPaused] = useState(false);
 
@@ -319,6 +323,10 @@ export const PlaybackChromeRoot = forwardRef<PlaybackChromeRootHandle, PlaybackC
       clearAutoAdvanceTimer();
       const completedScene = useStageStore.getState().scenes.find((scene) => scene.id === completedSceneId);
       if (!completedScene) return;
+      if (modalPlaybackGateRef.current.sources.has('lecture-chat')) {
+        interruptedLectureAdvanceRef.current = { sceneId: completedSceneId };
+        return;
+      }
       setAutoAdvancePending(completedScene.type === 'slide');
       autoAdvanceTimerRef.current = setTimeout(() => {
         autoAdvanceTimerRef.current = null;
@@ -378,13 +386,31 @@ export const PlaybackChromeRoot = forwardRef<PlaybackChromeRootHandle, PlaybackC
       };
       const onModalBlock = (event: Event) => {
         const detail = (event as CustomEvent<PlaybackModalBlockDetail>).detail;
-        modalPlaybackBlockedRef.current = Boolean(detail?.blocked);
-        if (!detail?.blocked) return;
-        engineRef.current?.pause();
-        const paused = chatAreaRef.current?.pauseActiveLiveBuffer();
-        if (paused) {
-          discussionTTS.pause();
-          setIsDiscussionPaused(true);
+        if (!detail?.source) return;
+        if (detail.source === 'lecture-chat' && detail.blocked) {
+          if (autoAdvanceTimerRef.current !== null) {
+            const sceneId = useStageStore.getState().currentSceneId;
+            if (sceneId) interruptedLectureAdvanceRef.current = { sceneId };
+          }
+          clearAutoAdvanceTimer();
+        }
+        const result = applyPlaybackModalBlock(modalPlaybackGateRef.current, detail, {
+          engine: engineRef.current,
+          sceneId: useStageStore.getState().currentSceneId,
+          active: activeRef.current,
+          audio: audioPlayerRef.current,
+        });
+        modalPlaybackGateRef.current = result.state;
+        modalPlaybackBlockedRef.current = result.state.sources.size > 0;
+        if (result.paused) {
+          if (lectureSessionIdRef.current) chatAreaRef.current?.pauseBuffer(lectureSessionIdRef.current);
+          const paused = chatAreaRef.current?.pauseActiveLiveBuffer();
+          if (paused) {
+            discussionTTS.pause();
+            setIsDiscussionPaused(true);
+          }
+        } else if (result.resumed && lectureSessionIdRef.current) {
+          chatAreaRef.current?.resumeBuffer(lectureSessionIdRef.current);
         }
       };
       window.addEventListener(PLAYBACK_ACTIVITY_COMPLETE_EVENT, onComplete);
@@ -395,7 +421,7 @@ export const PlaybackChromeRoot = forwardRef<PlaybackChromeRootHandle, PlaybackC
         window.removeEventListener(PLAYBACK_ACTIVITY_RESET_EVENT, onReset);
         window.removeEventListener(PLAYBACK_MODAL_BLOCK_EVENT, onModalBlock);
       };
-    }, [advanceCompletedScene, discussionTTS]);
+    }, [advanceCompletedScene, clearAutoAdvanceTimer, discussionTTS]);
 
     /**
      * Resume a soft-paused topic: re-call /chat with existing session messages.
@@ -435,6 +461,7 @@ export const PlaybackChromeRoot = forwardRef<PlaybackChromeRootHandle, PlaybackC
       setLectureSpeech(null);
       setLectureCueIndex(-1);
       setLectureSpeechProgress(0);
+      setLectureMediaTimeMs(null);
       setSpeechProgress(null);
       setShowEndFlash(false);
       setActiveBubbleId(null);
@@ -601,6 +628,7 @@ export const PlaybackChromeRoot = forwardRef<PlaybackChromeRootHandle, PlaybackC
     // Initialize playback engine when scene changes
     useEffect(() => {
       clearAutoAdvanceTimer();
+      if (interruptedLectureAdvanceRef.current?.sceneId !== currentScene?.id) interruptedLectureAdvanceRef.current = null;
       // Bump epoch so any stale SSE callbacks from the previous scene are discarded
       sceneEpochRef.current++;
 
@@ -692,6 +720,7 @@ export const PlaybackChromeRoot = forwardRef<PlaybackChromeRootHandle, PlaybackC
           setLectureSpeech(text);
           setLectureCueIndex(cue?.actionIndex ?? -1);
           setLectureSpeechProgress(0);
+          setLectureMediaTimeMs(null);
           // Add to lecture session with incrementing index for dedup
           // Chat area pacing is handled by the StreamBuffer (onTextReveal)
           if (lectureSessionIdRef.current) {
@@ -707,8 +736,19 @@ export const PlaybackChromeRoot = forwardRef<PlaybackChromeRootHandle, PlaybackC
             if (msgId) setActiveBubbleId(msgId);
           }
         },
-        onSpeechProgress: setLectureSpeechProgress,
+        onSpeechProgress: (progress) => {
+          setLectureSpeechProgress(progress);
+          const player = audioPlayerRef.current;
+          if (player.hasActiveAudio()) {
+            setLectureMediaTimeMs(player.getCurrentTime());
+          } else if (progress < 1) {
+            // Browser TTS reports character boundaries rather than audio time.
+            setLectureMediaTimeMs(null);
+          }
+        },
         onSpeechEnd: () => {
+          const finalMediaTime = audioPlayerRef.current.getCurrentTime();
+          setLectureMediaTimeMs(previous => previous === null ? null : finalMediaTime);
           // Don't clear lectureSpeech — let it persist until the next
           // onSpeechStart replaces it or the scene transitions.
           // Clearing here causes fallback to idleText (first sentence).
@@ -846,7 +886,7 @@ export const PlaybackChromeRoot = forwardRef<PlaybackChromeRootHandle, PlaybackC
             lectureSessionIdRef.current = sessionId;
             lectureActionCounterRef.current = 0;
           }
-          if (activeRef.current && useStageStore.getState().currentSceneId === currentScene.id) engineRef.current?.start();
+          if (activeRef.current && !modalPlaybackBlockedRef.current && useStageStore.getState().currentSceneId === currentScene.id) engineRef.current?.start();
         })();
       } else {
         // Load saved playback state and restore position (but never auto-play).
@@ -873,7 +913,7 @@ export const PlaybackChromeRoot = forwardRef<PlaybackChromeRootHandle, PlaybackC
           lectureSessionIdRef.current = sessionId;
           lectureActionCounterRef.current = 0;
         }
-        if (activeRef.current && useStageStore.getState().currentSceneId === currentScene.id) engineRef.current?.start();
+        if (activeRef.current && !modalPlaybackBlockedRef.current && useStageStore.getState().currentSceneId === currentScene.id) engineRef.current?.start();
       })();
     }, [active, autoplaySceneId, currentScene]);
 
@@ -1015,12 +1055,14 @@ export const PlaybackChromeRoot = forwardRef<PlaybackChromeRootHandle, PlaybackC
       return textPosition >= 0 ? textPosition : 0;
     }, [firstSpeechText, lectureCueIndex, lectureCues, lectureSpeech]);
     const playLectureCueAt = useCallback((position: number) => {
+      if (modalPlaybackBlockedRef.current) return false;
       const cue = lectureCues[position];
       if (!cue) return false;
       setPlaybackCompleted(false);
       return engineRef.current?.playSpeechAt(cue.actionIndex) ?? false;
     }, [lectureCues]);
     const playLectureCue = useCallback((actionIndex: number, startRatio: number) => {
+      if (modalPlaybackBlockedRef.current) return false;
       setPlaybackCompleted(false);
       return engineRef.current?.playSpeechAt(actionIndex, startRatio) ?? false;
     }, []);
@@ -1102,14 +1144,20 @@ export const PlaybackChromeRoot = forwardRef<PlaybackChromeRootHandle, PlaybackC
 
     // play/pause toggle
     const handlePlayPause = useCallback(async () => {
-      if (!activeRef.current) return;
+      if (!activeRef.current || modalPlaybackBlockedRef.current) return;
+      const interrupted = interruptedLectureAdvanceRef.current;
+      if (interrupted && interrupted.sceneId === currentScene?.id) {
+        interruptedLectureAdvanceRef.current = null;
+        advanceCompletedScene(interrupted.sceneId, true);
+        return;
+      }
       let engine = engineRef.current;
       if (!engine) return;
 
       const mode = engine.getMode();
       if (mode === 'idle' && currentScene && preparePlaybackRef.current) {
         if (!await preparePlaybackRef.current(currentScene.id)) return;
-        if (!activeRef.current || useStageStore.getState().currentSceneId !== currentScene.id) return;
+        if (!activeRef.current || modalPlaybackBlockedRef.current || useStageStore.getState().currentSceneId !== currentScene.id) return;
         engine = engineRef.current;
         if (!engine) return;
       }
@@ -1133,7 +1181,7 @@ export const PlaybackChromeRoot = forwardRef<PlaybackChromeRootHandle, PlaybackC
           const sessionId = await chatAreaRef.current.startLecture(currentScene.id);
           lectureSessionIdRef.current = sessionId;
         }
-        if (!activeRef.current || (currentScene && useStageStore.getState().currentSceneId !== currentScene.id)) return;
+        if (!activeRef.current || modalPlaybackBlockedRef.current || (currentScene && useStageStore.getState().currentSceneId !== currentScene.id)) return;
         if (wasCompleted) {
           // Restart from beginning (user clicked restart after completion)
           lectureActionCounterRef.current = 0;
@@ -1143,7 +1191,7 @@ export const PlaybackChromeRoot = forwardRef<PlaybackChromeRootHandle, PlaybackC
           engine.continuePlayback();
         }
       }
-    }, [playbackCompleted, currentScene]);
+    }, [advanceCompletedScene, playbackCompleted, currentScene]);
 
     useEffect(() => {
       if (active) return;
@@ -1520,6 +1568,8 @@ export const PlaybackChromeRoot = forwardRef<PlaybackChromeRootHandle, PlaybackC
                 currentSpeech={liveSpeech}
                 lectureSpeech={lectureSpeech}
                 lectureSpeechProgress={lectureSpeechProgress}
+                lectureMediaTimeMs={lectureMediaTimeMs}
+                lectureQuizWaiting={Boolean(activeActivity && activeActivity.purpose !== 'interaction')}
                 lectureCues={lectureCues}
                 activeLectureActionIndex={lectureCueIndex}
                 idleText={firstSpeechText}

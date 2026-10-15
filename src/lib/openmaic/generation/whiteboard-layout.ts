@@ -1,4 +1,5 @@
 import type { Action, WbDrawLineAction } from '@openmaic/lib/types/action';
+import { orderedActionExecutionEntries } from '../whiteboard/action-timeline';
 import {
   getWhiteboardActionBox, minimumWhiteboardTextHeight, resolveWhiteboardLine, WHITEBOARD_HEIGHT, WHITEBOARD_WIDTH,
   type WhiteboardActionBox,
@@ -95,7 +96,7 @@ function intersectionArea(a: Box, b: Box, gap = 0): number {
 
 function scaledTextFontSize(action: Extract<Action, { type: 'wb_draw_text' }>, scale: number): number {
   const sourceFontSize = action.fontSize ?? 18;
-  return round(Math.max(12, Math.min(sourceFontSize, 14), sourceFontSize * scale));
+  return round(Math.max(12, Math.min(sourceFontSize, action.speechId ? 24 : 14), sourceFontSize * scale));
 }
 
 function scaledDrawingBox(action: Action, origin: Box, scale: number): Box | null {
@@ -152,7 +153,7 @@ function placeGroup(group: Group, occupied: Box[]): Placement {
   // Code/table fonts have no scalable field; retain readability and diagnose
   // overflow rather than silently squeezing their text into a smaller box.
   const minimumScale = Math.max(0, ...group.members.map(({ action }) => {
-    if (action.type === 'wb_draw_text') return Math.min(1, 14 / (action.fontSize ?? 18));
+    if (action.type === 'wb_draw_text') return Math.min(1, (action.speechId ? 24 : 14) / (action.fontSize ?? 18));
     if (action.type === 'wb_draw_code' || action.type === 'wb_draw_table') return 1;
     return 0;
   }));
@@ -302,13 +303,16 @@ function normalizePage(actions: readonly Action[]): Action[] {
 /** Preserve compositions and narration order on a fixed canvas. Only explicit
  * clear actions start a new page; open/close keep the existing board content. */
 export function normalizeWhiteboardActionLayout(actions: ReadonlyArray<Action>): Action[] {
+  const execution = orderedActionExecutionEntries(actions);
+  const ordered = execution.map(({ action }) => action);
   const result: Action[] = [];
   let start = 0;
-  actions.forEach((action, index) => {
+  ordered.forEach((action, index) => {
     if (action.type !== 'wb_clear') return;
-    result.push(...normalizePage(actions.slice(start, index)), { ...action });
+    result.push(...normalizePage(ordered.slice(start, index)), { ...action });
     start = index + 1;
   });
-  result.push(...normalizePage(actions.slice(start)));
-  return result;
+  result.push(...normalizePage(ordered.slice(start)));
+  const byActionIndex = new Map(execution.map((entry, index) => [entry.actionIndex, result[index]]));
+  return actions.map((_action, index) => byActionIndex.get(index)!);
 }

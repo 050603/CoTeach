@@ -31,6 +31,22 @@ const renderReview = (runId: string, pages: unknown[] = []) => ({
 });
 
 describe('optional course review panel', () => {
+  it('labels inherited source review evidence without presenting the new audio as teacher reviewed', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(respond({ ...snapshot,
+      teacherReview: { confirmedAt: '2026-09-24T00:00:00.000Z', acceptedIssueIds: [] },
+      audioPublication: { publishedAt: '2026-10-14T00:00:00Z', sourceVersionId: 'v3', inheritsTeacherContentReview: true, audioTeacherReviewed: false },
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+    const onSummaryChange = vi.fn();
+    const view = render(<CourseQualityReview courseId="course" onDecisionChange={vi.fn()} onOpenPage={vi.fn()} onSummaryChange={onSummaryChange} />);
+    expect(await screen.findByText('沿用原内容终审')).toBeTruthy();
+    expect(screen.getByText(/本次音频更新未新增教师听审记录/)).toBeTruthy();
+    expect(screen.queryByText('当前版本已终审')).toBeNull();
+    expect(screen.getByText('原内容一致性')).toBeTruthy();
+    await waitFor(() => expect(onSummaryChange).toHaveBeenLastCalledWith(expect.objectContaining({ status: 'audio-updated' })));
+    expect(fetchMock.mock.calls.every((call) => call[1]?.method !== 'POST')).toBe(true);
+    view.unmount();
+  });
   it('shows live quality diagnostics while keeping teacher confirmation available', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(respond({ ...snapshot, qualityDiagnostics: [{
       id: 'source-coverage', origin: 'structure', severity: 'error', blocking: false,

@@ -233,12 +233,12 @@ for (const physical of [{ width: 1024, height: 768 }, { width: 1280, height: 720
         const editor = page.locator('[contenteditable="true"]').first();
         await editor.fill('原生缩放下保留科学观察记录。');
         await page.getByRole('button', { name: '保存', exact: true }).click();
-        await expect(page.getByText('同步失败，请检查保存状态', { exact: true })).toBeVisible();
+        await expect(page.locator('[data-slot="save-status"]')).toContainText('保存失败');
         await expect(editor).toContainText('原生缩放下保留科学观察记录。');
         measurements.push(await measureAndCapture(page, info, 'student-document-save-error', factor, physical));
         learning.recoverSave();
         await page.getByRole('button', { name: '保存', exact: true }).click();
-        await expect(page.getByText('服务器已保存', { exact: true })).toBeVisible();
+        await expect(page.locator('[data-slot="save-status"]')).toContainText('已保存');
         expect(errors).toEqual([]);
       } finally {
         const evidencePath = info.outputPath('native-zoom-evidence.json');

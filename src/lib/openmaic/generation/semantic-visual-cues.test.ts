@@ -7,6 +7,7 @@ import { splitLongSpeechActions } from '../audio/tts-utils';
 import {
   buildSlideTargetInventory,
   calibrateGeneratedVisualCues,
+  calibrateGeneratedWhiteboardActions,
   refineVisualCueDesign,
   recoverLegacyVisualCueAnchors,
 } from './semantic-visual-cues';
@@ -92,6 +93,70 @@ function visualActions(actions: readonly Action[]): RuntimeCue[] {
 function calibrate(actions: Action[], pageElements: PPTElement[] = elements): Action[] {
   return calibrateGeneratedVisualCues({ outline, elements: pageElements, actions });
 }
+
+describe('whiteboard narration anchor calibration', () => {
+  it('uses saved forced-alignment timing for every whiteboard command, even without PPT targets', () => {
+    const text = '先说明。现在板书要点。返回PPT。';
+    const narration = speech('s1', text);
+    const actions: Action[] = [
+      { id: 'open', type: 'wb_open', speechId: 's1', speechAnchor: { quote: '现在板书' }, speechOffsetMs: 1 },
+      { id: 'write', type: 'wb_draw_text', content: '要点', x: 40, y: 40, speechId: 's1', speechAnchor: { quote: '要点' } },
+      { id: 'close', type: 'wb_close', speechId: 's1', speechAnchor: { quote: '返回PPT' } },
+      narration,
+    ];
+    const result = calibrate(actions, []);
+    expect(result.slice(0, 3).map((action) => 'speechOffsetMs' in action ? action.speechOffsetMs : undefined))
+      .toEqual(['现在板书', '要点', '返回PPT'].map((quote) => text.indexOf(quote) * 100));
+    expect(result[3]).toBe(narration);
+  });
+
+  it('retains pending and invalid authored anchors without using their stale media offsets', () => {
+    const action: Action = { id: 'open', type: 'wb_open', speechId: 's1', speechAnchor: { quote: '现在板书' }, speechOffsetMs: 4567 };
+    const narration: Action = { id: 's1', type: 'speech', text: '现在板书要点。' };
+    const pending = calibrateGeneratedWhiteboardActions([action, narration]);
+    expect(pending[0]).toMatchObject({ speechAnchor: { quote: '现在板书' }, speechOffsetMs: undefined });
+    const aligned = calibrateGeneratedWhiteboardActions([pending[0], speech('s1', narration.text)]);
+    expect(aligned[0]).toMatchObject({ speechOffsetMs: 0 });
+    const stale = calibrateGeneratedWhiteboardActions([
+      { ...action, speechAnchor: { quote: '已删除的讲词' } }, speech('s1', narration.text),
+    ]);
+    expect(stale[0]).toMatchObject({ speechAnchor: { quote: '已删除的讲词' }, speechOffsetMs: undefined });
+  });
+
+  it('withholds an anchor whose spoken word is absent from the alignment', () => {
+    const narration = speech('s1', '现在板书要点。') as Extract<Action, { type: 'speech' }>;
+    narration.speechAlignment!.spans = narration.speechAlignment!.spans.filter((span) => span.text !== '书');
+    const result = calibrateGeneratedWhiteboardActions([
+      { id: 'open', type: 'wb_open', speechId: 's1', speechAnchor: { quote: '现在板书' }, speechOffsetMs: 900 },
+      narration,
+    ]);
+    expect(result[0]).toMatchObject({ speechOffsetMs: undefined });
+  });
+
+  it('keeps PPT cues before and after a timed board interval and excludes hidden-slide cues', () => {
+    const text = '总览。现在板书第一项。回到PPT实施阶段。';
+    const narration = speech('s1', text);
+    const result = calibrate([
+      { id: 'open', type: 'wb_open', speechId: 's1', speechAnchor: { quote: '现在板书' } },
+      { id: 'close', type: 'wb_close', speechId: 's1', speechAnchor: { quote: '回到PPT' } },
+      cue('before', 's1', 'pbl-title', { speechAnchor: { quote: '总览' } }),
+      cue('hidden', 's1', 'pbl-title', { speechAnchor: { quote: '第一项' } }),
+      cue('after', 's1', 'pbl-title', { speechAnchor: { quote: '实施阶段' } }),
+      narration,
+    ]);
+    expect(visualActions(result).map((action) => action.id)).toEqual(['before', 'after']);
+    expect(result.filter((action) => action.type === 'speech')).toEqual([narration]);
+  });
+
+  it('does not hide a usable PPT cue behind an invalid whiteboard opener', () => {
+    const result = calibrate([
+      { id: 'open', type: 'wb_open', speechId: 's1', speechAnchor: { quote: '不存在的板书锚点' } },
+      cue('ppt', 's1', 'pbl-title', { speechAnchor: { quote: '讲PBL' } }),
+      speech('s1', '现在讲PBL。'),
+    ]);
+    expect(visualActions(result).map((action) => action.id)).toEqual(['ppt']);
+  });
+});
 
 describe('OpenMAIC interleaved visual cue calibration', () => {
   it('binds a cue to the next narration and drops an invalid target without fallback', () => {

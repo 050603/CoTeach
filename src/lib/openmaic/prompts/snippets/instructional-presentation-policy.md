@@ -35,6 +35,8 @@ For a discrimination, comparison, or changed-condition task, make the material t
 
 Use the whiteboard when understanding depends on seeing a sequence, transformation, difference, annotation, decomposition, derivation, calculation, proof, process, structure, or causal relationship unfold over time. Reveal only the information needed for the current reasoning step, coordinate each step with narration, and return to the slide after the self-contained process is complete.
 
+A stable overview may name several phases while the saved explanation develops important subpoints within them. When those subpoints, hierarchy, distinctions or necessary conditions are absent from the actual slide, first identify what structure makes them understandable. Construct a teacher-style branch diagram, converging relationship or dimension table at exact spoken anchors; use keywords, brackets, sketch icons and selective circles/underlines. One meaningful knowledge operation may reveal a node, add its conditions, connect existing nodes or revisit a current idea. Do not summarize every sentence into a new line. Keep complete adopted lists and factual conditions, and draw only relationships established by the evidence and explanation. Reserve the full layout before progressive reveal. Clear between complete subdiagrams when necessary; return to the PPT where it already provides sufficient support. This decision comes from the adopted source, the actual slide and the explanation together, never from speech length or a fixed whiteboard quota.
+
 Do not use the whiteboard merely to copy the slide, decorate the lesson, or satisfy a subject keyword. An agenda, objective list, page-title list, future-topic list, vocabulary pile, or recap already visible on the slide does not belong on the board. Do not force a dynamic demonstration when a stable slide representation communicates the idea more clearly.
 
 ### Decision check
@@ -42,7 +44,7 @@ Do not use the whiteboard merely to copy the slide, decorate the lesson, or sati
 For every page, ask:
 
 1. What must remain visible as the page's durable summary or evidence? Put that on the PPT.
-2. What would be hard to understand by listening alone because students must see a process, change, difference, or relationship? Teach that through a paced whiteboard sequence.
+2. What would be hard to understand by listening alone because students must see a process, change, difference, relationship, grouped subpoints or essential conditions missing from the actual overview? Teach that through a paced whiteboard sequence.
 3. Can a student understand the intended example and conclusion from the visuals plus narration without guessing at omitted evidence? If not, strengthen the PPT or whiteboard plan before output.
 
 Before extending an explanation, choose a visual tool before adding more speech whenever the next idea depends on a relationship, transformation, comparison, or sequence. Choose segment boundaries and visual changes from the reasoning and cognitive load, not a fixed alternation quota. A continuous explanation is appropriate when the current visual already supports it.

@@ -1,4 +1,3 @@
-import { tutorEvidencePrompt, type TutorEvidence } from "./knowledge-tutor-evidence";
 import { createHash, randomUUID } from 'node:crypto';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { prisma, isDatabaseConfigured } from '@/lib/db/client';
@@ -6,89 +5,105 @@ import { getKnowledgeLectureTutorSettings } from '@/lib/knowledge-lecture-settin
 import { resolveModel, type ResolvedModel } from '@openmaic/lib/server/resolve-model';
 import { callLLM } from '@openmaic/lib/ai/llm';
 import type { QuizQuestion } from '@openmaic/lib/types/stage';
-import { parseTutorPayload, TUTOR_EXECUTION_MS, TUTOR_LEASE_MS, TUTOR_PROMPT_VERSION, TUTOR_SYSTEM } from './knowledge-tutor-payload';
+import { authoredQuestionFingerprint, tutorEvidencePrompt, type TutorEvidence } from './knowledge-tutor-evidence';
+import { parseTutorPayload, TUTOR_EXECUTION_MS, TUTOR_LEASE_MS } from './knowledge-tutor-payload';
 import { recordAiCacheEvent, withClassroomAiUsage } from '@/lib/observability/classroom-ai';
+import type { KnowledgeLectureExplanation } from './knowledge-explanation-types';
+import { EXPLANATION_VERSION } from './knowledge-explanation-types';
 
+export { EXPLANATION_VERSION } from './knowledge-explanation-types';
 export type ExplanationInput = {
   classroomId: string; sceneId: string; question: QuizQuestion;
-  knowledgePointNames: string[]; sourceEvidence?: TutorEvidence; answer: string | string[]; mode?: 'option';
+  knowledgePointNames: string[]; sourceEvidence?: TutorEvidence;
+  /** Computed from the source file before JSONB can reorder object fields. */
+  questionFingerprint?: string;
 };
-type CacheRow = { id: string; status: string; raw: string | null; token: string | null; retryAt: Date | null };
+type CacheRow = {
+  id: string; status: string; raw: string | null; token: string | null;
+  retryAt: Date | null; input: ExplanationInput; audio?: unknown; createdAt?: Date;
+};
+const hash = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex');
+const evidenceFor = (input: ExplanationInput) => input.sourceEvidence ?? { items: [], authoredQuotes: [] };
+export const isOrdinaryQuestion = (question: Pick<QuizQuestion, 'type' | 'format'>): boolean =>
+  question.format !== 'scenario_task' && (question.type !== 'short_answer' || question.format === 'fill_blank');
+
 export async function resolveKnowledgeTutorModel(): Promise<ResolvedModel> {
   const settings = await getKnowledgeLectureTutorSettings();
   return resolveModel(settings.modelString ? { modelString: settings.modelString } : { stage: 'quiz-grade' });
 }
+export function explanationContentKey(input: { classroomId: string; sceneId: string; questionFingerprint: string }): string {
+  return hash([EXPLANATION_VERSION, input.classroomId, input.sceneId, input.questionFingerprint]);
+}
 export function explanationCacheKey(input: ExplanationInput, model: Pick<ResolvedModel, 'modelString' | 'baseUrl' | 'thinkingConfig'>): string {
-  const q = input.question;
-  const answer = q.type === 'single' ? (Array.isArray(input.answer) ? input.answer[0] ?? '' : input.answer)
-    : Array.isArray(input.answer) ? [...new Set(input.answer)].sort() : input.answer;
-  // Enumerate authored fields: never let a caller's identity/history enter a shared key or prompt.
-  return createHash('sha256').update(JSON.stringify({ version: TUTOR_PROMPT_VERSION,
-    classroomId: input.classroomId, sceneId: input.sceneId, mode: input.mode ?? 'answer',
-    question: { id: q.id, type: q.type, format: q.format, question: q.question, options: q.options,
-      answer: q.answer, matchingPairs: q.matchingPairs, analysis: q.analysis, referenceAnswer: q.referenceAnswer,
-      commentPrompt: q.commentPrompt, scoringRubric: q.scoringRubric, points: q.points },
-    knowledgePointNames: input.knowledgePointNames, sourceEvidence: input.sourceEvidence, answer,
-    model: model.modelString, endpoint: model.baseUrl, thinking: model.thinkingConfig,
-  })).digest('hex');
+  return hash([explanationContentKey({ ...input, questionFingerprint: input.questionFingerprint ?? authoredQuestionFingerprint(input.question, evidenceFor(input)) }),
+    input.knowledgePointNames, model.modelString, model.baseUrl, model.thinkingConfig]);
+}
+/** Explicit item identities make omission detectable without guessing from prose. */
+export function explanationItems(question: QuizQuestion): Array<{ key: string; label: string }> {
+  if (question.options?.length) return question.options.map(option => ({ key: option.value,
+    label: `${question.format === 'true_false' ? option.label : `${option.value}项`}：${question.answer?.includes(option.value) ? '符合题意' : '不符合题意'}` }));
+  if (question.matchingPairs?.length) return question.matchingPairs.map((pair, index) => ({ key: pair.leftId, label: `第${index + 1}组配对` }));
+  return [{ key: 'answer', label: `参考答案：${question.referenceAnswer || question.answer?.join('、') || ''}` }];
 }
 export function explanationPrompt(input: ExplanationInput): string {
   const q = input.question;
-  const choices = q.options?.length ? `选项：\n${q.options.map(o => `${o.value}. ${o.label}`).join('\n')}`
-    : q.matchingPairs?.map(pair => `${pair.leftId}:${pair.rightId} ${pair.left} → ${pair.right}`).join('\n') ?? '';
-  return `${tutorEvidencePrompt(input.sourceEvidence)}\n知识点：${input.knowledgePointNames.join('、')}\n题目：${q.question}\n${choices}\n标准答案：${q.answer?.join('、') || '未提供'}\n参考讲解：${q.referenceAnswer || q.analysis || '未提供'}\n${input.mode === 'option'
-    ? `仅解释选项 ${input.answer} 本身应选或不应选的依据，不把这一个选项当作学生完整作答，也不要猜测学生想法。`
-    : `本次作答：${Array.isArray(input.answer) ? [...input.answer].sort().join('、') : input.answer || '未作答'}。请给出该作答的首次讲解，不引用任何个人经历或历史对话。`}`;
+  return `${tutorEvidencePrompt(input.sourceEvidence)}\n知识点：${input.knowledgePointNames.join('、')}\n题目：${q.question}\n题型：${q.format || q.type}\n选项：${JSON.stringify(q.options ?? [])}\n正确配对：${JSON.stringify(q.matchingPairs ?? [])}\n标准答案：${q.answer?.join('、') || q.referenceAnswer || '未提供'}\n参考答案：${q.referenceAnswer || '未提供'}\n原题解析：${q.analysis || '未提供'}\n必须逐项解释以下所有条目，items 的 key 与列表一一对应，每项必须填写自己的 explanation，不能只返回 key/label 或把解释放在顶层：${JSON.stringify(explanationItems(q).map(item => ({ ...item, explanation: '填写该项简明而完整的判断依据' })))}`;
 }
-
+const SYSTEM = `你是课堂伴学助教，为一道普通小测提前准备面向全体学生的统一讲解。不知道学生选择了什么，不评价学生，不说“你选了”“你错在”，不猜测个人想法。直接讲解题目，不重复朗读整段题干和选项。
+通常45–75秒，约200–300个汉字，难题可适度延长，不能为控制长度省掉条目或关键条件。选择题必须逐一说明每个选项正确或错误的依据；判断题讲清判断及适用条件；填空题说明答案与必要边界；配对题逐一解释对应关系。只按给出的题目、标准答案、原解析和实际采用的原文讲解，关键定义与条件准确，不虚构教材事实。每项通常用35–50字说明最关键的依据，不重复题干和选项原文；intro与takeaway各一句，不在每个位置重复同一套定义，更多例子留给学生追问。
+严格返回JSON：{"introduction":"一句切入判断方法","items":[{"key":"给定条目的key","explanation":"该项依据"}],"takeaway":"一句核心方法或易错边界","boardNotes":[{"title":"核心板书","body":"简短内容","kind":"concept|evidence|correction|example"}]}。每个给定条目恰好出现一次，不增加条目；boardNotes最多2条，可为空。`;
+export function parsePreparedExplanation(raw: string, input: ExplanationInput, now: string) {
+  let value: { introduction?: unknown; items?: unknown; takeaway?: unknown; boardNotes?: unknown };
+  try { value = JSON.parse(raw.match(/\{[\s\S]*\}/)?.[0] ?? raw); } catch { throw new Error('TUTOR_INVALID_OUTPUT'); }
+  if (!value || typeof value.introduction !== 'string' || !value.introduction.trim()
+    || typeof value.takeaway !== 'string' || !value.takeaway.trim() || !Array.isArray(value.items)) throw new Error('TUTOR_INVALID_OUTPUT');
+  const items = value.items as Array<{ key?: unknown; explanation?: unknown }>;
+  const expected = explanationItems(input.question);
+  if (items.length !== expected.length || expected.some(item => items.filter(candidate => candidate?.key === item.key
+    && typeof candidate.explanation === 'string' && candidate.explanation.trim()).length !== 1)) throw new Error('TUTOR_INVALID_OUTPUT');
+  const answer = [value.introduction.trim(), ...expected.map(item => `${item.label}。${items.find(candidate => candidate.key === item.key)!.explanation as string}`), value.takeaway.trim()].join('\n\n');
+  return parseTutorPayload(JSON.stringify({ answer, boardNotes: value.boardNotes }), now);
+}
 async function readRow(id: string): Promise<CacheRow> {
-  const [row] = await prisma.$queryRaw<CacheRow[]>`SELECT id, status, raw, token, "retryAt" FROM "KnowledgeExplanation" WHERE id = ${id}`;
+  const [row] = await prisma.$queryRaw<CacheRow[]>`SELECT id, status, raw, token, "retryAt", input, audio, "createdAt" FROM "KnowledgeExplanation" WHERE id = ${id}`;
   return row;
 }
 async function claim(id: string, input: ExplanationInput, token: string): Promise<boolean> {
-  const now = new Date(); const lease = new Date(now.getTime() + TUTOR_LEASE_MS);
+  const now = new Date();
+  const contentKey = explanationContentKey({ ...input, questionFingerprint: input.questionFingerprint ?? authoredQuestionFingerprint(input.question, evidenceFor(input)) });
   const rows = await prisma.$queryRaw<Array<{ id: string }>>`INSERT INTO "KnowledgeExplanation"
-    (id, status, input, token, "leaseUntil", "updatedAt") VALUES (${id}, 'RUNNING', ${JSON.stringify(input)}::jsonb, ${token}, ${lease}, ${now})
+    (id, status, input, token, "leaseUntil", "updatedAt", "contentKey") VALUES (${id}, 'RUNNING', ${JSON.stringify(input)}::jsonb, ${token}, ${new Date(now.getTime() + TUTOR_LEASE_MS)}, ${now}, ${contentKey})
     ON CONFLICT (id) DO UPDATE SET status = 'RUNNING', token = EXCLUDED.token, "leaseUntil" = EXCLUDED."leaseUntil", "updatedAt" = EXCLUDED."updatedAt", error = NULL
     WHERE ("KnowledgeExplanation".status = 'FAILED' AND "KnowledgeExplanation"."retryAt" <= ${now})
        OR ("KnowledgeExplanation".status = 'RUNNING' AND "KnowledgeExplanation"."leaseUntil" < ${now})
     RETURNING id`;
   return rows.length === 1;
 }
-async function generate(input: ExplanationInput, model: ResolvedModel, signal: AbortSignal): Promise<string> {
-  return withClassroomAiUsage({ feature: 'shared-explanation' }, async () => {
-    const result = await callLLM({ model: model.model, system: TUTOR_SYSTEM, prompt: explanationPrompt(input), abortSignal: signal, maxRetries: 0 }, 'knowledge-shared-explanation', undefined, model.thinkingConfig);
-    parseTutorPayload(result.text, new Date().toISOString());
-    return result.text;
-  });
-}
-
-/** SQL uniqueness + expiring owner token coalesce across workers and processes. */
+/** Background generation only. Student reads must use readPreparedExplanation. */
 export async function getSharedExplanation(input: ExplanationInput, model: ResolvedModel, signal: AbortSignal): Promise<string> {
   signal.throwIfAborted();
-  if (input.question.type === 'short_answer') throw new Error('SHARED_EXPLANATION_OBJECTIVE_ONLY');
-  if (!isDatabaseConfigured()) return generate(input, model, signal);
+  if (!isOrdinaryQuestion(input.question)) throw new Error('SHARED_EXPLANATION_OBJECTIVE_ONLY');
+  if (!isDatabaseConfigured()) throw new Error('SHARED_EXPLANATION_DATABASE_REQUIRED');
+  // Enumerate shared input: neither student identity nor a legacy answer enters storage or generation.
+  input = { classroomId: input.classroomId, sceneId: input.sceneId, question: input.question,
+    knowledgePointNames: input.knowledgePointNames, sourceEvidence: input.sourceEvidence,
+    questionFingerprint: input.questionFingerprint ?? authoredQuestionFingerprint(input.question, evidenceFor(input)) };
   const id = explanationCacheKey(input, model); const token = randomUUID();
   if (await claim(id, input, token)) {
     let raw: string | undefined;
     try {
-      // A previous model answer may be durable even when its completion ACK failed.
-      // Validate it under this exact cache key before spending another model call.
       const retained = await readRow(id);
       if (retained?.raw) {
-        try { parseTutorPayload(retained.raw, new Date().toISOString()); raw = retained.raw; }
-        catch { /* Invalid historical output is diagnostic evidence, not a cache hit. */ }
+        try { parsePreparedExplanation(retained.raw, input, new Date().toISOString()); raw = retained.raw; } catch { /* Keep malformed output as diagnostics. */ }
       }
       if (raw !== undefined) recordAiCacheEvent('shared-explanation', 'hit');
       else {
         recordAiCacheEvent('shared-explanation', 'miss');
-        // Route callers pass a server-owned deadline, never a browser-disconnect signal.
         const executionSignal = AbortSignal.any([signal, AbortSignal.timeout(TUTOR_EXECUTION_MS)]);
-        const result = await withClassroomAiUsage({ feature: 'shared-explanation' }, () => callLLM({ model: model.model, system: TUTOR_SYSTEM,
+        const result = await withClassroomAiUsage({ feature: 'shared-explanation' }, () => callLLM({ model: model.model, system: SYSTEM,
           prompt: explanationPrompt(input), abortSignal: executionSignal, maxRetries: 0 }, 'knowledge-shared-explanation', undefined, model.thinkingConfig));
-        raw = result.text;
-        executionSignal.throwIfAborted();
-        parseTutorPayload(raw, new Date().toISOString());
+        raw = result.text; executionSignal.throwIfAborted();
+        parsePreparedExplanation(raw, input, new Date().toISOString());
       }
       const count = await prisma.$executeRaw`UPDATE "KnowledgeExplanation" SET status = 'COMPLETED', raw = ${raw}, error = NULL,
         token = NULL, "leaseUntil" = NULL, "retryAt" = NULL, "updatedAt" = NOW() WHERE id = ${id} AND token = ${token} AND status = 'RUNNING'`;
@@ -106,7 +121,7 @@ export async function getSharedExplanation(input: ExplanationInput, model: Resol
     signal.throwIfAborted();
     const row = await readRow(id);
     if (row?.status === 'COMPLETED' && row.raw) {
-      parseTutorPayload(row.raw, new Date().toISOString());
+      parsePreparedExplanation(row.raw, input, new Date().toISOString());
       if (!joined) recordAiCacheEvent('shared-explanation', 'hit');
       return row.raw;
     }
@@ -115,23 +130,42 @@ export async function getSharedExplanation(input: ExplanationInput, model: Resol
     await sleep(500, undefined, { signal });
   }
 }
-
-/** Multi-select feedback shares each option's explanation, then composes the exact answer deterministically. */
-export async function objectiveExplanation(input: ExplanationInput, model: ResolvedModel, signal: AbortSignal): Promise<string> {
-  if (input.question.type !== 'multiple' || !input.question.options?.length) return getSharedExplanation(input, model, signal);
-  const selected = new Set(Array.isArray(input.answer) ? input.answer : [input.answer]);
-  const correct = new Set(input.question.answer ?? []);
-  const answers: string[] = [];
-  const notes: ReturnType<typeof parseTutorPayload>['notes'] = [];
-  const optionResults = await Promise.all(input.question.options.map(async option => {
-    const raw = await getSharedExplanation({ ...input, answer: option.value, mode: 'option' }, model, signal);
-    const payload = parseTutorPayload(raw, new Date().toISOString());
-    return { option, payload };
-  }));
-  for (const { option, payload } of optionResults) {
-    const marker = selected.has(option.value) ? correct.has(option.value) ? '已选，选择正确' : '已选，此项不应选' : correct.has(option.value) ? '未选，此项应选' : '未选，判断正确';
-    answers.push(`${option.value}. ${option.label}（${marker}）\n${payload.answer}`);
-    notes.push(...payload.notes);
+function resource(row: CacheRow, input: ExplanationInput, fingerprint?: string): KnowledgeLectureExplanation {
+  const parsed = parsePreparedExplanation(row.raw!, input, new Date(row.createdAt ?? 0).toISOString());
+  return { id: row.id, questionFingerprint: fingerprint ?? input.questionFingerprint ?? authoredQuestionFingerprint(input.question, evidenceFor(input)),
+    text: parsed.answer, boardNotes: parsed.notes, source: 'prepared' };
+}
+/** Pure resource lookup: no model resolution, lease, job, personalized task, or generation. */
+export async function readPreparedExplanation(input: { classroomId: string; sceneId: string; questionFingerprint: string }): Promise<KnowledgeLectureExplanation | null> {
+  if (!isDatabaseConfigured()) return null;
+  const contentKey = explanationContentKey(input);
+  const rows = await prisma.$queryRaw<CacheRow[]>`SELECT id, status, raw, input, audio, "createdAt" FROM "KnowledgeExplanation"
+    WHERE "contentKey" = ${contentKey} AND status = 'COMPLETED' ORDER BY "createdAt" DESC LIMIT 3`;
+  for (const row of rows) {
+    if (!row.raw || !row.input) continue;
+    try {
+      if (row.input.classroomId !== input.classroomId || row.input.sceneId !== input.sceneId) continue;
+      // SQL already matched the source fingerprint's contentKey. Rehashing a
+      // JSONB object would reject valid resources solely due to key order.
+      const result = resource(row, row.input, input.questionFingerprint);
+      if (row.audio) {
+        const { readableExplanationAudio } = await import('./knowledge-explanation-audio');
+        Object.assign(result, await readableExplanationAudio(input.classroomId, row.audio));
+      }
+      recordAiCacheEvent('shared-explanation', 'hit');
+      return result;
+    } catch { /* Bad historical resource cannot replace the original authored reference. */ }
   }
-  return JSON.stringify({ answer: answers.join('\n\n'), boardNotes: notes.slice(0, 2).map(({ title, body, kind }) => ({ title, body, kind })) });
+  recordAiCacheEvent('shared-explanation', 'miss');
+  return null;
+}
+/** Text survives audio failures. Retrying the same job only completes its missing audio. */
+export async function prepareKnowledgeExplanation(input: ExplanationInput, model: ResolvedModel, signal: AbortSignal): Promise<KnowledgeLectureExplanation> {
+  const raw = await getSharedExplanation(input, model, signal);
+  const id = explanationCacheKey(input, model);
+  const row = await readRow(id);
+  const result = resource({ ...row, id, raw }, input);
+  const { prepareExplanationAudio } = await import('./knowledge-explanation-audio');
+  Object.assign(result, await prepareExplanationAudio({ id, classroomId: input.classroomId, text: result.text, audio: row?.audio }, signal));
+  return result;
 }

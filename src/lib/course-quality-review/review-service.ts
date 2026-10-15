@@ -6,6 +6,7 @@ import { isValidClassroomId, readClassroom, type PersistedClassroomData } from '
 import { getNewSystemCourseReadiness } from '@/lib/classroom/new-system-course';
 import { auditCourseGeneratedResources, type CourseResourceIssue } from '@/lib/course-generation/resource-audit-server';
 import { computeCourseQualitySignature } from './signature';
+import { hasAuthenticCourseAudioPublication } from './audio-publication';
 import { collectCourseStructureIssues } from './semantic-review';
 import { COURSE_QUALITY_REVIEW_POLICY_VERSION, type CourseQualityIssue, type CourseQualityReport } from './types';
 import { COURSE_RENDER_REVIEW_POLICY_VERSION, isAdvisoryCourseReadinessCheck, isTechnicalCourseResourceIssue, unresolvedHardIssues, type CourseRenderPageReview, type CourseRenderReview, type CourseTeacherReview } from './teacher-review';
@@ -150,11 +151,16 @@ export async function assertCourseTeacherReview(course: Course, teacherId?: stri
   const review = course.content.teacherReview;
   if (!review || !isAuthenticTeacherReview(review) || (teacherId && review.teacherId !== teacherId)) throw new CourseReviewError('TEACHER_REVIEW_REQUIRED', '请先在预览发布页面完成教师终审。');
   const classroomId = course.aiLearningClassroomId || course.content._openmaicClassroomId;
-  if (!classroomId || classroomId !== review.classroomId || !isValidClassroomId(classroomId)) throw new CourseReviewError('REVIEW_STALE', '课堂资源已变更，请重新进行教师终审。');
+  if (!classroomId || !isValidClassroomId(classroomId)) throw new CourseReviewError('REVIEW_STALE', '课堂资源已变更，请重新进行教师终审。');
   const classroom = await readClassroom(classroomId);
   // A copied template may retain a valid review of exactly the same teaching
   // content. Its stamp keeps the original authoring course id in the hash.
-  if (!classroom || !classroom.scenes.length || computeCourseQualitySignature({ ...course, id: review.courseId }, classroom) !== review.signature) throw new CourseReviewError('REVIEW_STALE', '课程内容已变更，请重新进行教师终审。');
+  if (!classroom || !classroom.scenes.length) throw new CourseReviewError('REVIEW_STALE', '课程内容已变更，请重新进行教师终审。');
+  const unchangedReview = classroomId === review.classroomId
+    && computeCourseQualitySignature({ ...course, id: review.courseId }, classroom) === review.signature;
+  if (!unchangedReview && !hasAuthenticCourseAudioPublication(course, classroom, teacherId)) {
+    throw new CourseReviewError('REVIEW_STALE', '课程内容已变更，请重新进行教师终审。');
+  }
   const hard = unresolvedHardIssues(collectCourseStructureIssues(course, classroom.scenes, { includePresentation: false })
     .filter(isTechnicalStructureIssue));
   if (hard.length) throw new CourseReviewError('COURSE_HARD_ERRORS', hard.map((issue) => issue.title).join('；'));

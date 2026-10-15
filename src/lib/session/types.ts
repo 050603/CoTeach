@@ -1,6 +1,7 @@
 // Domain types for the CoTeach classroom.
 
 import type { PblCourseConfig } from "@/lib/pbl-course-config";
+import type { CourseMindMap } from "@/lib/course-mind-map/types";
 import type {
   PblDetailKind,
   PblTtsPolicy,
@@ -489,6 +490,7 @@ export type LearningEventType =
   | "scene-complete"
   | "heartbeat"
   | "scene-replay"
+  | "knowledge_explanation_view"
   | "interaction-result"
   | "artifact-change"
   | "stage-enter"
@@ -1129,6 +1131,9 @@ export type KnowledgeLectureQuestionReview = {
   /** Exact submitted value, retained for retries and multi-select review. */
   rawAnswer?: string | string[];
   questionType?: "single" | "multiple" | "matching" | "short_answer";
+  questionFormat?: import("@openmaic/dsl").QuizQuestion['format'];
+  /** Original authored analysis, independent of personalized grading feedback. */
+  authoredAnalysis?: string;
   /** Authored question plus adopted source version at immutable submission time. */
   authoredQuestionFingerprint?: string;
   gradingRubric?: string;
@@ -1620,6 +1625,8 @@ export type CourseContent = {
   knowledgeScopePlan?: KnowledgeScopePlan;
   knowledgePoints: KnowledgePoint[];
   knowledgeGraph?: KnowledgeGraph;
+  /** Derived conceptual hierarchy and narration bindings; not assessment targets. */
+  courseMindMap?: CourseMindMap;
   /** Private, traceable curriculum compilation artifact. Student projections remove it. */
   teachingBlueprint?: TeachingBlueprint;
   /** Durable authoring decisions; an elapsed intervention window is never represented as teacher confirmation. */
@@ -1639,6 +1646,8 @@ export type CourseContent = {
     affectedSceneIds: string[];
     invalidated: Array<"audio" | "narration-anchors" | "timing-audit" | "actions" | "assessment-opportunity">;
     updatedAt: string;
+    /** Server-issued receipt for an authorized audio-only publication; not a new teacher review. */
+    audioPublication?: import("@/lib/course-quality-review/audio-publication").CourseAudioPublication;
   };
   /** Teacher-private dependency state for the post-generation design workspace. */
   designWorkspaceRevision?: CourseDesignWorkspaceRevision;

@@ -13,6 +13,7 @@ export const KNOWLEDGE_STRUCTURE_ATTEMPT_STEP = "course-design-attempt:knowledge
 export const AI_DURATION_STEP = "course-design:ai-duration";
 export const AI_DURATION_ATTEMPT_STEP = "course-design-attempt:ai-duration";
 export const COURSE_FINALIZATION_STEP = "course-finalization";
+export const COURSE_MIND_MAP_STEP = "course-design:mind-map";
 export async function loadGenerationCheckpoints(jobId: string) {
   const rows = await prisma.generationCheckpoint.findMany({ where: { jobId } });
   return {
@@ -30,6 +31,7 @@ export async function loadGenerationCheckpoints(jobId: string) {
     spokenSections: rows.filter((row) => /^(?:design-authoring|course-design-attempt|course-design):spoken-section:\d+$/u.test(row.step))
       .map((row) => ({ step: row.step, state: row.state })),
     courseFinalization: rows.find((row) => row.step === COURSE_FINALIZATION_STEP)?.state ?? null,
+    courseMindMap: rows.find((row) => row.step === COURSE_MIND_MAP_STEP)?.state ?? null,
     sourceNarrationBaseline: rows.find((row) => row.step === SOURCE_NARRATION_BASELINE_STEP)?.state ?? null,
     authoringHistory: rows.filter((row) => /^authoring-history:v\d+:usage-summary$/u.test(row.step)).map((row) => {
       const prefix = row.step.slice(0, -'usage-summary'.length);

@@ -11,6 +11,7 @@ import type {
 } from "./action-binding-types";
 import { isValidSlideVisualTarget } from "./semantic-visual-cues";
 import { findSpeechCueAnchorRange } from "./speech-cue-boundaries";
+import type { TeachingToolPlanItem } from "@openmaic/lib/types/generation";
 
 export interface VisualActionCue {
   id: string;
@@ -47,6 +48,8 @@ export interface ActionBindingIssue {
 export interface ActionCompilationResult {
   actions: Action[];
   issues: ActionBindingIssue[];
+  /** Adopted tool contracts, including each progressive whiteboard group. */
+  teachingToolPlan?: TeachingToolPlanItem[];
 }
 
 function quoteOccurrenceExists(text: string, quote: string, occurrence = 0): boolean {

@@ -1,4 +1,5 @@
 import type { Action, WbDrawLineAction } from '@openmaic/lib/types/action';
+import { orderedActionExecutionEntries } from './action-timeline';
 
 export const WHITEBOARD_WIDTH = 1000;
 export const WHITEBOARD_HEIGHT = 562.5;
@@ -212,7 +213,7 @@ export function auditWhiteboardLayout(actions: readonly Action[]): WhiteboardLay
       }
     }
   };
-  for (const action of actions) {
+  for (const { action } of orderedActionExecutionEntries(actions)) {
     if (action.type === 'wb_clear') {
       visible.clear();
       continue;
@@ -244,7 +245,7 @@ export function auditWhiteboardLayout(actions: readonly Action[]): WhiteboardLay
           || box.top + box.height > WHITEBOARD_HEIGHT + 0.01) {
           report({ code: 'out-of-bounds', message: '白板内容超出 1000 × 562.5 画布，请调整尺寸或使用新的一页。', actionIds: [action.id] });
         }
-        if (action.type === 'wb_draw_text' && ((action.fontSize ?? 18) < 12 || textWillClip(action, box))) {
+        if (action.type === 'wb_draw_text' && ((action.fontSize ?? 18) < (action.speechId ? 24 : 12) || textWillClip(action, box))) {
           report({ code: 'unreadable-content', message: '文字过小或超出文本框，请增大文本框或拆分内容。', actionIds: [action.id] });
         }
       }

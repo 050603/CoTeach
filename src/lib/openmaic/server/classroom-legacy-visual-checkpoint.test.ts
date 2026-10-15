@@ -197,7 +197,7 @@ describe('completed PPT checkpoints from the previous visual authoring policy', 
 
   it.each([true, false])('restores every fallback page without another PPT call (independent narration=%s)', async (independent) => {
     if (independent) mocks.ai.mockImplementation(async (system: string, prompt: string) => {
-      if (!system.includes('MANUSCRIPT_VISUAL_ACTIONS_V1')) throw new Error('fresh PPT or narration authoring was invoked');
+      if (!system.includes('MANUSCRIPT_VISUAL_ACTIONS_V3')) throw new Error('fresh PPT or narration authoring was invoked');
       return JSON.stringify({ pageId: JSON.parse(prompt).pageId, cues: [] });
     });
     const source: SceneOutline = independent ? { ...page, teachingBrief: { ...page.teachingBrief!,

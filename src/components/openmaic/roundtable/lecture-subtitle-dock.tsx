@@ -20,9 +20,12 @@ import type { EngineMode } from '@openmaic/lib/playback';
 import { cn } from '@openmaic/lib/utils';
 import { useStageStore } from '@openmaic/lib/store';
 import { KnowledgeGraphFlow } from '@/components/knowledge-graph-flow';
+import { CourseMindMapFlow } from '@/components/course-mind-map-flow';
+import { useActiveCourseMindMapNode } from '@/components/openmaic-bridge/course-mind-map-focus';
 import { CourseKnowledgeGraphButton } from './course-knowledge-graph-button';
 import { useTeachingKnowledgeGraph } from '@/components/openmaic-bridge/knowledge-graph-context';
 import { normalizeNarrationPunctuation } from '@openmaic/lib/generation/narration-punctuation';
+import { LectureChat } from '@/components/openmaic-bridge/lecture-chat';
 
 export type LectureCueAlignment = {
   status: 'pending' | 'aligned' | 'failed';
@@ -48,6 +51,8 @@ interface LectureSubtitleDockProps {
   readonly activeActionIndex: number;
   readonly currentText: string;
   readonly speechProgress?: number;
+  readonly mediaTimeMs?: number | null;
+  readonly quizWaiting?: boolean;
   readonly teacherAvatar: string;
   readonly teacherName: string;
   readonly engineMode: EngineMode;
@@ -295,6 +300,8 @@ export function LectureSubtitleDock({
   activeActionIndex,
   currentText,
   speechProgress = 0,
+  mediaTimeMs,
+  quizWaiting = false,
   teacherAvatar,
   teacherName,
   engineMode,
@@ -326,7 +333,8 @@ export function LectureSubtitleDock({
   const didDragRef = useRef(false);
   const [isBrowsingSubtitles, setIsBrowsingSubtitles] = useState(false);
   const currentScene = useStageStore((state) => state.getCurrentScene());
-  const { graph, points } = useTeachingKnowledgeGraph();
+  const { graph, points, mindMap } = useTeachingKnowledgeGraph();
+  const activeConceptId = useActiveCourseMindMapNode({ activeActionIndex, mediaTimeMs, quizWaiting });
   const displayCues = useMemo(
     () => mergeFragmentedLectureCues(
       cues.length ? cues : currentText ? [{ actionIndex: -1, text: currentText }] : [],
@@ -352,7 +360,7 @@ export function LectureSubtitleDock({
     if (direct) return direct;
     return graph?.nodes.find((node) => node.relatedLessonIds?.includes(currentScene?.id ?? ''))?.id ?? null;
   }, [currentScene?.id, currentScene?.knowledgePointIds, graph?.nodes, points]);
-  const hasKnowledgeGraph = Boolean(graph?.nodes.length || points.length);
+  const hasKnowledgeGraph = Boolean(mindMap?.nodes.length || graph?.nodes.length || points.length);
 
   const revealSubtitleHistory = useCallback(() => {
     setIsBrowsingSubtitles(true);
@@ -429,7 +437,14 @@ export function LectureSubtitleDock({
       aria-label="AI 授课字幕与播放控制"
       className={cn(responsiveStyles.dock, "relative z-10 flex min-h-0 w-full shrink-0 overflow-hidden border-t border-slate-200/80 bg-white/96 dark:border-white/10 dark:bg-slate-950/96 xl:h-full xl:w-[19rem] xl:border-l xl:border-t-0 xl:bg-[linear-gradient(180deg,rgba(255,255,255,0.98)_0%,rgba(252,254,253,0.97)_48%,rgba(241,249,246,0.94)_76%,rgba(255,255,255,0.98)_100%)] xl:dark:bg-[linear-gradient(180deg,rgba(2,6,23,0.98)_0%,rgba(8,20,31,0.97)_52%,rgba(10,36,34,0.82)_76%,rgba(2,6,23,0.98)_100%)]")}
     >
-      <div className="grid h-full min-h-0 min-w-0 flex-1 grid-rows-[auto_auto_minmax(0,1fr)_auto_auto] overflow-hidden">
+      <LectureChat activeActionIndex={activeActionIndex} mediaTimeMs={mediaTimeMs} engineMode={engineMode}
+        knowledgeLabel={points.find((point) => point.id === activeKnowledgePointId)?.name
+          || graph?.nodes.find((node) => node.id === activeKnowledgePointId)?.label || currentScene?.title}
+        onPlayPause={onPlayPause}>
+        {(lectureChat) => <div className="grid h-full min-h-0 min-w-0 flex-1 grid-rows-[auto_auto_minmax(0,1fr)_auto_auto_auto] overflow-hidden"
+          data-lecture-chat-expanded={lectureChat.expanded ? 'true' : undefined}
+          data-lecture-chat-context={lectureChat.hasContext ? 'true' : undefined}
+          data-lecture-chat-active={lectureChat.active ? 'true' : undefined}>
         <header className="flex items-center gap-3 px-4 pt-3 xl:items-start xl:px-5 xl:pt-4" data-rail-header>
           <div className="relative h-11 w-11 shrink-0 overflow-hidden rounded-[14px] bg-[#edf5f2] ring-1 ring-slate-900/8 dark:ring-white/10 xl:h-12 xl:w-12">
             <img alt={teacherName} className="h-full w-full object-cover" src={teacherAvatar} />
@@ -462,7 +477,6 @@ export function LectureSubtitleDock({
           <span className="pt-1 text-[11px] font-semibold tabular-nums text-slate-400">
             {Math.max(1, sceneIndex + 1)} / {Math.max(1, scenesCount)}
           </span>
-          <CourseKnowledgeGraphButton />
         </header>
 
         <div className="my-3 h-px bg-slate-100 dark:bg-white/8 xl:my-4" data-rail-divider />
@@ -470,10 +484,11 @@ export function LectureSubtitleDock({
         <div
           className={cn(
             'relative min-h-0 min-w-0 overflow-hidden px-4 xl:px-5',
-            hasKnowledgeGraph && 'xl:grid xl:grid-rows-[minmax(0,3fr)_minmax(0,2fr)]',
+            !lectureChat.expanded && hasKnowledgeGraph && 'grid grid-rows-[minmax(0,1fr)_auto] xl:grid-rows-[minmax(0,3fr)_minmax(0,2fr)]',
           )}
           data-teaching-rail-content
         >
+          {lectureChat.expanded ? lectureChat.transcript : <>
           <div className="relative h-[112px] min-h-0 min-w-0 overflow-hidden xl:h-full" data-subtitle-viewport-frame>
             <div
               aria-live="polite"
@@ -530,13 +545,22 @@ export function LectureSubtitleDock({
           </div>
 
           {hasKnowledgeGraph ? (
-            <div className="hidden min-h-0 xl:-mx-5 xl:block xl:overflow-hidden">
+            <div className="min-h-0 xl:-mx-5 xl:overflow-hidden">
               <div
                 aria-label="课程思维导图缩略图"
-                className={cn('relative h-full min-h-0 w-full overflow-hidden', responsiveStyles.mindMapPreview)}
+                className={cn('relative flex h-11 min-h-0 w-full items-center overflow-hidden xl:block xl:h-full', responsiveStyles.mindMapPreview)}
               >
-                <div className={cn('pointer-events-none absolute inset-0', responsiveStyles.mindMapCanvas)}>
-                  <KnowledgeGraphFlow
+                <span className="pl-2 text-xs font-medium text-slate-500 dark:text-slate-300 xl:hidden">课程思维导图</span>
+                <div className={cn('pointer-events-none absolute inset-0 hidden xl:block', responsiveStyles.mindMapCanvas)}>
+                  {mindMap?.nodes.length ? <CourseMindMapFlow
+                    activeNodeId={activeConceptId}
+                    compact
+                    fillAvailableHeight
+                    focusActiveNode
+                    map={mindMap}
+                    showControls={false}
+                    showMiniMap={false}
+                  /> : <KnowledgeGraphFlow
                     activeNodeId={activeKnowledgePointId}
                     activeZoom={0.76}
                     appearance="teaching-rail"
@@ -547,11 +571,15 @@ export function LectureSubtitleDock({
                     points={points}
                     showControls={false}
                     showMiniMap={false}
-                  />
+                  />}
+                </div>
+                <div className="absolute right-0 top-0 z-10 xl:right-2 xl:top-2">
+                  <CourseKnowledgeGraphButton activeActionIndex={activeActionIndex} mediaTimeMs={mediaTimeMs} quizWaiting={quizWaiting} />
                 </div>
               </div>
             </div>
           ) : null}
+          </>}
         </div>
 
         {interactionAssistance?.active ? (
@@ -580,6 +608,8 @@ export function LectureSubtitleDock({
           </div>
         ) : null}
 
+        {lectureChat.entry}
+
         <div
           className="relative z-20 mt-3 flex shrink-0 items-center justify-between border-t border-slate-100 bg-white/98 px-4 pb-3 pt-3 dark:border-white/8 dark:bg-slate-950/98 xl:mt-4 xl:flex-col xl:items-stretch xl:gap-4 xl:px-5 xl:pb-4 xl:pt-4"
           data-subtitle-controls
@@ -594,7 +624,7 @@ export function LectureSubtitleDock({
             <button
               aria-label={isPlaying ? '暂停讲解' : '继续讲解'}
               className="mx-1 grid h-11 w-11 place-items-center rounded-full bg-teal-700 text-white transition hover:bg-teal-800 active:scale-95 dark:bg-teal-500 dark:text-slate-950"
-              onClick={onPlayPause}
+              onClick={lectureChat.onPlayPause}
               type="button"
             >
               {isPlaying ? <Pause size={18} fill="currentColor" /> : <Play className="ml-0.5" size={18} fill="currentColor" />}
@@ -637,7 +667,8 @@ export function LectureSubtitleDock({
             </button>
           </div>
         </div>
-      </div>
+      </div>}
+      </LectureChat>
 
     </aside>
   );

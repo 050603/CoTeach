@@ -12,6 +12,7 @@ import type { CanvasToolbarProps } from '@openmaic/components/canvas/canvas-tool
 import type { Scene, StageMode } from '@openmaic/lib/types/stage';
 import { useI18n } from '@openmaic/lib/hooks/use-i18n';
 import { ClassroomCompletePageConnected } from '@openmaic/components/scene-renderers/classroom-complete';
+import { useWhiteboardPagesStore } from '@openmaic/lib/store/whiteboard-pages';
 
 interface CanvasAreaProps extends CanvasToolbarProps {
   readonly currentScene: Scene | null;
@@ -60,16 +61,23 @@ export function CanvasArea({
   autoAdvancePending = false,
 }: CanvasAreaProps) {
   const { t } = useI18n();
-  const whiteboardWasOpened = useRef(false);
+  const whiteboardOpenedPage = useRef<string | null>(null);
+  const savedPages = useWhiteboardPagesStore((state) => state.pages);
+  const reviewPageId = useWhiteboardPagesStore((state) => state.reviewPageId);
+  const reviewStageId = useWhiteboardPagesStore((state) => state.reviewStageId);
+  const stageId = currentScene?.stageId;
+  const pageScope = currentScene ? JSON.stringify([stageId, currentScene.id]) : null;
+  const retainedPages = savedPages.filter((page) => page.stageId === stageId && page.sceneId === currentScene?.id);
+  const reviewingPage = reviewStageId === stageId && retainedPages.some((page) => page.id === reviewPageId);
+  const whiteboardVisible = whiteboardOpen || reviewingPage;
   useEffect(() => {
-    if (whiteboardOpen) whiteboardWasOpened.current = true;
-  }, [whiteboardOpen]);
-  const showControls = mode === 'playback' && !whiteboardOpen && !readOnly && !minimalToolbar;
+    if (whiteboardOpen && pageScope) whiteboardOpenedPage.current = pageScope;
+  }, [whiteboardOpen, pageScope]);
+  const showControls = mode === 'playback' && !whiteboardVisible && !readOnly && !minimalToolbar;
   const showWhiteboardRestore =
-    !whiteboardOpen &&
-    whiteboardWasOpened.current &&
+    !whiteboardVisible &&
     !readOnly &&
-    Boolean(hideToolbar || minimalToolbar);
+    (retainedPages.length > 0 || (pageScope !== null && whiteboardOpenedPage.current === pageScope && Boolean(hideToolbar || minimalToolbar)));
   const showPlayHint =
     showControls &&
     engineState !== 'playing' &&
@@ -101,6 +109,17 @@ export function CanvasArea({
     },
     [showControls, isLiveSession, autoAdvancePending, onPlayPause, currentScene?.type],
   );
+
+  const handleWhiteboardToggle = () => {
+    if (reviewingPage) {
+      useWhiteboardPagesStore.getState().closeReview();
+      if (whiteboardOpen) onWhiteboardClose();
+    } else if (!whiteboardOpen && retainedPages.length > 0) {
+      useWhiteboardPagesStore.getState().reviewPage(retainedPages.at(-1)!.id);
+    } else {
+      onWhiteboardClose();
+    }
+  };
 
   return (
     <div className={cn(
@@ -138,7 +157,7 @@ export function CanvasArea({
 
 
           {/* Scene Content */}
-          {currentScene && !whiteboardOpen && (
+          {currentScene && !whiteboardVisible && (
             <div className="absolute inset-0">
               <SceneProvider>
                 <SceneRenderer scene={currentScene} mode={mode} />
@@ -223,7 +242,7 @@ export function CanvasArea({
             {showWhiteboardRestore && (
               <motion.button
                 type="button"
-                aria-label="重新打开白板"
+                aria-label={retainedPages.length > 0 ? t('whiteboard.reviewPages') : '重新打开白板'}
                 initial={{ opacity: 0, y: 8 }}
                 animate={{ opacity: 1, y: 0 }}
                 exit={{ opacity: 0, y: 8 }}
@@ -231,11 +250,11 @@ export function CanvasArea({
                 className="absolute bottom-4 right-4 z-[115] inline-flex h-9 items-center gap-2 rounded-full border border-violet-200 bg-white/95 px-3 text-xs font-semibold text-violet-700 shadow-lg backdrop-blur transition hover:bg-violet-50 focus:outline-none focus:ring-2 focus:ring-violet-400 dark:border-violet-700 dark:bg-gray-800/95 dark:text-violet-300 dark:hover:bg-violet-950/50"
                 onClick={(event) => {
                   event.stopPropagation();
-                  onWhiteboardClose();
+                  handleWhiteboardToggle();
                 }}
               >
                 <Maximize2 className="h-3.5 w-3.5" />
-                重新打开白板
+                {retainedPages.length > 0 ? `${t('whiteboard.reviewPages')} · ${retainedPages.length}` : '重新打开白板'}
               </motion.button>
             )}
           </AnimatePresence>
@@ -303,7 +322,7 @@ export function CanvasArea({
           scenesCount={scenesCount}
           engineState={engineState}
           isLiveSession={isLiveSession}
-          whiteboardOpen={whiteboardOpen}
+          whiteboardOpen={whiteboardVisible}
           sidebarCollapsed={sidebarCollapsed}
           chatCollapsed={chatCollapsed}
           onToggleSidebar={onToggleSidebar}
@@ -311,7 +330,7 @@ export function CanvasArea({
           onPrevSlide={onPrevSlide}
           onNextSlide={onNextSlide}
           onPlayPause={onPlayPause}
-          onWhiteboardClose={onWhiteboardClose}
+          onWhiteboardClose={handleWhiteboardToggle}
           isPresenting={isPresenting}
           onTogglePresentation={onTogglePresentation}
           showStopDiscussion={showStopDiscussion}

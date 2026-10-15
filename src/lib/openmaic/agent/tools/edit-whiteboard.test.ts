@@ -145,4 +145,31 @@ describe('edit_whiteboard tool', () => {
     await expect(gate({ toolCall: { name: 'edit_whiteboard' } } as never)).resolves.toBeUndefined();
     await expect(gate({ toolCall: { name: 'delete_scene' } } as never)).resolves.toMatchObject({ block: true });
   });
+
+  it('retains narration bindings through schema parsing, scoped edits and later reads', async () => {
+    const bound: Action[] = [
+      { id: 'timed-board', type: 'wb_open', speechId: 's7', speechAnchor: { quote: '开始' } },
+      { id: 'timed-note', type: 'wb_draw_text', elementId: 'timed-note', content: '原要点', x: 60, y: 60, fontSize: 24, speechId: 's7', speechAnchor: { quote: '要点' }, speechOffsetMs: 2200 },
+      { id: 's7', type: 'speech', text: '开始解释要点。', audioUrl: '/s7.wav' },
+      { id: 'timed-close', type: 'wb_close', speechId: 's8', speechAnchor: { quote: '回到PPT' } },
+      { id: 's8', type: 'speech', text: '回到PPT讲解。', audioUrl: '/s8.wav' },
+    ];
+    const same = prepareWhiteboardPatch(bound, 'timed-board', [bound[1]]);
+    expect(same.steps[0]).toEqual(bound[1]);
+    const omitted = prepareWhiteboardPatch(bound, 'timed-board', [{ id: 'timed-note', type: 'wb_draw_text', content: '关键要点', x: 60, y: 60, fontSize: 24 }]);
+    expect(omitted.steps[0]).toMatchObject({ speechId: 's7', speechAnchor: { quote: '要点' }, speechOffsetMs: 2200 });
+    expect(() => prepareWhiteboardPatch(bound, 'timed-board', [{ id: 's7', type: 'speech', text: '覆盖原稿' }])).toThrow();
+    expect(() => prepareWhiteboardPatch(bound, 'timed-board', [{ ...bound[1], speechAnchor: { quote: '不存在' } }])).toThrow(/锚点/);
+    ctx.actions = bound;
+    const result = await makeEditWhiteboardTool(deps).execute('timed-edit', { sceneId: 'scene', boardId: 'timed-board', steps: [
+      { id: 'timed-note', type: 'wb_draw_text', content: '关键要点', x: 60, y: 60, fontSize: 24 },
+    ] });
+    expect(result.details.error).toBeUndefined();
+    expect(result.details.whiteboardPatch?.steps[0]).toMatchObject({ speechId: 's7', speechAnchor: { quote: '要点' }, speechOffsetMs: 2200 });
+    expect(ctx.actions?.filter((action) => action.type === 'speech')).toEqual([bound[2], bound[4]]);
+    const read = await makeReadSceneContentTool(deps).execute('timed-read', { sceneId: 'scene' });
+    expect(JSON.stringify(read.content)).toContain('speechBound');
+    expect(JSON.stringify(read.content)).toContain('开始解释要点');
+    expect(JSON.stringify(read.content)).not.toContain('/s7.wav');
+  });
 });

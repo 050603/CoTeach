@@ -34,6 +34,7 @@ type InteractiveWhiteboardCanvasProps = {
   containerScale: number;
   elements: PPTElement[];
   isClearing: boolean;
+  staticPage?: boolean;
   onViewModifiedChange?: (modified: boolean) => void;
   readyHintText: string;
   readyText: string;
@@ -44,19 +45,23 @@ function AnimatedElementBase({
   index,
   isClearing,
   totalElements,
+  staticPage,
 }: {
   element: PPTElement;
   index: number;
   isClearing: boolean;
   totalElements: number;
+  staticPage?: boolean;
 }) {
+  const mediaTransition = useCanvasStore.use.whiteboardInstantTransition();
+  const instantTransition = staticPage || mediaTransition;
   const clearDelay = isClearing ? (totalElements - 1 - index) * 0.055 : 0;
   const clearRotate = isClearing ? (index % 2 === 0 ? 1 : -1) * (2 + index * 0.4) : 0;
 
   return (
     <motion.div
       layout={false}
-      initial={{ opacity: 0, scale: 0.92, y: 8, filter: 'blur(4px)' }}
+      initial={instantTransition ? false : { opacity: 0, scale: 0.92, y: 8, filter: 'blur(4px)' }}
       animate={
         isClearing
           ? {
@@ -78,22 +83,22 @@ function AnimatedElementBase({
               rotate: 0,
               filter: 'blur(0px)',
               transition: {
-                duration: 0.45,
+                duration: instantTransition ? 0 : 0.45,
                 ease: [0.16, 1, 0.3, 1],
-                delay: index * 0.05,
+                delay: instantTransition ? 0 : index * 0.05,
               },
             }
       }
       exit={{
         opacity: 0,
         scale: 0.85,
-        transition: { duration: 0.2 },
+        transition: { duration: instantTransition ? 0 : 0.2 },
       }}
       className="absolute inset-0"
       style={{ pointerEvents: isClearing ? 'none' : undefined }}
     >
       <div style={{ pointerEvents: 'auto' }}>
-        <WhiteboardElement element={element} animate />
+        <WhiteboardElement element={element} animate={!instantTransition} />
       </div>
     </motion.div>
   );
@@ -120,6 +125,7 @@ const InteractiveWhiteboardCanvas = forwardRef<
     containerScale,
     elements,
     isClearing,
+    staticPage,
     onViewModifiedChange,
     readyHintText,
     readyText,
@@ -380,6 +386,7 @@ const InteractiveWhiteboardCanvas = forwardRef<
                 index={index}
                 isClearing={isClearing}
                 totalElements={elements.length}
+                staticPage={staticPage}
               />
             ))}
           </AnimatePresence>
@@ -394,10 +401,12 @@ const InteractiveWhiteboardCanvas = forwardRef<
  */
 export type WhiteboardCanvasProps = {
   onViewModifiedChange?: (modified: boolean) => void;
+  /** Reviewing a page never replaces or animates the live narration board. */
+  elementsOverride?: PPTElement[];
 };
 
 export const WhiteboardCanvas = forwardRef<WhiteboardCanvasHandle, WhiteboardCanvasProps>(
-  function WhiteboardCanvas({ onViewModifiedChange }, ref) {
+  function WhiteboardCanvas({ onViewModifiedChange, elementsOverride }, ref) {
     const { t } = useI18n();
     const stage = useStageStore.use.stage();
     const currentSceneId = useStageStore.use.currentSceneId();
@@ -409,7 +418,7 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasHandle, WhiteboardCan
     const whiteboard = activeWhiteboardId
       ? stage?.whiteboard?.find((item) => item.id === activeWhiteboardId)
       : stage?.whiteboard?.at(-1);
-    const rawElements = whiteboard?.elements;
+    const rawElements = elementsOverride ?? whiteboard?.elements;
     const elements = useMemo(() => rawElements ?? [], [rawElements]);
 
     // Each scene owns an independent board page. Within that page the surface
@@ -459,7 +468,8 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasHandle, WhiteboardCan
           containerHeight={containerSize.height}
           containerScale={containerScale}
           elements={elements}
-          isClearing={isClearing}
+          isClearing={elementsOverride ? false : isClearing}
+          staticPage={Boolean(elementsOverride)}
           onViewModifiedChange={onViewModifiedChange}
           readyHintText={t('whiteboard.readyHint')}
           readyText={t('whiteboard.ready')}

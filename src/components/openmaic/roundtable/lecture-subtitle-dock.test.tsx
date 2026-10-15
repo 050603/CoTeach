@@ -213,7 +213,10 @@ describe('teaching rail layout', () => {
           teacherAvatar="/teacher.webp" teacherName="知知" />
       </TeachingKnowledgeGraphProvider>,
     );
-    fireEvent.click(screen.getByRole('button', { name: '完整浏览课程思维导图' }));
+    const graphTrigger = screen.getByRole('button', { name: '完整浏览课程思维导图' });
+    expect(screen.getByLabelText('课程思维导图缩略图')).toContainElement(graphTrigger);
+    expect(document.querySelector('[data-rail-header]')).not.toContainElement(graphTrigger);
+    fireEvent.click(graphTrigger);
     const dialog = screen.getByRole('dialog', { name: '课程思维导图' });
     const canvas = within(dialog).getByRole('application').closest('.knowledge-graph-canvas') as HTMLElement;
     expect(canvas.style.minHeight).toBe('');

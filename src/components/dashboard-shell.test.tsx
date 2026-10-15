@@ -45,6 +45,25 @@ describe("DashboardShell immersive mode", () => {
     render(<DashboardShell role="student"><div>任务页面</div></DashboardShell>);
     expect(screen.getByRole("banner")).toBeTruthy();
     expect(screen.getByText("任务页面")).toBeTruthy();
+    expect(screen.getByText("已保存")).toBeInTheDocument();
+  });
+
+  it("uses the workspace save state and retry instead of the classroom's saved state", () => {
+    const retry = vi.fn();
+    const view = render(<DashboardShell role="student" saveStatus={{ state: "unsaved", onRetry: retry }}>文档</DashboardShell>);
+    expect(screen.getByText("未保存")).toBeInTheDocument();
+    expect(screen.queryByText("已保存")).not.toBeInTheDocument();
+
+    view.rerender(<DashboardShell role="student" saveStatus={{ state: "saving", onRetry: retry }}>文档</DashboardShell>);
+    expect(screen.getByText("保存中")).toBeInTheDocument();
+    view.rerender(<DashboardShell role="student" saveStatus={{ state: "error", onRetry: retry }}>文档</DashboardShell>);
+    expect(screen.getByText("保存失败")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "重试" }));
+    expect(retry).toHaveBeenCalledOnce();
+
+    view.rerender(<DashboardShell role="student" saveStatus={{ state: "saved", onRetry: retry }}>文档</DashboardShell>);
+    expect(screen.getAllByText("已保存")).toHaveLength(1);
+    expect(screen.queryByRole("button", { name: "重试" })).not.toBeInTheDocument();
   });
 
   it("keeps the header but constrains a student learning page to the viewport", () => {

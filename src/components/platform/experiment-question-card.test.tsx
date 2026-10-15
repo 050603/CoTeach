@@ -55,4 +55,17 @@ describe("experiment question presentation", () => {
     fireEvent.click(within(section).getAllByRole("radio", { name: "4 分" })[0]);
     expect(onAnswerChange).toHaveBeenCalledWith("first", "4");
   });
+
+  it("keeps a prominent reference note accessible with and without ordinary instructions", () => {
+    const group = { id: "social", title: "社会性存在", referenceNote: "课程参与者包括 AI、人类教师和其他同学。" };
+    const question = { id: "social-1", type: "scale" as const, prompt: "我能够形成清晰的印象", scale: { min: 1, max: 5 }, group };
+    const { rerender } = render(<ExperimentQuestionList answers={{}} inputNamePrefix="posttest" onAnswerChange={vi.fn()} questions={[question]} />);
+    const fieldset = screen.getByRole("group");
+    expect(fieldset).toHaveAccessibleDescription(expect.stringContaining(group.referenceNote));
+    expect(screen.getByText(group.referenceNote)).toBeVisible();
+    expect(screen.getByText("指代说明 · 请先阅读")).toBeVisible();
+    rerender(<ExperimentQuestionCard index={0} inputName="standalone" onAnswerChange={vi.fn()} question={question} />);
+    expect(screen.getByText(group.referenceNote)).toBeVisible();
+    expect(screen.getByRole("group")).toHaveAccessibleDescription(expect.stringContaining(group.referenceNote));
+  });
 });
